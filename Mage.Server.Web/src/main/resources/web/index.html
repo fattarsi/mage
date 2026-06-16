@@ -21,10 +21,12 @@
         .active { color: #7f7; }
         .zone-label { font-size: 11px; color: #789; margin: 4px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
         .zone { display: flex; flex-wrap: wrap; gap: 5px; min-height: 8px; }
-        .card { width: 108px; min-height: 78px; border: 1px solid #3a4150; border-radius: 5px; padding: 4px 4px 14px;
+        .card { width: 104px; min-height: 145px; border: 1px solid #3a4150; border-radius: 6px; padding: 4px 4px 14px;
                 font-size: 10px; background: #232a33; cursor: default; position: relative; line-height: 1.3;
                 overflow: hidden; }
         .card .cn { display: block; white-space: normal; word-break: break-word; }
+        .card img.art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+                        border-radius: 5px; }
         .card.clickable { cursor: pointer; border-color: #5a6b86; }
         .card.clickable:hover { border-color: #9cf; background: #2b3340; }
         .card.playable { box-shadow: 0 0 0 2px #4a7; }
@@ -57,14 +59,40 @@
         #banner { display:none; padding: 8px 14px; background: #5a2a2a; color: #fdd; font-size: 13px; }
         input[type=number] { width: 70px; padding: 5px; }
         .over { color: #fe7; font-size: 16px; font-weight: 700; }
+        .overlay { position: fixed; inset: 0; background: rgba(8,10,13,.82); display: flex;
+                   align-items: center; justify-content: center; z-index: 50; }
+        .overlay .panel { width: min(560px, 92vw); background: #1c2230; border: 1px solid #38445a;
+                          border-radius: 10px; padding: 18px 20px; }
+        .overlay h2 { margin: 0 0 12px; color: #cfe; }
+        .overlay label { display: block; font-size: 13px; color: #bcd; margin: 10px 0 4px; }
+        .overlay select { padding: 6px; font-size: 14px; min-width: 260px; }
+        .overlay textarea { width: 100%; height: 180px; background: #11151b; color: #dde; border: 1px solid #38445a;
+                            border-radius: 6px; padding: 8px; font-family: ui-monospace, monospace; font-size: 12px; }
+        .overlay .hint { font-size: 11px; color: #89a; margin-top: 8px; }
+        .overlay #startBtn { margin-top: 12px; font-size: 15px; padding: 9px 20px; }
+        #newGameBtn { background: #2e6a40; font-size: 12px; padding: 5px 12px; }
+        #newGameBtn:hover { background: #3c8a54; }
     </style>
 </head>
 <body>
 <header>
     <b>XMage Web</b> — play vs AI
     <span id="status">connecting…</span>
+    <button id="newGameBtn">New game</button>
     <span id="turn"></span>
 </header>
+
+<div id="setup" class="overlay" style="display:none">
+    <div class="panel">
+        <h2>New game vs AI</h2>
+        <label for="formatSel">Format</label>
+        <select id="formatSel"></select>
+        <label for="deckInput">Your deck — paste a decklist, or leave blank for a random deck</label>
+        <textarea id="deckInput" placeholder="4 Lightning Bolt&#10;4 Monastery Swiftspear&#10;20 Mountain&#10;...&#10;&#10;(plain '<count> <card name>' per line, or paste an XMage .dck)"></textarea>
+        <div><button id="startBtn">Start game</button></div>
+        <div class="hint">Random decks work for any non-Commander format. Commander needs a real deck with a commander (paste a .dck).</div>
+    </div>
+</div>
 
 <div id="banner"></div>
 <div id="board">
@@ -132,9 +160,28 @@ const SKIPS = [
 const skipbar = document.getElementById('skipbar');
 SKIPS.forEach(s => { const b=document.createElement('button'); b.textContent=s.label; b.onclick=s.fn; skipbar.appendChild(b); });
 document.addEventListener('keydown', (e) => {
+    if (document.getElementById('setup').style.display !== 'none') return; // don't skip while typing a deck
     const s = SKIPS.find(x => x.key === e.key);
     if (s) { e.preventDefault(); s.fn(); }
 });
+
+// --- game setup (format + deck) ---
+const setupEl = document.getElementById('setup');
+const formatSel = document.getElementById('formatSel');
+const deckInput = document.getElementById('deckInput');
+function showSetup(formats) {
+    if (formats && formatSel.options.length === 0) {
+        formats.forEach(f => { const o=document.createElement('option'); o.value=f.key; o.textContent=f.label; formatSel.appendChild(o); });
+    }
+    setupEl.style.display = 'flex';
+}
+document.getElementById('startBtn').onclick = () => {
+    document.getElementById('banner').style.display = 'none';
+    send('newGame', undefined, { format: formatSel.value, deck: deckInput.value });
+    setupEl.style.display = 'none';
+    setPrompt('Starting game…');
+};
+document.getElementById('newGameBtn').onclick = () => showSetup();
 function log(s) { logc('', s); }
 function logc(cls, s) {
     const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = s;
@@ -196,6 +243,16 @@ function cardEl(card, clickable) {
         + (pt ? `<div class="pt">${esc(pt)}</div>` : '');
     d.title = `${card.name||'?'}${cost?'  '+cost:''}${pt?'  '+pt:''}`
         + (types?'\n'+types:'') + (card.rules&&card.rules.length?'\n\n'+card.rules.join('\n'):'');
+    // real card art from Scryfall (set + collector number); on failure, the text card shows through
+    if (card.expansionSetCode && card.cardNumber && !card.faceDown) {
+        const img = document.createElement('img');
+        img.className = 'art'; img.loading = 'lazy'; img.alt = card.name || '';
+        const set = encodeURIComponent(String(card.expansionSetCode).toLowerCase());
+        const num = encodeURIComponent(String(card.cardNumber));
+        img.src = `https://api.scryfall.com/cards/${set}/${num}?format=image&version=normal`;
+        img.onerror = () => img.remove();
+        d.appendChild(img);
+    }
     if (clickable) d.onclick = () => send('playerUUID', card.id);
     return d;
 }
@@ -251,9 +308,15 @@ function setPrompt(message, buttons) {
 function handle(method, data) {
     const message = esc(data.message || '');
     switch (method) {
-        case 'GATEWAY_HELLO': setPrompt('Connected. Setting up your game vs the AI…'); break;
-        case 'GATEWAY_ERROR': setPrompt('<span class="over">Error: ' + esc(data.message) + '</span>'); break;
-        case 'START_GAME': case 'GAME_INIT': log('Game started'); setPrompt('Game started — waiting for the first decision…'); break;
+        case 'GATEWAY_HELLO': setPrompt('Connected.'); break;
+        case 'GATEWAY_READY': showSetup(data.formats); setPrompt('Pick a format and click Start game.'); break;
+        case 'GATEWAY_INFO': log(esc(data.message)); break;
+        case 'GATEWAY_ERROR':
+            showError(data.message); setPrompt('<span class="over">' + esc(data.message) + '</span>');
+            showSetup(); break;
+        case 'START_GAME': case 'GAME_INIT':
+            setupEl.style.display = 'none'; log('Game started');
+            setPrompt('Game started — waiting for the first decision…'); break;
 
         case 'GAME_SELECT': { // priority: play a card (click) or pass
             const np = playableIds.size;

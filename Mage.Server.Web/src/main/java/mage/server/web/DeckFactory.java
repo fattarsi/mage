@@ -5,11 +5,15 @@ import mage.cards.Sets;
 import mage.cards.decks.Deck;
 import mage.cards.decks.DeckCardInfo;
 import mage.cards.decks.DeckCardLists;
+import mage.cards.decks.importer.DeckImporter;
 import mage.cards.repository.CardInfo;
 import mage.cards.repository.CardRepository;
 import mage.constants.ColoredManaSymbol;
 import mage.player.ai.ComputerPlayer;
 
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -57,5 +61,27 @@ public final class DeckFactory {
             }
         }
         return list;
+    }
+
+    /**
+     * Parse a pasted decklist into a {@link DeckCardLists} via the engine's {@link DeckImporter}.
+     * Supports the plain "&lt;count&gt; &lt;card name&gt;" text format and XMage's .dck XML (auto-detected).
+     * Import warnings (unknown cards, etc.) are appended to {@code errors}.
+     */
+    public static DeckCardLists parseDeckList(String text, StringBuilder errors) throws Exception {
+        boolean isDck = text.trim().startsWith("<?xml") || text.contains("<deck");
+        File tmp = File.createTempFile("webdeck", isDck ? ".dck" : ".txt");
+        try {
+            Files.write(tmp.toPath(), text.getBytes(StandardCharsets.UTF_8));
+            DeckCardLists list = DeckImporter.importDeckFromFile(tmp.getAbsolutePath(), errors, false);
+            if (list == null || list.getCards().isEmpty()) {
+                throw new IllegalArgumentException("no valid cards found in the pasted decklist"
+                        + (errors.length() > 0 ? ": " + errors : ""));
+            }
+            return list;
+        } finally {
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+        }
     }
 }
