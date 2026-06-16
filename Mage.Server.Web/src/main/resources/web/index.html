@@ -2,78 +2,248 @@
 <html lang="en">
 <head>
     <meta charset="utf-8"/>
-    <title>XMage Web Gateway — Spectator (phase 1)</title>
+    <title>XMage Web — Play vs AI</title>
     <style>
-        body { font-family: system-ui, sans-serif; margin: 0; background: #15171a; color: #e6e6e6; }
-        header { padding: 10px 16px; background: #1f2329; border-bottom: 1px solid #333; }
-        #status { font-size: 13px; color: #9ad; }
-        main { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; }
-        .panel { background: #1b1e23; border: 1px solid #2c313a; border-radius: 8px; padding: 10px; }
-        h2 { margin: 0 0 8px; font-size: 14px; color: #cdd; }
-        .player { border: 1px solid #2c313a; border-radius: 6px; padding: 8px; margin-bottom: 8px; }
-        .pname { font-weight: 600; }
-        .life { color: #f5a; }
-        .zone { font-size: 12px; color: #8fb; margin-top: 4px; }
-        .card { display: inline-block; border: 1px solid #3a4150; border-radius: 4px; padding: 2px 6px;
-                margin: 2px; font-size: 11px; background: #232831; }
-        pre { font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 70vh; overflow: auto;
-              color: #9aa; }
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; margin: 0; background: #14161a; color: #e7e7e7; }
+        header { padding: 8px 14px; background: #1f242c; border-bottom: 1px solid #333;
+                 display: flex; align-items: center; gap: 14px; }
+        header b { color: #cfe; }
+        #status { font-size: 12px; color: #8bd; }
+        #turn { font-size: 12px; color: #fc9; margin-left: auto; }
+        #board { padding: 10px 14px; }
+        .player { border: 1px solid #2b313b; border-radius: 8px; padding: 8px; margin-bottom: 8px; background: #1a1e24; }
+        .player.me { background: #1a221c; }
+        .phead { display: flex; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 6px; }
+        .pname { font-weight: 700; }
+        .life { color: #f88; font-weight: 700; }
+        .meta { color: #9aa; font-size: 12px; }
+        .active { color: #7f7; }
+        .zone-label { font-size: 11px; color: #789; margin: 4px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
+        .zone { display: flex; flex-wrap: wrap; gap: 5px; min-height: 8px; }
+        .card { width: 86px; min-height: 64px; border: 1px solid #3a4150; border-radius: 5px; padding: 4px;
+                font-size: 10px; background: #232a33; cursor: default; position: relative; line-height: 1.25; }
+        .card.clickable { cursor: pointer; border-color: #5a6b86; }
+        .card.clickable:hover { border-color: #9cf; background: #2b3340; }
+        .card.playable { box-shadow: 0 0 0 2px #4a7; }
+        .card.tapped { transform: rotate(8deg); opacity: .8; }
+        .card .cn { font-weight: 700; color: #dde; }
+        .card .cc { float: right; color: #ad8; }
+        .card .ct { color: #89a; font-size: 9px; }
+        .card .pt { position: absolute; right: 4px; bottom: 2px; font-weight: 700; color: #fe9; }
+        .card .rules { color: #aab; font-size: 9px; margin-top: 2px; max-height: 40px; overflow: hidden; }
+        #stack { border: 1px dashed #56607a; border-radius: 6px; padding: 6px; margin: 8px 0; }
+        #prompt { position: sticky; bottom: 0; background: #232a36; border-top: 2px solid #3a587e;
+                  padding: 10px 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        #prompt .msg { font-size: 14px; color: #fff; flex: 1 1 280px; }
+        button { background: #34507a; color: #fff; border: 0; border-radius: 5px; padding: 7px 14px;
+                 font-size: 13px; cursor: pointer; }
+        button:hover { background: #4767a0; }
+        button.alt { background: #5a3a3a; } button.alt:hover { background: #784c4c; }
+        #log { padding: 6px 14px; max-height: 130px; overflow: auto; font-size: 11px; color: #8a9; border-top: 1px solid #2b313b; }
+        input[type=number] { width: 70px; padding: 5px; }
+        .over { color: #fe7; font-size: 16px; font-weight: 700; }
     </style>
 </head>
 <body>
 <header>
-    <strong>XMage Web Gateway</strong> — spectator slice
+    <b>XMage Web</b> — play vs AI
     <span id="status">connecting…</span>
+    <span id="turn"></span>
 </header>
-<main>
-    <section class="panel">
-        <h2>Board</h2>
-        <div id="board"><em>waiting for a game update…</em></div>
-    </section>
-    <section class="panel">
-        <h2>Last raw callback (JSON)</h2>
-        <pre id="raw"></pre>
-    </section>
-</main>
+
+<div id="board">
+    <div id="opp" class="player"></div>
+    <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div></div>
+    <div id="me" class="player me"></div>
+</div>
+
+<div id="prompt"><span class="msg">waiting…</span></div>
+<div id="log"></div>
 
 <script>
-    const statusEl = document.getElementById('status');
-    const boardEl = document.getElementById('board');
-    const rawEl = document.getElementById('raw');
+const statusEl = document.getElementById('status');
+const turnEl = document.getElementById('turn');
+const oppEl = document.getElementById('opp');
+const meEl = document.getElementById('me');
+const stackZone = document.getElementById('stackZone');
+const promptEl = document.getElementById('prompt');
+const logEl = document.getElementById('log');
 
-    const ws = new WebSocket(`ws://${location.host}/ws/spectate`);
+const ws = new WebSocket(`ws://${location.host}/ws/spectate`);
+ws.onopen = () => statusEl.textContent = 'connected';
+ws.onclose = () => statusEl.textContent = 'disconnected';
+ws.onerror = () => statusEl.textContent = 'error';
 
-    ws.onopen = () => statusEl.textContent = 'connected';
-    ws.onclose = () => statusEl.textContent = 'disconnected';
-    ws.onerror = () => statusEl.textContent = 'error';
+let lastGameView = null;
+let playableIds = new Set();
 
-    ws.onmessage = (ev) => {
-        const msg = JSON.parse(ev.data);
-        rawEl.textContent = JSON.stringify(msg, null, 2).slice(0, 8000);
-        if (msg.data && Array.isArray(msg.data.players)) {
-            renderBoard(msg.data);
+function send(action, value, extra) {
+    const m = Object.assign({ action }, extra || {});
+    if (value !== undefined && value !== null) m.value = value;
+    ws.send(JSON.stringify(m));
+}
+function log(s) {
+    const d = document.createElement('div'); d.textContent = s;
+    logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    const data = msg.data || {};
+    const gv = data.gameView || (data.players ? data : null);
+    if (gv) { lastGameView = gv; computePlayable(gv); renderBoard(gv); }
+    handle(msg.method, data);
+};
+
+function computePlayable(gv) {
+    playableIds = new Set();
+    const cpo = gv.canPlayObjects;
+    if (!cpo) return;
+    // PlayableObjectsList shapes vary; collect any UUID-looking keys/ids we can find
+    const scan = (o) => {
+        if (!o) return;
+        if (Array.isArray(o)) o.forEach(scan);
+        else if (typeof o === 'object') {
+            for (const k in o) {
+                if (/^[0-9a-f]{8}-[0-9a-f]{4}-/.test(k)) playableIds.add(k);
+                scan(o[k]);
+            }
         }
     };
+    scan(cpo);
+}
 
-    function renderBoard(game) {
-        boardEl.innerHTML = '';
-        for (const p of game.players) {
-            const div = document.createElement('div');
-            div.className = 'player';
-            const battlefield = p.battlefield ? Object.values(p.battlefield) : [];
-            const names = battlefield.map(perm => perm.name + (perm.tapped ? ' (T)' : '')).join('');
-            div.innerHTML =
-                `<div><span class="pname">${escapeHtml(p.name)}</span> — ` +
-                `<span class="life">${p.life} life</span> · hand ${p.handCount} · library ${p.libraryCount}</div>` +
-                `<div class="zone">battlefield (${battlefield.length}):</div>` +
-                battlefield.map(perm => `<span class="card">${escapeHtml(perm.name)}${perm.tapped ? ' ⟳' : ''}</span>`).join('');
-            boardEl.appendChild(div);
+function cardEl(card, clickable) {
+    const d = document.createElement('div');
+    d.className = 'card' + (clickable ? ' clickable' : '')
+        + (playableIds.has(card.id) ? ' playable' : '')
+        + (card.tapped ? ' tapped' : '');
+    const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
+    const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
+    const pt = (card.power !== undefined && (card.cardTypes||[]).includes('CREATURE'))
+        ? `${card.power}/${card.toughness}` : '';
+    d.innerHTML = `<span class="cc">${esc(cost)}</span><span class="cn">${esc(card.name||'?')}</span>`
+        + `<div class="ct">${esc(types)}</div>`
+        + (card.rules && card.rules.length ? `<div class="rules">${esc(card.rules.join(' • '))}</div>` : '')
+        + (pt ? `<div class="pt">${esc(pt)}</div>` : '');
+    if (clickable) d.onclick = () => send('playerUUID', card.id);
+    return d;
+}
+
+function zone(label, cardsMap, clickable) {
+    const wrap = document.createElement('div');
+    const l = document.createElement('div'); l.className = 'zone-label'; l.textContent = label;
+    const z = document.createElement('div'); z.className = 'zone';
+    const cards = cardsMap ? Object.values(cardsMap) : [];
+    for (const c of cards) z.appendChild(cardEl(c, clickable));
+    if (!cards.length) { const e = document.createElement('span'); e.className='meta'; e.textContent='—'; z.appendChild(e); }
+    wrap.appendChild(l); wrap.appendChild(z);
+    return wrap;
+}
+
+function renderBoard(gv) {
+    turnEl.textContent = `Turn ${gv.turn} · ${gv.phase||''} · ${gv.step||''}`;
+    const me = gv.players.find(p => p.controlled) || gv.players[0];
+    const opp = gv.players.find(p => p !== me) || gv.players[1];
+
+    function playerHead(p, active) {
+        return `<span class="pname">${esc(p.name)}</span> `
+            + `<span class="life">♥ ${p.life}</span> `
+            + `<span class="meta">hand ${p.handCount} · lib ${p.libraryCount} · gy ${Object.keys(p.graveyard||{}).length}</span>`
+            + (active ? ` <span class="active">● active</span>` : '');
+    }
+
+    oppEl.innerHTML = `<div class="phead">${playerHead(opp, gv.activePlayerId===opp.playerId)}</div>`;
+    oppEl.appendChild(zone('Opponent battlefield', opp.battlefield, true)); // clickable as targets
+
+    meEl.innerHTML = `<div class="phead">${playerHead(me, gv.activePlayerId===me.playerId)}</div>`;
+    meEl.appendChild(zone('My battlefield', me.battlefield, true));
+    meEl.appendChild(zone('My hand', gv.myHand, true));
+
+    stackZone.innerHTML = '';
+    const stack = gv.stack ? Object.values(gv.stack) : [];
+    if (!stack.length) stackZone.innerHTML = '<span class="meta">empty</span>';
+    else stack.forEach(c => stackZone.appendChild(cardEl(c, false)));
+}
+
+function setPrompt(message, buttons) {
+    promptEl.innerHTML = '';
+    const m = document.createElement('span'); m.className = 'msg'; m.innerHTML = message; promptEl.appendChild(m);
+    (buttons || []).forEach(b => {
+        const btn = document.createElement('button');
+        btn.textContent = b.label; if (b.alt) btn.className = 'alt';
+        btn.onclick = b.onClick; promptEl.appendChild(btn);
+    });
+}
+
+function handle(method, data) {
+    const message = esc(data.message || '');
+    switch (method) {
+        case 'GATEWAY_HELLO': setPrompt('Connected. Setting up your game vs the AI…'); break;
+        case 'GATEWAY_ERROR': setPrompt('<span class="over">Error: ' + esc(data.message) + '</span>'); break;
+        case 'START_GAME': case 'GAME_INIT': log('Game started'); setPrompt('Game started — waiting for the first decision…'); break;
+
+        case 'GAME_SELECT': // priority: play a card (click) or pass
+            setPrompt(message + ' <i>(click a card to play, or pass)</i>',
+                [{label:'Pass priority', alt:true, onClick:()=>send('playerBoolean', false)}]);
+            break;
+        case 'GAME_PLAY_MANA':
+            setPrompt(message + ' <i>(click a land to tap)</i>',
+                [{label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)}]);
+            break;
+        case 'GAME_TARGET':
+            setPrompt(message + ' <i>(click target(s) on the board)</i>',
+                [{label:'Done', onClick:()=>send('playerBoolean', false)}]);
+            break;
+        case 'GAME_ASK':
+            setPrompt(message, [
+                {label:'Yes', onClick:()=>send('playerBoolean', true)},
+                {label:'No', alt:true, onClick:()=>send('playerBoolean', false)},
+            ]);
+            break;
+        case 'GAME_GET_AMOUNT': case 'GAME_PLAY_XMANA': {
+            const min = data.min||0, max = data.max!==undefined?data.max:99;
+            promptEl.innerHTML = '';
+            const m=document.createElement('span'); m.className='msg'; m.innerHTML=message+` (${min}–${max})`; promptEl.appendChild(m);
+            const inp=document.createElement('input'); inp.type='number'; inp.min=min; inp.max=max; inp.value=min; promptEl.appendChild(inp);
+            const ok=document.createElement('button'); ok.textContent='OK';
+            ok.onclick=()=>send('playerInteger', Math.max(min, Math.min(max, parseInt(inp.value)||min))); promptEl.appendChild(ok);
+            break;
         }
-    }
+        case 'GAME_CHOOSE_CHOICE': {
+            const ch = data.choice || {};
+            const btns = [];
+            if (ch.keyChoice && ch.keyChoices) {
+                for (const k in ch.keyChoices) btns.push({label: ch.keyChoices[k], onClick:()=>send('playerString', k)});
+            } else {
+                const opts = ch.choices || [];
+                (Array.isArray(opts)?opts:Object.values(opts)).forEach(o => btns.push({label:o, onClick:()=>send('playerString', o)}));
+            }
+            if (!ch.required) btns.push({label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)});
+            setPrompt(esc(ch.message || data.message || 'Choose'), btns);
+            break;
+        }
+        case 'GAME_CHOOSE_ABILITY': {
+            const choices = data.choices || {};
+            const btns = [];
+            for (const id in choices) btns.push({label: choices[id], onClick:()=>send('playerUUID', id)});
+            btns.push({label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)});
+            setPrompt(esc(data.message || 'Choose an ability'), btns);
+            break;
+        }
+        case 'GAME_OVER': case 'END_GAME_INFO':
+            setPrompt('<span class="over">Game over — ' + (esc(data.message) || 'see log') + '</span>');
+            log('GAME OVER: ' + (data.message||'')); break;
 
-    function escapeHtml(s) {
-        return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+        case 'GAME_UPDATE': case 'GAME_UPDATE_AND_INFORM':
+            if (data.message) log(data.message);
+            break;
+        case 'GAME_INFORM_PERSONAL': case 'GAME_ERROR': case 'SHOW_USERMESSAGE': case 'CHATMESSAGE':
+            if (data.message) log(data.message); break;
     }
+}
 </script>
 </body>
 </html>
