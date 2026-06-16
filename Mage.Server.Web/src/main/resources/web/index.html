@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <title>XMage Web Gateway — Spectator (phase 1)</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 0; background: #15171a; color: #e6e6e6; }
+        header { padding: 10px 16px; background: #1f2329; border-bottom: 1px solid #333; }
+        #status { font-size: 13px; color: #9ad; }
+        main { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; }
+        .panel { background: #1b1e23; border: 1px solid #2c313a; border-radius: 8px; padding: 10px; }
+        h2 { margin: 0 0 8px; font-size: 14px; color: #cdd; }
+        .player { border: 1px solid #2c313a; border-radius: 6px; padding: 8px; margin-bottom: 8px; }
+        .pname { font-weight: 600; }
+        .life { color: #f5a; }
+        .zone { font-size: 12px; color: #8fb; margin-top: 4px; }
+        .card { display: inline-block; border: 1px solid #3a4150; border-radius: 4px; padding: 2px 6px;
+                margin: 2px; font-size: 11px; background: #232831; }
+        pre { font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 70vh; overflow: auto;
+              color: #9aa; }
+    </style>
+</head>
+<body>
+<header>
+    <strong>XMage Web Gateway</strong> — spectator slice
+    <span id="status">connecting…</span>
+</header>
+<main>
+    <section class="panel">
+        <h2>Board</h2>
+        <div id="board"><em>waiting for a game update…</em></div>
+    </section>
+    <section class="panel">
+        <h2>Last raw callback (JSON)</h2>
+        <pre id="raw"></pre>
+    </section>
+</main>
+
+<script>
+    const statusEl = document.getElementById('status');
+    const boardEl = document.getElementById('board');
+    const rawEl = document.getElementById('raw');
+
+    const ws = new WebSocket(`ws://${location.host}/ws/spectate`);
+
+    ws.onopen = () => statusEl.textContent = 'connected';
+    ws.onclose = () => statusEl.textContent = 'disconnected';
+    ws.onerror = () => statusEl.textContent = 'error';
+
+    ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        rawEl.textContent = JSON.stringify(msg, null, 2).slice(0, 8000);
+        if (msg.data && Array.isArray(msg.data.players)) {
+            renderBoard(msg.data);
+        }
+    };
+
+    function renderBoard(game) {
+        boardEl.innerHTML = '';
+        for (const p of game.players) {
+            const div = document.createElement('div');
+            div.className = 'player';
+            const battlefield = p.battlefield ? Object.values(p.battlefield) : [];
+            const names = battlefield.map(perm => perm.name + (perm.tapped ? ' (T)' : '')).join('');
+            div.innerHTML =
+                `<div><span class="pname">${escapeHtml(p.name)}</span> — ` +
+                `<span class="life">${p.life} life</span> · hand ${p.handCount} · library ${p.libraryCount}</div>` +
+                `<div class="zone">battlefield (${battlefield.length}):</div>` +
+                battlefield.map(perm => `<span class="card">${escapeHtml(perm.name)}${perm.tapped ? ' ⟳' : ''}</span>`).join('');
+            boardEl.appendChild(div);
+        }
+    }
+
+    function escapeHtml(s) {
+        return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    }
+</script>
+</body>
+</html>
