@@ -44,7 +44,11 @@
                  font-size: 13px; cursor: pointer; }
         button:hover { background: #4767a0; }
         button.alt { background: #5a3a3a; } button.alt:hover { background: #784c4c; }
-        #log { padding: 6px 14px; max-height: 130px; overflow: auto; font-size: 11px; color: #8a9; border-top: 1px solid #2b313b; }
+        #log { padding: 6px 14px; max-height: 150px; overflow: auto; font-size: 11px; color: #8a9; border-top: 1px solid #2b313b; font-family: ui-monospace, monospace; }
+        #log .sent { color: #9cf; } #log .recv { color: #7a8; } #log .err { color: #f88; font-weight: 700; }
+        .card.playable { box-shadow: 0 0 0 3px #5d7; }
+        .card.playable::after { content: '▶ play'; position: absolute; left: 4px; bottom: 2px; font-size: 8px; color: #6e9; }
+        #banner { display:none; padding: 8px 14px; background: #5a2a2a; color: #fdd; font-size: 13px; }
         input[type=number] { width: 70px; padding: 5px; }
         .over { color: #fe7; font-size: 16px; font-weight: 700; }
     </style>
@@ -56,6 +60,7 @@
     <span id="turn"></span>
 </header>
 
+<div id="banner"></div>
 <div id="board">
     <div id="opp" class="player"></div>
     <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div></div>
@@ -74,6 +79,15 @@ const stackZone = document.getElementById('stackZone');
 const promptEl = document.getElementById('prompt');
 const logEl = document.getElementById('log');
 
+// surface any JS error on-screen (so issues are visible without devtools)
+function showError(text) {
+    const b = document.getElementById('banner');
+    b.style.display = 'block'; b.textContent = 'JS error: ' + text;
+    logc('err', '⚠ ' + text);
+}
+window.onerror = (m, src, line, col) => { showError(m + ' @' + line + ':' + col); };
+window.addEventListener('unhandledrejection', e => showError('promise: ' + (e.reason && e.reason.message || e.reason)));
+
 const ws = new WebSocket(`ws://${location.host}/ws/spectate`);
 ws.onopen = () => statusEl.textContent = 'connected';
 ws.onclose = () => statusEl.textContent = 'disconnected';
@@ -90,25 +104,36 @@ const ACTIONABLE = new Set(['GAME_SELECT','GAME_PLAY_MANA','GAME_ASK','GAME_GET_
 function send(action, value, extra) {
     const m = Object.assign({ action }, extra || {});
     if (value !== undefined && value !== null) m.value = value;
+    if (ws.readyState !== WebSocket.OPEN) { showError('socket not open (state ' + ws.readyState + ')'); return; }
     ws.send(JSON.stringify(m));
+    logc('sent', '→ ' + action + (value !== undefined ? ' ' + value : ''));
 }
 // players are valid targets/choices too (e.g. "select a starting player", "target player")
 window.pickPlayer = (playerId) => send('playerUUID', playerId);
-function log(s) {
-    const d = document.createElement('div'); d.textContent = s;
+function log(s) { logc('', s); }
+function logc(cls, s) {
+    const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = s;
     logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
+    while (logEl.childNodes.length > 200) logEl.removeChild(logEl.firstChild);
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
 ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (e) { showError('bad JSON frame'); return; }
     const data = msg.data || {};
-    // update the valid-target highlight set BEFORE rendering, so highlights show this frame
-    if (msg.method === 'GAME_TARGET') validTargets = new Set(data.targets || []);
-    else if (ACTIONABLE.has(msg.method)) validTargets = new Set();
-    const gv = data.gameView || (data.players ? data : null);
-    if (gv) { lastGameView = gv; computePlayable(gv); renderBoard(gv); }
-    handle(msg.method, data);
+    if (msg.method && msg.method.startsWith('GAME_') && msg.method !== 'GAME_UPDATE')
+        logc('recv', '← ' + msg.method + (data.message ? ': ' + data.message : ''));
+    try {
+        // update the valid-target highlight set BEFORE rendering, so highlights show this frame
+        if (msg.method === 'GAME_TARGET') validTargets = new Set(data.targets || []);
+        else if (ACTIONABLE.has(msg.method)) validTargets = new Set();
+        const gv = data.gameView || (data.players ? data : null);
+        if (gv) { lastGameView = gv; computePlayable(gv); renderBoard(gv); }
+        handle(msg.method, data);
+    } catch (e) {
+        showError((e && e.message || e) + ' (method ' + msg.method + ')');
+    }
 };
 
 function computePlayable(gv) {
@@ -203,10 +228,14 @@ function handle(method, data) {
         case 'GATEWAY_ERROR': setPrompt('<span class="over">Error: ' + esc(data.message) + '</span>'); break;
         case 'START_GAME': case 'GAME_INIT': log('Game started'); setPrompt('Game started — waiting for the first decision…'); break;
 
-        case 'GAME_SELECT': // priority: play a card (click) or pass
-            setPrompt(message + ' <i>(click a card to play, or pass)</i>',
-                [{label:'Pass priority', alt:true, onClick:()=>send('playerBoolean', false)}]);
+        case 'GAME_SELECT': { // priority: play a card (click) or pass
+            const np = playableIds.size;
+            setPrompt('<b>Your priority.</b> ' + message
+                + (np ? ` <i>Click a <span style="color:#6e9">green ▶ card</span> (${np}) to play it, or pass.</i>`
+                      : ' <i>Nothing to play — pass.</i>'),
+                [{label:'Pass priority ▸', alt:true, onClick:()=>send('playerBoolean', false)}]);
             break;
+        }
         case 'GAME_PLAY_MANA':
             setPrompt(message + ' <i>(click a land to tap)</i>',
                 [{label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)}]);

@@ -85,7 +85,7 @@ public class RealGameOrchestrator {
         boolean jHuman = server.roomJoinTable(humanSession, room, tableId, humanName,
                 PlayerType.HUMAN, 0, DeckFactory.buildRandomDeckList("WUBRG"), "");
         boolean jAi = server.roomJoinTable(humanSession, room, tableId, "AI Opponent",
-                PlayerType.COMPUTER_MAD, 4, DeckFactory.buildRandomDeckList("WUBRG"), "");
+                PlayerType.COMPUTER_MAD, 2, DeckFactory.buildRandomDeckList("WUBRG"), "");
         if (!jHuman || !jAi) {
             throw new IllegalStateException("web gateway: human/AI failed to join (human=" + jHuman + ", ai=" + jAi + ")");
         }
