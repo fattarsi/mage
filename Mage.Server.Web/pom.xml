@@ -1,0 +1,109 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.mage</groupId>
+        <artifactId>mage-root</artifactId>
+        <version>1.4.59</version>
+    </parent>
+
+    <artifactId>mage-server-web</artifactId>
+    <packaging>jar</packaging>
+    <name>Mage Server Web Gateway</name>
+    <description>Embedded WebSocket/JSON gateway exposing the existing XMage server to web clients</description>
+
+    <properties>
+        <root.dir>${project.basedir}/..</root.dir>
+        <!-- This module wraps Javalin/Jetty, which require a modern JVM. Build it at 17
+             (the rest of the project still targets 1.8). The gateway is an opt-in feature. -->
+        <web.java.version>17</web.java.version>
+        <javalin.version>5.6.4</javalin.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.mage</groupId>
+            <artifactId>mage-server</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.mage</groupId>
+            <artifactId>mage-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.javalin</groupId>
+            <artifactId>javalin</artifactId>
+            <version>${javalin.version}</version>
+        </dependency>
+
+        <!-- needed by the standalone AI-vs-AI spectator demo launcher -->
+        <dependency>
+            <groupId>org.mage</groupId>
+            <artifactId>mage-player-ai</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <!-- the "MAD" simulation AI that actually plays (casts, attacks); base ComputerPlayer just passes -->
+            <groupId>org.mage</groupId>
+            <artifactId>mage-player-ai-ma</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.mage</groupId>
+            <artifactId>mage-game-twoplayerduel</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.mage</groupId>
+            <artifactId>mage-game-freeforall</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.mage</groupId>
+            <artifactId>mage-sets</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!-- override the inherited 1.8 source/target for this module only -->
+                    <source>${web.java.version}</source>
+                    <target>${web.java.version}</target>
+                    <release>${web.java.version}</release>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-install-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <artifactId>maven-resources-plugin</artifactId>
+                <configuration>
+                    <encoding>UTF-8</encoding>
+                </configuration>
+            </plugin>
+            <!-- convenience: `mvn -pl Mage.Server.Web exec:java` launches the spectator demo -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <configuration>
+                    <mainClass>mage.server.web.WebDemoMain</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+        <finalName>mage-server-web</finalName>
+    </build>
+</project>
