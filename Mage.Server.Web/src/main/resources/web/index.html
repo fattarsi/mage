@@ -26,7 +26,11 @@
         .card.clickable { cursor: pointer; border-color: #5a6b86; }
         .card.clickable:hover { border-color: #9cf; background: #2b3340; }
         .card.playable { box-shadow: 0 0 0 2px #4a7; }
+        .card.targetable { box-shadow: 0 0 0 3px #fd5; cursor: pointer; }
         .card.tapped { transform: rotate(8deg); opacity: .8; }
+        .phead.clickable { cursor: pointer; padding: 3px 6px; border-radius: 5px; }
+        .phead.clickable:hover { background: #2b3340; }
+        .phead.targetable { box-shadow: 0 0 0 3px #fd5; border-radius: 5px; }
         .card .cn { font-weight: 700; color: #dde; }
         .card .cc { float: right; color: #ad8; }
         .card .ct { color: #89a; font-size: 9px; }
@@ -77,12 +81,19 @@ ws.onerror = () => statusEl.textContent = 'error';
 
 let lastGameView = null;
 let playableIds = new Set();
+let validTargets = new Set();  // ids the server is currently asking us to pick (cards OR players)
+
+// callbacks that START a fresh decision (so stale target highlights should clear)
+const ACTIONABLE = new Set(['GAME_SELECT','GAME_PLAY_MANA','GAME_ASK','GAME_GET_AMOUNT',
+    'GAME_PLAY_XMANA','GAME_CHOOSE_CHOICE','GAME_CHOOSE_ABILITY','GAME_CHOOSE_PILE']);
 
 function send(action, value, extra) {
     const m = Object.assign({ action }, extra || {});
     if (value !== undefined && value !== null) m.value = value;
     ws.send(JSON.stringify(m));
 }
+// players are valid targets/choices too (e.g. "select a starting player", "target player")
+window.pickPlayer = (playerId) => send('playerUUID', playerId);
 function log(s) {
     const d = document.createElement('div'); d.textContent = s;
     logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
@@ -92,6 +103,9 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','
 ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     const data = msg.data || {};
+    // update the valid-target highlight set BEFORE rendering, so highlights show this frame
+    if (msg.method === 'GAME_TARGET') validTargets = new Set(data.targets || []);
+    else if (ACTIONABLE.has(msg.method)) validTargets = new Set();
     const gv = data.gameView || (data.players ? data : null);
     if (gv) { lastGameView = gv; computePlayable(gv); renderBoard(gv); }
     handle(msg.method, data);
@@ -117,8 +131,10 @@ function computePlayable(gv) {
 
 function cardEl(card, clickable) {
     const d = document.createElement('div');
+    const isTarget = validTargets.has(card.id);
     d.className = 'card' + (clickable ? ' clickable' : '')
         + (playableIds.has(card.id) ? ' playable' : '')
+        + (isTarget ? ' targetable' : '')
         + (card.tapped ? ' tapped' : '');
     const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
     const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
@@ -148,17 +164,19 @@ function renderBoard(gv) {
     const me = gv.players.find(p => p.controlled) || gv.players[0];
     const opp = gv.players.find(p => p !== me) || gv.players[1];
 
-    function playerHead(p, active) {
-        return `<span class="pname">${esc(p.name)}</span> `
+    function pheadHtml(p, active) {
+        const tgt = validTargets.has(p.playerId) ? ' targetable' : '';
+        return `<div class="phead clickable${tgt}" onclick="pickPlayer('${p.playerId}')" title="click to target this player">`
+            + `<span class="pname">${esc(p.name)}</span> `
             + `<span class="life">♥ ${p.life}</span> `
             + `<span class="meta">hand ${p.handCount} · lib ${p.libraryCount} · gy ${Object.keys(p.graveyard||{}).length}</span>`
-            + (active ? ` <span class="active">● active</span>` : '');
+            + (active ? ` <span class="active">● active</span>` : '') + `</div>`;
     }
 
-    oppEl.innerHTML = `<div class="phead">${playerHead(opp, gv.activePlayerId===opp.playerId)}</div>`;
+    oppEl.innerHTML = pheadHtml(opp, gv.activePlayerId===opp.playerId);
     oppEl.appendChild(zone('Opponent battlefield', opp.battlefield, true)); // clickable as targets
 
-    meEl.innerHTML = `<div class="phead">${playerHead(me, gv.activePlayerId===me.playerId)}</div>`;
+    meEl.innerHTML = pheadHtml(me, gv.activePlayerId===me.playerId);
     meEl.appendChild(zone('My battlefield', me.battlefield, true));
     meEl.appendChild(zone('My hand', gv.myHand, true));
 
@@ -193,10 +211,12 @@ function handle(method, data) {
             setPrompt(message + ' <i>(click a land to tap)</i>',
                 [{label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)}]);
             break;
-        case 'GAME_TARGET':
-            setPrompt(message + ' <i>(click target(s) on the board)</i>',
-                [{label:'Done', onClick:()=>send('playerBoolean', false)}]);
+        case 'GAME_TARGET': {
+            const n = validTargets.size;
+            setPrompt(message + ` <i>(click a highlighted ${n?'target':'card/player'} — ${n} available)</i>`,
+                [{label:'Done / skip', onClick:()=>send('playerBoolean', false)}]);
             break;
+        }
         case 'GAME_ASK':
             setPrompt(message, [
                 {label:'Yes', onClick:()=>send('playerBoolean', true)},
