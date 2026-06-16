@@ -21,8 +21,10 @@
         .active { color: #7f7; }
         .zone-label { font-size: 11px; color: #789; margin: 4px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
         .zone { display: flex; flex-wrap: wrap; gap: 5px; min-height: 8px; }
-        .card { width: 86px; min-height: 64px; border: 1px solid #3a4150; border-radius: 5px; padding: 4px;
-                font-size: 10px; background: #232a33; cursor: default; position: relative; line-height: 1.25; }
+        .card { width: 108px; min-height: 78px; border: 1px solid #3a4150; border-radius: 5px; padding: 4px 4px 14px;
+                font-size: 10px; background: #232a33; cursor: default; position: relative; line-height: 1.3;
+                overflow: hidden; }
+        .card .cn { display: block; white-space: normal; word-break: break-word; }
         .card.clickable { cursor: pointer; border-color: #5a6b86; }
         .card.clickable:hover { border-color: #9cf; background: #2b3340; }
         .card.playable { box-shadow: 0 0 0 2px #4a7; }
@@ -37,6 +39,10 @@
         .card .pt { position: absolute; right: 4px; bottom: 2px; font-weight: 700; color: #fe9; }
         .card .rules { color: #aab; font-size: 9px; margin-top: 2px; max-height: 40px; overflow: hidden; }
         #stack { border: 1px dashed #56607a; border-radius: 6px; padding: 6px; margin: 8px 0; }
+        #skipbar { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 14px; background: #1b2028;
+                   border-top: 1px solid #2b313b; }
+        #skipbar button { background: #2e3a4a; font-size: 12px; padding: 5px 9px; }
+        #skipbar button:hover { background: #3d4d63; }
         #prompt { position: sticky; bottom: 0; background: #232a36; border-top: 2px solid #3a587e;
                   padding: 10px 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         #prompt .msg { font-size: 14px; color: #fff; flex: 1 1 280px; }
@@ -67,6 +73,7 @@
     <div id="me" class="player me"></div>
 </div>
 
+<div id="skipbar"></div>
 <div id="prompt"><span class="msg">waiting…</span></div>
 <div id="log"></div>
 
@@ -110,6 +117,24 @@ function send(action, value, extra) {
 }
 // players are valid targets/choices too (e.g. "select a starting player", "target player")
 window.pickPlayer = (playerId) => send('playerUUID', playerId);
+
+function act(a) { send('playerAction', a); }
+// XMage-style skip shortcuts (matches the desktop F-keys)
+const SKIPS = [
+    {label:'Pass (F2)',        key:'F2', fn:()=>send('playerBoolean', false)},
+    {label:'Next main (F5)',   key:'F5', fn:()=>act('PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE')},
+    {label:'End of turn (F6)', key:'F6', fn:()=>act('PASS_PRIORITY_UNTIL_TURN_END_STEP')},
+    {label:'Next turn (F4)',   key:'F4', fn:()=>act('PASS_PRIORITY_UNTIL_NEXT_TURN')},
+    {label:'My next turn (F7)',key:'F7', fn:()=>act('PASS_PRIORITY_UNTIL_MY_NEXT_TURN')},
+    {label:'Resolve stack (F9)',key:'F9',fn:()=>act('PASS_PRIORITY_UNTIL_STACK_RESOLVED')},
+    {label:'Cancel skips (F3)',key:'F3', fn:()=>act('PASS_PRIORITY_CANCEL_ALL_ACTIONS')},
+];
+const skipbar = document.getElementById('skipbar');
+SKIPS.forEach(s => { const b=document.createElement('button'); b.textContent=s.label; b.onclick=s.fn; skipbar.appendChild(b); });
+document.addEventListener('keydown', (e) => {
+    const s = SKIPS.find(x => x.key === e.key);
+    if (s) { e.preventDefault(); s.fn(); }
+});
 function log(s) { logc('', s); }
 function logc(cls, s) {
     const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = s;
@@ -169,6 +194,8 @@ function cardEl(card, clickable) {
         + `<div class="ct">${esc(types)}</div>`
         + (card.rules && card.rules.length ? `<div class="rules">${esc(card.rules.join(' • '))}</div>` : '')
         + (pt ? `<div class="pt">${esc(pt)}</div>` : '');
+    d.title = `${card.name||'?'}${cost?'  '+cost:''}${pt?'  '+pt:''}`
+        + (types?'\n'+types:'') + (card.rules&&card.rules.length?'\n\n'+card.rules.join('\n'):'');
     if (clickable) d.onclick = () => send('playerUUID', card.id);
     return d;
 }
