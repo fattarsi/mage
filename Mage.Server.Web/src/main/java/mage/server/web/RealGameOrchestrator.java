@@ -1,5 +1,6 @@
 package mage.server.web;
 
+import mage.cards.decks.DeckCardLists;
 import mage.constants.MatchTimeLimit;
 import mage.constants.MultiplayerAttackOption;
 import mage.constants.RangeOfInfluence;
@@ -62,17 +63,20 @@ public class RealGameOrchestrator {
     }
 
     /**
-     * Create a Human-vs-AI table owned by {@code humanSession}, seat the human and one AI, start the
-     * match, and join the human to the running game so they receive priority/dialog callbacks.
-     * Returns the running game id.
+     * Create a Human-vs-AI table owned by {@code humanSession} for the given format, seat the human and
+     * {@code aiSeats} AIs, start the match, and join the human to the running game so they receive
+     * priority/dialog callbacks. A null {@code humanDeck} falls back to a random deck. Returns the game id.
      */
-    public UUID startHumanVsAi(String humanSession, String humanName) throws Exception {
+    public UUID startHumanVsAi(String humanSession, String humanName, String gameType, String deckType,
+                               int aiSeats, DeckCardLists humanDeck) throws Exception {
         UUID room = server.serverGetMainRoomId();
 
-        MatchOptions options = new MatchOptions("Web Human vs AI", GAME_TYPE, true);
+        MatchOptions options = new MatchOptions("Web Human vs AI", gameType, true);
         options.getPlayerTypes().add(PlayerType.HUMAN);
-        options.getPlayerTypes().add(PlayerType.COMPUTER_MAD);
-        options.setDeckType(DECK_TYPE);
+        for (int i = 0; i < aiSeats; i++) {
+            options.getPlayerTypes().add(PlayerType.COMPUTER_MAD);
+        }
+        options.setDeckType(deckType);
         options.setLimited(false);
         options.setAttackOption(MultiplayerAttackOption.LEFT);
         options.setRange(RangeOfInfluence.ALL);
@@ -82,12 +86,18 @@ public class RealGameOrchestrator {
         TableView table = server.roomCreateTable(humanSession, room, options);
         UUID tableId = table.getTableId();
 
+        DeckCardLists deckForHuman = humanDeck != null ? humanDeck : DeckFactory.buildRandomDeckList("WUBRG");
         boolean jHuman = server.roomJoinTable(humanSession, room, tableId, humanName,
-                PlayerType.HUMAN, 0, DeckFactory.buildRandomDeckList("WUBRG"), "");
-        boolean jAi = server.roomJoinTable(humanSession, room, tableId, "AI Opponent",
-                PlayerType.COMPUTER_MAD, 2, DeckFactory.buildRandomDeckList("WUBRG"), "");
-        if (!jHuman || !jAi) {
-            throw new IllegalStateException("web gateway: human/AI failed to join (human=" + jHuman + ", ai=" + jAi + ")");
+                PlayerType.HUMAN, 0, deckForHuman, "");
+        if (!jHuman) {
+            throw new IllegalStateException("web gateway: human failed to join the table");
+        }
+        for (int i = 0; i < aiSeats; i++) {
+            boolean jAi = server.roomJoinTable(humanSession, room, tableId, "AI " + (i + 1),
+                    PlayerType.COMPUTER_MAD, 2, DeckFactory.buildRandomDeckList("WUBRG"), "");
+            if (!jAi) {
+                throw new IllegalStateException("web gateway: AI " + (i + 1) + " failed to join");
+            }
         }
         if (!server.matchStart(humanSession, room, tableId)) {
             throw new IllegalStateException("web gateway: matchStart failed");
@@ -96,7 +106,7 @@ public class RealGameOrchestrator {
         UUID newGameId = pollGameId(room, tableId);
         // join the human to the game so HumanPlayer callbacks (priority, targets, ...) reach this session
         server.gameJoin(newGameId, humanSession);
-        logger.info("web gateway: human-vs-AI game started, gameId=" + newGameId);
+        logger.info("web gateway: human-vs-AI game started (" + gameType + "), gameId=" + newGameId);
         return newGameId;
     }
 

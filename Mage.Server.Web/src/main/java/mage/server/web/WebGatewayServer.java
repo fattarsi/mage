@@ -1,10 +1,12 @@
 package mage.server.web;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.websocket.WsContext;
+import mage.cards.decks.DeckCardLists;
 import mage.constants.ManaType;
 import mage.constants.PlayerAction;
 import mage.interfaces.MageServer;
@@ -13,6 +15,8 @@ import mage.server.Main;
 import mage.server.managers.ManagerFactory;
 import org.apache.log4j.Logger;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -43,6 +47,39 @@ import java.util.concurrent.ConcurrentHashMap;
 public class WebGatewayServer {
 
     private static final Logger logger = Logger.getLogger(WebGatewayServer.class);
+
+    /** A selectable game format: maps a UI choice to the server's game-type + deck-type + AI seat count. */
+    static final class Format {
+        final String key, label, gameType, deckType;
+        final int aiSeats;
+        Format(String key, String label, String gameType, String deckType, int aiSeats) {
+            this.key = key; this.label = label; this.gameType = gameType;
+            this.deckType = deckType; this.aiSeats = aiSeats;
+        }
+    }
+
+    private static final List<Format> FORMATS = Arrays.asList(
+            new Format("duel", "Duel — Freeform (vs 1 AI)", "Two Player Duel", "Constructed - Freeform", 1),
+            new Format("standard", "Duel — Standard (vs 1 AI)", "Two Player Duel", "Constructed - Standard", 1),
+            new Format("commander", "Commander 1v1 (vs 1 AI)", "Commander Two Player Duel", "Variant Magic - Commander", 1),
+            new Format("ffa3", "Free-for-all — 3 players (vs 2 AI)", "Free For All", "Constructed - Freeform", 2),
+            new Format("ffa4", "Free-for-all — 4 players (vs 3 AI)", "Free For All", "Constructed - Freeform", 3)
+    );
+
+    private static Format findFormat(String key) {
+        return FORMATS.stream().filter(f -> f.key.equals(key)).findFirst().orElse(FORMATS.get(0));
+    }
+
+    private static Map<String, Object> formatsPayload() {
+        JsonArray arr = new JsonArray();
+        for (Format f : FORMATS) {
+            JsonObject o = new JsonObject();
+            o.addProperty("key", f.key);
+            o.addProperty("label", f.label);
+            arr.add(o);
+        }
+        return Map.of("formats", arr);
+    }
 
     private final ManagerFactory managerFactory;
     private final MageServer server;
@@ -137,13 +174,13 @@ public class WebGatewayServer {
             managerFactory.sessionManager().createSession(mageSessionId, handler);
             try {
                 if (playOrchestrator != null) {
-                    // PLAY: connect as a human and start a personal Human-vs-AI game
+                    // PLAY: connect as a human now; the actual game starts when the browser sends "newGame"
+                    // (so the player can pick a format and paste a deck first).
                     String humanName = "h-" + mageSessionId.substring(0, 8);
                     server.connectUser(humanName, "", mageSessionId, "",
                             Main.getVersion(), UUID.randomUUID().toString());
-                    UUID gameId = playOrchestrator.startHumanVsAi(mageSessionId, humanName);
-                    wsToGameId.put(ctx.getSessionId(), gameId);
-                    logger.info("web gateway: play session " + humanName + " -> game " + gameId);
+                    ctx.send(JsonCodec.encodeCallback("GATEWAY_READY", null, formatsPayload()));
+                    logger.info("web gateway: play session " + humanName + " connected, awaiting newGame");
                 } else {
                     // SPECTATE: connect anon and watch the shared game
                     server.connectUser("w-" + mageSessionId.substring(0, 8), "", mageSessionId, "",
@@ -177,13 +214,36 @@ public class WebGatewayServer {
             return; // demo mode is broadcast-only
         }
         String sessionId = wsToMageSession.get(ctx.getSessionId());
+        if (sessionId == null) {
+            return;
+        }
+        JsonObject msg;
+        String action;
+        try {
+            msg = JsonParser.parseString(message).getAsJsonObject();
+            action = msg.get("action").getAsString();
+        } catch (Exception e) {
+            return;
+        }
+
+        // Control action: (re)start a game with a chosen format and optional pasted deck.
+        if ("newGame".equals(action)) {
+            try {
+                startGameForSession(ctx, sessionId, msg);
+            } catch (Exception e) {
+                logger.warn("web gateway: newGame failed", e);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
+                        Map.of("message", "Couldn't start game: " + e.getMessage())));
+            }
+            return;
+        }
+
+        // In-game responses require an active game for this connection.
         UUID gameId = wsToGameId.get(ctx.getSessionId());
-        if (sessionId == null || gameId == null) {
+        if (gameId == null) {
             return;
         }
         try {
-            JsonObject msg = JsonParser.parseString(message).getAsJsonObject();
-            String action = msg.get("action").getAsString();
             switch (action) {
                 case "playerBoolean":
                     server.sendPlayerBoolean(gameId, sessionId, msg.get("value").getAsBoolean());
@@ -210,6 +270,42 @@ public class WebGatewayServer {
         } catch (Exception e) {
             logger.warn("web gateway: inbound dispatch failed for: " + message, e);
         }
+    }
+
+    /** Start (or restart) a Human-vs-AI game for this connection from a "newGame" control message. */
+    private void startGameForSession(WsContext ctx, String sessionId, JsonObject msg) throws Exception {
+        if (playOrchestrator == null) {
+            return;
+        }
+        String formatKey = msg.has("format") && !msg.get("format").isJsonNull() ? msg.get("format").getAsString() : "duel";
+        String deckText = msg.has("deck") && !msg.get("deck").isJsonNull() ? msg.get("deck").getAsString() : "";
+        Format fmt = findFormat(formatKey);
+
+        // tear down any existing game for this connection
+        UUID old = wsToGameId.remove(ctx.getSessionId());
+        if (old != null) {
+            try {
+                server.matchQuit(old, sessionId);
+            } catch (Exception ignore) {
+                // best-effort cleanup
+            }
+        }
+
+        DeckCardLists deck = null;
+        if (!deckText.trim().isEmpty()) {
+            StringBuilder errs = new StringBuilder();
+            deck = DeckFactory.parseDeckList(deckText, errs);
+            if (errs.length() > 0) {
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_INFO", null,
+                        Map.of("message", "Deck import notes: " + errs)));
+            }
+        }
+
+        String humanName = "h-" + sessionId.substring(0, 8);
+        UUID newId = playOrchestrator.startHumanVsAi(sessionId, humanName,
+                fmt.gameType, fmt.deckType, fmt.aiSeats, deck);
+        wsToGameId.put(ctx.getSessionId(), newId);
+        logger.info("web gateway: started " + fmt.gameType + " for " + humanName + " -> " + newId);
     }
 
     private void onClose(WsContext ctx) {
