@@ -3,8 +3,6 @@ package mage.server.web;
 import mage.server.Main;
 import org.apache.log4j.Logger;
 
-import java.util.UUID;
-
 /**
  * Production entry point for the web gateway.
  * <p>
@@ -33,38 +31,16 @@ public final class WebServerMain {
         Main.HeadlessBoot boot = Main.bootHeadless();
 
         WebGatewayServer gateway = new WebGatewayServer(boot.managerFactory, boot.mageServer);
+
+        // PLAY mode: each browser that connects gets its own Human-vs-AI game.
+        RealGameOrchestrator orchestrator = new RealGameOrchestrator(boot.managerFactory, boot.mageServer);
+        gateway.setPlayMode(orchestrator);
+
         gateway.start(port);
 
-        // Kick off real AI-vs-AI games through the genuine server API so connecting browsers always have
-        // a live game to watch via the production callback pipeline. A keep-alive loop starts a fresh
-        // game whenever the current one ends.
-        try {
-            RealGameOrchestrator orchestrator = new RealGameOrchestrator(boot.managerFactory, boot.mageServer);
-            orchestrator.init();
-            gateway.setSpectateGameId(orchestrator.startNewGame());
-
-            Thread keepAlive = new Thread(() -> {
-                while (!Thread.currentThread().isInterrupted()) {
-                    try {
-                        Thread.sleep(3000);
-                        if (!orchestrator.isCurrentGameAlive()) {
-                            gateway.setSpectateGameId(orchestrator.startNewGame());
-                        }
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    } catch (Exception e) {
-                        logger.error("keep-alive: failed to start next AI game", e);
-                    }
-                }
-            }, "web-game-keepalive");
-            keepAlive.setDaemon(true);
-            keepAlive.start();
-        } catch (Exception e) {
-            logger.error("failed to start AI-vs-AI game", e);
-        }
-
         logger.info("=================================================================");
-        logger.info(" XMage web gateway (real server) running:  http://localhost:" + port + "/");
+        logger.info(" XMage web gateway (play vs AI) running:  http://localhost:" + port + "/");
+        logger.info(" Open the URL to start a game against the AI.");
         logger.info("=================================================================");
 
         try {

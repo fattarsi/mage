@@ -61,6 +61,56 @@ public class RealGameOrchestrator {
         roomId = server.serverGetMainRoomId();
     }
 
+    /**
+     * Create a Human-vs-AI table owned by {@code humanSession}, seat the human and one AI, start the
+     * match, and join the human to the running game so they receive priority/dialog callbacks.
+     * Returns the running game id.
+     */
+    public UUID startHumanVsAi(String humanSession, String humanName) throws Exception {
+        UUID room = server.serverGetMainRoomId();
+
+        MatchOptions options = new MatchOptions("Web Human vs AI", GAME_TYPE, true);
+        options.getPlayerTypes().add(PlayerType.HUMAN);
+        options.getPlayerTypes().add(PlayerType.COMPUTER_MAD);
+        options.setDeckType(DECK_TYPE);
+        options.setLimited(false);
+        options.setAttackOption(MultiplayerAttackOption.LEFT);
+        options.setRange(RangeOfInfluence.ALL);
+        options.setWinsNeeded(1);
+        options.setMatchTimeLimit(MatchTimeLimit.MIN__15);
+
+        TableView table = server.roomCreateTable(humanSession, room, options);
+        UUID tableId = table.getTableId();
+
+        boolean jHuman = server.roomJoinTable(humanSession, room, tableId, humanName,
+                PlayerType.HUMAN, 0, DeckFactory.buildRandomDeckList("WUBRG"), "");
+        boolean jAi = server.roomJoinTable(humanSession, room, tableId, "AI Opponent",
+                PlayerType.COMPUTER_MAD, 4, DeckFactory.buildRandomDeckList("WUBRG"), "");
+        if (!jHuman || !jAi) {
+            throw new IllegalStateException("web gateway: human/AI failed to join (human=" + jHuman + ", ai=" + jAi + ")");
+        }
+        if (!server.matchStart(humanSession, room, tableId)) {
+            throw new IllegalStateException("web gateway: matchStart failed");
+        }
+
+        UUID newGameId = pollGameId(room, tableId);
+        // join the human to the game so HumanPlayer callbacks (priority, targets, ...) reach this session
+        server.gameJoin(newGameId, humanSession);
+        logger.info("web gateway: human-vs-AI game started, gameId=" + newGameId);
+        return newGameId;
+    }
+
+    private UUID pollGameId(UUID room, UUID tableId) throws Exception {
+        for (int i = 0; i < 50; i++) {
+            TableView started = server.roomGetTableById(room, tableId);
+            if (started != null && !started.getGames().isEmpty()) {
+                return started.getGames().get(0);
+            }
+            Thread.sleep(100);
+        }
+        throw new IllegalStateException("web gateway: match started but no game id appeared within timeout");
+    }
+
     /** Create a table, seat two AIs, start the match, and return the running game id. */
     public UUID startNewGame() throws Exception {
         MatchOptions options = new MatchOptions("Web AI Demo", GAME_TYPE, true);

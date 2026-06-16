@@ -1,8 +1,11 @@
 package mage.server.web;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.websocket.WsContext;
+import mage.constants.ManaType;
 import mage.interfaces.MageServer;
 import mage.server.DisconnectReason;
 import mage.server.Main;
@@ -23,12 +26,16 @@ import java.util.concurrent.ConcurrentHashMap;
  *   <li><b>Outbound</b> (server-&gt;browser): each WS connection registers a {@link SpectatorCallbackHandler}
  *       as its session callback handler; every {@code ClientCallback} the server fires is JSON-encoded
  *       and pushed down the socket.</li>
- *   <li><b>Inbound</b> (browser-&gt;server): JSON frames map to {@link MageServer} method calls
- *       (added in the next increment — phase 2).</li>
+ *   <li><b>Inbound</b> (browser-&gt;server): JSON frames {@code {action, value, ...}} map to the
+ *       {@code MageServer.sendPlayer*} response methods (see {@link #onMessage}).</li>
  * </ul>
  *
- * Phase 1 scope: read-only spectating. Boot wiring (starting this from {@code Main}) and launching an
- * AI-vs-AI game to watch are the next increment.
+ * Modes:
+ * <ul>
+ *   <li><b>demo</b> (no managerFactory): broadcast-only, fed by {@link AiGameDemo}.</li>
+ *   <li><b>spectate</b> ({@link #setSpectateGameId}): browsers watch a shared server game.</li>
+ *   <li><b>play</b> ({@link #setPlayMode}): each browser gets its own Human-vs-AI game.</li>
+ * </ul>
  *
  * @author web-gateway
  */
@@ -41,12 +48,17 @@ public class WebGatewayServer {
 
     /** Javalin WS session id -> internal mage session id. */
     private final Map<String, String> wsToMageSession = new ConcurrentHashMap<>();
+    /** Javalin WS session id -> the game this browser is playing/watching. */
+    private final Map<String, UUID> wsToGameId = new ConcurrentHashMap<>();
 
     /** Live browser connections (used by the standalone demo broadcaster). */
     private final Set<WsContext> clients = ConcurrentHashMap.newKeySet();
 
-    /** If set, browsers are auto-subscribed as watchers of this game on connect (production path). */
+    /** If set, browsers are auto-subscribed as watchers of this game on connect (spectate path). */
     private volatile UUID spectateGameId;
+
+    /** If set, each browser gets its own Human-vs-AI game on connect (play path). */
+    private volatile RealGameOrchestrator playOrchestrator;
 
     private Javalin app;
 
@@ -60,9 +72,14 @@ public class WebGatewayServer {
         this(null, null);
     }
 
-    /** Auto-subscribe new browser connections as watchers of this game (production path). */
+    /** Auto-subscribe new browser connections as watchers of this game (spectate path). */
     public void setSpectateGameId(UUID gameId) {
         this.spectateGameId = gameId;
+    }
+
+    /** Give each new browser connection its own Human-vs-AI game (play path). */
+    public void setPlayMode(RealGameOrchestrator orchestrator) {
+        this.playOrchestrator = orchestrator;
     }
 
     /**
@@ -90,7 +107,7 @@ public class WebGatewayServer {
         app.ws("/ws/spectate", ws -> {
             ws.onConnect(this::onConnect);
             ws.onMessage(ctx -> onMessage(ctx, ctx.message()));
-            ws.onClose(ctx -> onClose(ctx));
+            ws.onClose(this::onClose);
             ws.onError(ctx -> logger.warn("web gateway: ws error", ctx.error()));
         });
 
@@ -118,15 +135,28 @@ public class WebGatewayServer {
             });
             managerFactory.sessionManager().createSession(mageSessionId, handler);
             try {
-                // anon connect (unique name avoids same-name kick), then watch the active game
-                server.connectUser("w-" + mageSessionId.substring(0, 8), "", mageSessionId, "",
-                        Main.getVersion(), UUID.randomUUID().toString());
-                if (spectateGameId != null) {
-                    boolean watching = server.gameWatchStart(spectateGameId, mageSessionId);
-                    logger.info("web gateway: watching game " + spectateGameId + " = " + watching);
+                if (playOrchestrator != null) {
+                    // PLAY: connect as a human and start a personal Human-vs-AI game
+                    String humanName = "h-" + mageSessionId.substring(0, 8);
+                    server.connectUser(humanName, "", mageSessionId, "",
+                            Main.getVersion(), UUID.randomUUID().toString());
+                    UUID gameId = playOrchestrator.startHumanVsAi(mageSessionId, humanName);
+                    wsToGameId.put(ctx.getSessionId(), gameId);
+                    logger.info("web gateway: play session " + humanName + " -> game " + gameId);
+                } else {
+                    // SPECTATE: connect anon and watch the shared game
+                    server.connectUser("w-" + mageSessionId.substring(0, 8), "", mageSessionId, "",
+                            Main.getVersion(), UUID.randomUUID().toString());
+                    if (spectateGameId != null) {
+                        wsToGameId.put(ctx.getSessionId(), spectateGameId);
+                        boolean watching = server.gameWatchStart(spectateGameId, mageSessionId);
+                        logger.info("web gateway: watching game " + spectateGameId + " = " + watching);
+                    }
                 }
             } catch (Exception e) {
-                logger.warn("web gateway: failed to connect/watch for web session", e);
+                logger.warn("web gateway: failed to set up web session", e);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
+                        Map.of("message", String.valueOf(e.getMessage()))));
             }
         }
 
@@ -135,14 +165,52 @@ public class WebGatewayServer {
         logger.info("web gateway: client connected" + (managerFactory == null ? " (demo mode)" : ""));
     }
 
+    /**
+     * Inbound browser-&gt;server frames. Shape: {@code {"action": "...", "value": ..., "playerId": "..."}}.
+     * Each action maps to a {@code MageServer.sendPlayer*} response for this connection's game/session.
+     * See the in-game dialog protocol: a card/target/land pick is a UUID, yes/no and pass are booleans,
+     * amounts are integers, choices/multi-amounts are strings, mana-pool payment is a mana type.
+     */
     private void onMessage(WsContext ctx, String message) {
-        // Phase 2: parse {method, args} and dispatch to the MageServer command API
-        // (connectUser, gameWatchStart, sendPlayerUUID, ...). No-op for the read-only slice.
-        logger.debug("web gateway: inbound message (ignored in phase 1): " + message);
+        if (server == null) {
+            return; // demo mode is broadcast-only
+        }
+        String sessionId = wsToMageSession.get(ctx.getSessionId());
+        UUID gameId = wsToGameId.get(ctx.getSessionId());
+        if (sessionId == null || gameId == null) {
+            return;
+        }
+        try {
+            JsonObject msg = JsonParser.parseString(message).getAsJsonObject();
+            String action = msg.get("action").getAsString();
+            switch (action) {
+                case "playerBoolean":
+                    server.sendPlayerBoolean(gameId, sessionId, msg.get("value").getAsBoolean());
+                    break;
+                case "playerUUID":
+                    server.sendPlayerUUID(gameId, sessionId, UUID.fromString(msg.get("value").getAsString()));
+                    break;
+                case "playerInteger":
+                    server.sendPlayerInteger(gameId, sessionId, msg.get("value").getAsInt());
+                    break;
+                case "playerString":
+                    server.sendPlayerString(gameId, sessionId, msg.get("value").getAsString());
+                    break;
+                case "playerManaType":
+                    server.sendPlayerManaType(gameId, UUID.fromString(msg.get("playerId").getAsString()),
+                            sessionId, ManaType.valueOf(msg.get("value").getAsString()));
+                    break;
+                default:
+                    logger.warn("web gateway: unknown inbound action: " + action);
+            }
+        } catch (Exception e) {
+            logger.warn("web gateway: inbound dispatch failed for: " + message, e);
+        }
     }
 
     private void onClose(WsContext ctx) {
         clients.remove(ctx);
+        wsToGameId.remove(ctx.getSessionId());
         String mageSessionId = wsToMageSession.remove(ctx.getSessionId());
         if (mageSessionId != null && managerFactory != null) {
             managerFactory.sessionManager().disconnect(mageSessionId, DisconnectReason.LostConnection, true);
