@@ -6,6 +6,7 @@ import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.websocket.WsContext;
 import mage.constants.ManaType;
+import mage.constants.PlayerAction;
 import mage.interfaces.MageServer;
 import mage.server.DisconnectReason;
 import mage.server.Main;
@@ -199,6 +200,9 @@ public class WebGatewayServer {
                 case "playerManaType":
                     server.sendPlayerManaType(gameId, UUID.fromString(msg.get("playerId").getAsString()),
                             sessionId, ManaType.valueOf(msg.get("value").getAsString()));
+                    break;
+                case "playerAction": // skip/pass-to-phase shortcuts (XMage F-keys)
+                    server.sendPlayerAction(PlayerAction.valueOf(msg.get("value").getAsString()), gameId, sessionId, null);
                     break;
                 default:
                     logger.warn("web gateway: unknown inbound action: " + action);
