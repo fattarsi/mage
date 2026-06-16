@@ -312,6 +312,75 @@ public final class Main {
         ServerMessagesUtil.instance.setStartDate(System.currentTimeMillis());
     }
 
+    /**
+     * Result of an in-process headless boot: the live manager layer plus a ready {@link MageServer}.
+     */
+    public static final class HeadlessBoot {
+        public final ManagerFactory managerFactory;
+        public final MageServer mageServer;
+
+        private HeadlessBoot(ManagerFactory managerFactory, MageServer mageServer) {
+            this.managerFactory = managerFactory;
+            this.mageServer = mageServer;
+        }
+    }
+
+    private static HeadlessBoot headlessBoot;
+
+    /**
+     * Boots the server's manager layer in-process (config, repositories, card DB, game/player/deck
+     * factories, {@link ManagerFactory}, {@link MageServerImpl}) WITHOUT binding the JBoss network
+     * transporter. Intended for alternative front-ends such as the web gateway, which talk to
+     * {@link MageServerImpl} directly and deliver callbacks over their own transport.
+     * <p>
+     * Idempotent: repeated calls return the same instance.
+     */
+    public static synchronized HeadlessBoot bootHeadless() {
+        if (headlessBoot != null) {
+            return headlessBoot;
+        }
+
+        System.setProperty("java.util.Arrays.useLegacyMergeSort", "true");
+        boolean localTestMode = testMode || version.isDeveloperBuild();
+
+        String configPath = System.getProperty(configPathProp) != null
+                ? System.getProperty(configPathProp) : defaultConfigPath;
+        logger.info("Headless boot: reading configuration from path=" + configPath);
+        ConfigWrapper config = new ConfigWrapper(ConfigFactory.loadFromFile(configPath));
+
+        if (config.isAuthenticationActivated()) {
+            AuthorizedUserRepository.getInstance().checkAlterAndMigrateAuthorizedUser();
+        }
+
+        RepositoryUtil.bootstrapLocalDb();
+        logger.info("Headless boot: loading cards...");
+        CardScanner.scan();
+        UserStatsRepository.instance.updateUserStats();
+
+        for (GamePlugin plugin : config.getGameTypes()) {
+            GameFactory.instance.addGameType(plugin.getName(), loadGameType(plugin), loadPlugin(plugin));
+        }
+        for (GamePlugin plugin : config.getTournamentTypes()) {
+            TournamentFactory.instance.addTournamentType(plugin.getName(), loadTournamentType(plugin), loadPlugin(plugin));
+        }
+        for (Plugin plugin : config.getPlayerTypes()) {
+            PlayerFactory.instance.addPlayerType(plugin.getName(), loadPlugin(plugin));
+        }
+        for (Plugin plugin : config.getDraftCubes()) {
+            CubeFactory.instance.addDraftCube(plugin.getName(), loadPlugin(plugin));
+        }
+        for (Plugin plugin : config.getDeckTypes()) {
+            DeckValidatorFactory.instance.addDeckType(plugin.getName(), loadPlugin(plugin));
+        }
+
+        ManagerFactory managerFactory = new MainManagerFactory(config);
+        MageServer mageServer = new MageServerImpl(managerFactory, "", localTestMode, detailsMode);
+        logger.info("Headless boot: manager layer ready (JBoss transporter NOT started)");
+
+        headlessBoot = new HeadlessBoot(managerFactory, mageServer);
+        return headlessBoot;
+    }
+
     static boolean isAlreadyRunning(ConfigSettings config, InvokerLocator serverLocator) {
         Map<String, String> metadata = new HashMap<>();
         metadata.put(SocketWrapper.WRITE_TIMEOUT, String.valueOf(config.getSocketWriteTimeout()));

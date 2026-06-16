@@ -5,6 +5,7 @@ import io.javalin.http.staticfiles.Location;
 import io.javalin.websocket.WsContext;
 import mage.interfaces.MageServer;
 import mage.server.DisconnectReason;
+import mage.server.Main;
 import mage.server.managers.ManagerFactory;
 import org.apache.log4j.Logger;
 
@@ -44,6 +45,9 @@ public class WebGatewayServer {
     /** Live browser connections (used by the standalone demo broadcaster). */
     private final Set<WsContext> clients = ConcurrentHashMap.newKeySet();
 
+    /** If set, browsers are auto-subscribed as watchers of this game on connect (production path). */
+    private volatile UUID spectateGameId;
+
     private Javalin app;
 
     public WebGatewayServer(ManagerFactory managerFactory, MageServer server) {
@@ -54,6 +58,11 @@ public class WebGatewayServer {
     /** Demo constructor: broadcast-only, not attached to a live server. */
     public WebGatewayServer() {
         this(null, null);
+    }
+
+    /** Auto-subscribe new browser connections as watchers of this game (production path). */
+    public void setSpectateGameId(UUID gameId) {
+        this.spectateGameId = gameId;
     }
 
     /**
@@ -108,6 +117,17 @@ public class WebGatewayServer {
                 }
             });
             managerFactory.sessionManager().createSession(mageSessionId, handler);
+            try {
+                // anon connect (unique name avoids same-name kick), then watch the active game
+                server.connectUser("w-" + mageSessionId.substring(0, 8), "", mageSessionId, "",
+                        Main.getVersion(), UUID.randomUUID().toString());
+                if (spectateGameId != null) {
+                    boolean watching = server.gameWatchStart(spectateGameId, mageSessionId);
+                    logger.info("web gateway: watching game " + spectateGameId + " = " + watching);
+                }
+            } catch (Exception e) {
+                logger.warn("web gateway: failed to connect/watch for web session", e);
+            }
         }
 
         ctx.send(JsonCodec.encodeCallback("GATEWAY_HELLO", null,

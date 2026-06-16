@@ -20,6 +20,8 @@
              (the rest of the project still targets 1.8). The gateway is an opt-in feature. -->
         <web.java.version>17</web.java.version>
         <javalin.version>5.6.4</javalin.version>
+        <!-- default exec target; override with -Dexec.mainClass=mage.server.web.WebServerMain -->
+        <exec.mainClass>mage.server.web.WebDemoMain</exec.mainClass>
     </properties>
 
     <dependencies>
@@ -100,7 +102,7 @@
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.1.0</version>
                 <configuration>
-                    <mainClass>mage.server.web.WebDemoMain</mainClass>
+                    <mainClass>${exec.mainClass}</mainClass>
                 </configuration>
             </plugin>
         </plugins>

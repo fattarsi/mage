@@ -3,6 +3,10 @@ package mage.server.web;
 import mage.cards.Card;
 import mage.cards.Sets;
 import mage.cards.decks.Deck;
+import mage.cards.decks.DeckCardInfo;
+import mage.cards.decks.DeckCardLists;
+import mage.cards.repository.CardInfo;
+import mage.cards.repository.CardRepository;
 import mage.constants.ColoredManaSymbol;
 import mage.player.ai.ComputerPlayer;
 
@@ -36,5 +40,22 @@ public final class DeckFactory {
         }
         List<Card> cardPool = Sets.generateRandomCardPool(POOL_SIZE, allowedColors, false, null);
         return ComputerPlayer.buildDeck(DECK_SIZE, cardPool, allowedColors, false);
+    }
+
+    /**
+     * Same random deck, expressed as a {@link DeckCardLists} for the server's join-table API
+     * (which takes a card list, not a built Deck).
+     */
+    public static DeckCardLists buildRandomDeckList(String colors) {
+        Deck deck = buildRandomDeck(colors);
+        DeckCardLists list = new DeckCardLists();
+        list.setName("web-random-" + colors);
+        for (Card card : deck.getCards()) {
+            CardInfo info = CardRepository.instance.findCard(card.getExpansionSetCode(), card.getCardNumber());
+            if (info != null) {
+                list.getCards().add(new DeckCardInfo(info.getName(), info.getCardNumber(), info.getSetCode()));
+            }
+        }
+        return list;
     }
 }
