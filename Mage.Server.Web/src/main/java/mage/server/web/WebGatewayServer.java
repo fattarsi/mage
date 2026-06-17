@@ -6,7 +6,11 @@ import com.google.gson.JsonParser;
 import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.websocket.WsContext;
+import mage.cards.decks.Deck;
 import mage.cards.decks.DeckCardLists;
+import mage.cards.decks.DeckValidator;
+import mage.cards.decks.DeckValidatorError;
+import mage.cards.decks.DeckValidatorFactory;
 import mage.constants.ManaType;
 import mage.constants.PlayerAction;
 import mage.interfaces.MageServer;
@@ -426,11 +430,58 @@ public class WebGatewayServer {
             }
         }
 
+        // Pre-validate the human's deck so we can report exactly why it's rejected (the server's own
+        // validation otherwise just refuses the join with a generic failure).
+        if (deck != null) {
+            String reason = describeDeckProblems(deck, fmt.deckType);
+            if (reason != null) {
+                throw new IllegalStateException(reason);
+            }
+        }
+
         String humanName = "h-" + sessionId.substring(0, 8);
         UUID newId = playOrchestrator.startHumanVsAi(sessionId, humanName,
                 fmt.gameType, fmt.deckType, fmt.aiSeats, deck, aiDecks);
         wsToGameId.put(ctx.getSessionId(), newId);
         logger.info("web gateway: started " + fmt.gameType + " for " + humanName + " -> " + newId);
+    }
+
+    /**
+     * Validate a deck the same way the server will, and return a human-readable explanation of any
+     * problems (illegal cards, wrong count, color identity, unresolved printings) — or null if it's fine.
+     */
+    private String describeDeckProblems(DeckCardLists list, String deckType) {
+        int requested = list.getCards().size() + list.getSideboard().size();
+        Deck deck;
+        try {
+            deck = Deck.load(list, true, false); // ignore load errors so we can count what resolved
+        } catch (Exception e) {
+            return "Deck '" + list.getName() + "' failed to load: " + e.getMessage();
+        }
+        int resolved = deck.getCards().size() + deck.getSideboard().size();
+
+        DeckValidator validator = DeckValidatorFactory.instance.createDeckValidator(deckType);
+        if (validator != null && validator.validate(deck)) {
+            return null; // legal
+        }
+
+        StringBuilder sb = new StringBuilder("Deck '" + list.getName() + "' isn't legal for "
+                + (validator != null ? validator.getName() : deckType) + ":\n");
+        if (resolved < requested) {
+            sb.append("• ").append(requested - resolved)
+                    .append(" card(s) couldn't be found in XMage's database (set/printing mismatch from the import).\n");
+        }
+        if (validator != null) {
+            int shown = 0;
+            for (DeckValidatorError err : validator.getErrorsListSorted()) {
+                sb.append("• ").append(err.getGroup()).append(": ").append(err.getMessage()).append("\n");
+                if (++shown >= 12) {
+                    sb.append("• …\n");
+                    break;
+                }
+            }
+        }
+        return sb.toString();
     }
 
     private void onClose(WsContext ctx) {
