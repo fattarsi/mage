@@ -68,7 +68,7 @@ public class RealGameOrchestrator {
      * priority/dialog callbacks. A null {@code humanDeck} falls back to a random deck. Returns the game id.
      */
     public UUID startHumanVsAi(String humanSession, String humanName, String gameType, String deckType,
-                               int aiSeats, DeckCardLists humanDeck) throws Exception {
+                               int aiSeats, DeckCardLists humanDeck, java.util.List<DeckCardLists> aiDecks) throws Exception {
         UUID room = server.serverGetMainRoomId();
 
         MatchOptions options = new MatchOptions("Web Human vs AI", gameType, true);
@@ -93,8 +93,10 @@ public class RealGameOrchestrator {
             throw new IllegalStateException("web gateway: human failed to join the table");
         }
         for (int i = 0; i < aiSeats; i++) {
+            DeckCardLists aiDeck = (aiDecks != null && i < aiDecks.size() && aiDecks.get(i) != null)
+                    ? aiDecks.get(i) : DeckFactory.buildRandomDeckList("WUBRG");
             boolean jAi = server.roomJoinTable(humanSession, room, tableId, "AI " + (i + 1),
-                    PlayerType.COMPUTER_MAD, 2, DeckFactory.buildRandomDeckList("WUBRG"), "");
+                    PlayerType.COMPUTER_MAD, 2, aiDeck, "");
             if (!jAi) {
                 throw new IllegalStateException("web gateway: AI " + (i + 1) + " failed to join");
             }

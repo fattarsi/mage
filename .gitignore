@@ -69,3 +69,5 @@ mage-bundle.zip
 
 # dev tools
 .devcontainer/**/*lock.json
+
+image-cache/

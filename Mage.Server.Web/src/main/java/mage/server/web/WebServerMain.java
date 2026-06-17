@@ -36,6 +36,13 @@ public final class WebServerMain {
         RealGameOrchestrator orchestrator = new RealGameOrchestrator(boot.managerFactory, boot.mageServer);
         gateway.setPlayMode(orchestrator);
 
+        // Optional external deck source, e.g. -Dxmage.web.deckSourceUrl=https://your-deck-host
+        String deckSourceUrl = System.getProperty("xmage.web.deckSourceUrl", "").trim();
+        if (!deckSourceUrl.isEmpty()) {
+            gateway.setDeckSource(new DeckManagerSource(deckSourceUrl));
+            logger.info("external deck source enabled: " + deckSourceUrl);
+        }
+
         gateway.start(port);
 
         logger.info("=================================================================");
