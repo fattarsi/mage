@@ -690,6 +690,11 @@ ws.onmessage = (ev) => {
         else if (ACTIONABLE.has(msg.method)) combatMode = null;
         const gv = data.gameView || (data.players ? data : null);
         if (gv) { lastGameView = gv; computePlayable(gv); renderBoard(gv); }
+        // Some decision frames (e.g. the London mulligan "put a card on the bottom" target, or any
+        // "choose a target" that picks from hand/battlefield) carry NO gameView but DO update the set
+        // of valid targets. Re-render the last board so those targets get highlighted/clickable —
+        // otherwise the player sees a prompt with nothing visibly actionable.
+        else if (lastGameView && (msg.method === 'GAME_TARGET' || ACTIONABLE.has(msg.method))) { renderBoard(lastGameView); }
         renderPicker(msg.method, data);
         handle(msg.method, data);
         soundForFrame(msg.method, data, gv);
@@ -1062,12 +1067,17 @@ function handle(method, data) {
                 [{label:'Done / skip', onClick:()=>send('playerBoolean', false)}]);
             break;
         }
-        case 'GAME_ASK':
+        case 'GAME_ASK': {
+            // honor server-provided button labels when present (e.g. mulligan -> "Mulligan"/"Keep")
+            const opts = data.options || {};
+            const yesLabel = opts['UI.left.btn.text'] || 'Yes';
+            const noLabel = opts['UI.right.btn.text'] || 'No';
             setPrompt(message, [
-                {label:'Yes', onClick:()=>send('playerBoolean', true)},
-                {label:'No', alt:true, onClick:()=>send('playerBoolean', false)},
+                {label: yesLabel, onClick:()=>send('playerBoolean', true)},
+                {label: noLabel, alt:true, onClick:()=>send('playerBoolean', false)},
             ]);
             break;
+        }
         case 'GAME_GET_AMOUNT': case 'GAME_PLAY_XMANA': {
             const min = data.min||0, max = data.max!==undefined?data.max:99;
             promptMain.innerHTML = '';
