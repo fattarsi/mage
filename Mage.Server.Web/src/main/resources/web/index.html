@@ -126,8 +126,14 @@
         .card .cn { font-weight: 700; color: #dde; }
         .card .cc { float: right; color: #ad8; }
         .card .ct { color: #89a; font-size: 9px; }
-        .card .pt { position: absolute; right: 4px; bottom: 2px; font-weight: 700; color: #fe9; }
         .card .rules { color: #aab; font-size: 9px; margin-top: 2px; max-height: 40px; overflow: hidden; }
+        /* P/T (or loyalty) and counters drawn on top of the art so they're always visible */
+        .card .ptbadge { position: absolute; right: 2px; bottom: 2px; z-index: 3; font-weight: 700;
+                         color: #ffe9a8; background: rgba(0,0,0,.78); padding: 0 4px; border-radius: 4px; font-size: 11px; }
+        .card .ctrs { position: absolute; left: 2px; bottom: 2px; z-index: 3; display: flex;
+                      flex-direction: column; gap: 1px; align-items: flex-start; max-width: 80%; }
+        .card .ctr { background: rgba(22,70,36,.92); color: #c6f0cf; font-size: 9px; font-weight: 700;
+                     padding: 0 3px; border-radius: 3px; white-space: nowrap; }
         #stack { border: 1px dashed #56607a; border-radius: 6px; padding: 6px; margin: 8px 0; }
         /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
         #skipbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 4px; margin: -2px 0 4px; }
@@ -737,14 +743,22 @@ function cardEl(card, clickable) {
         + (card.tapped ? ' tapped' : '');
     const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
     const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
-    const pt = (card.power !== undefined && (card.cardTypes||[]).includes('CREATURE'))
-        ? `${card.power}/${card.toughness}` : '';
+    const isCreature = (card.cardTypes||[]).includes('CREATURE');
+    const pt = (card.power !== undefined && isCreature) ? `${card.power}/${card.toughness}` : '';
+    // counters (e.g. +1/+1, charge, loyalty) — list of {name, count}
+    const counters = Array.isArray(card.counters) ? card.counters.filter(c => c && c.count) : [];
     if (card.id) d.dataset.cid = card.id; // for combat arrows
+    // overlays drawn ON TOP of the art so they stay visible: P/T (or loyalty) bottom-right, counters bottom-left
+    const ptBadge = pt ? `${pt}` : (card.loyalty ? `◆${card.loyalty}` : '');
+    const counterBadges = counters.map(c =>
+        `<span class="ctr" title="${esc(c.name)} counters">${msg(c.name)}${c.count>1?' ×'+c.count:''}</span>`).join('');
     d.innerHTML = `<span class="cc">${esc(cost)}</span><span class="cn">${card.isAbility?'⚡ ':''}${msg(card.name||'?')}</span>`
         + `<div class="ct">${esc(types)}</div>`
         + (card.rules && card.rules.length ? `<div class="rules">${msg(card.rules.join(' • '))}</div>` : '')
-        + (pt ? `<div class="pt">${esc(pt)}</div>` : '');
+        + (counterBadges ? `<div class="ctrs">${counterBadges}</div>` : '')
+        + (ptBadge ? `<div class="ptbadge">${esc(ptBadge)}</div>` : '');
     d.title = strip(`${card.name||'?'}${cost?'  '+cost:''}${pt?'  '+pt:''}`
+        + (counters.length ? '\ncounters: ' + counters.map(c=>c.name+(c.count>1?' x'+c.count:'')).join(', ') : '')
         + (types?'\n'+types:'') + (card.rules&&card.rules.length?'\n\n'+card.rules.join('\n'):''));
     // real card art (tokens looked up by name, with fallback); on failure the text card shows through
     if (artCandidates(card).length) {
@@ -904,6 +918,7 @@ function renderBoard(gv) {
             : '';
         return `<div class="phead clickable${tgt}" data-pid="${p.playerId}" onclick="pickPlayer('${p.playerId}')" title="click to target this player">`
             + zoomBtn
+            + (p.monarch ? `<span class="crown" title="Monarch">👑</span> ` : '')
             + `<span class="pname">${esc(p.name)}</span> `
             + `<span class="life">♥ ${p.life}</span> `
             + `<span class="meta">hand ${p.handCount} · lib ${p.libraryCount} · gy ${Object.keys(p.graveyard||{}).length}</span>`
@@ -1091,26 +1106,26 @@ function handle(method, data) {
             const ch = data.choice || {};
             const btns = [];
             if (ch.keyChoice && ch.keyChoices) {
-                for (const k in ch.keyChoices) btns.push({label: ch.keyChoices[k], onClick:()=>send('playerString', k)});
+                for (const k in ch.keyChoices) btns.push({label: strip(ch.keyChoices[k]), onClick:()=>send('playerString', k)});
             } else {
                 const opts = ch.choices || [];
-                (Array.isArray(opts)?opts:Object.values(opts)).forEach(o => btns.push({label:o, onClick:()=>send('playerString', o)}));
+                (Array.isArray(opts)?opts:Object.values(opts)).forEach(o => btns.push({label:strip(o), onClick:()=>send('playerString', o)}));
             }
             if (!ch.required) btns.push({label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)});
-            setPrompt(esc(ch.message || data.message || 'Choose'), btns);
+            setPrompt(msg(ch.message || data.message || 'Choose'), btns);
             break;
         }
         case 'GAME_CHOOSE_ABILITY': {
             const choices = data.choices || {};
             const btns = [];
-            for (const id in choices) btns.push({label: choices[id], onClick:()=>send('playerUUID', id)});
+            for (const id in choices) btns.push({label: strip(choices[id]), onClick:()=>send('playerUUID', id)});
             btns.push({label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)});
-            setPrompt(esc(data.message || 'Choose an ability'), btns);
+            setPrompt(msg(data.message || 'Choose an ability'), btns);
             break;
         }
         case 'GAME_OVER': case 'END_GAME_INFO':
             setGameActive(false);
-            setPrompt('<span class="over">Game over — ' + (esc(data.message) || 'see log') + '</span>');
+            setPrompt('<span class="over">Game over — ' + (msg(data.message) || 'see log') + '</span>');
             log('GAME OVER: ' + (data.message||'')); break;
 
         case 'GAME_UPDATE': case 'GAME_UPDATE_AND_INFORM':
