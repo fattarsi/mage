@@ -43,9 +43,8 @@
         body.viewer-on #viewer.has-card { display: block; }
         #viewer.show { opacity: 1; }
         #viewerInfo .vpr { color: #8fd29a; font-size: 12px; margin-top: 4px; }
-        #logPanel { background: #1b212b; border: 1px solid #2c3340; border-radius: 9px; padding: 6px 9px;
-                    box-shadow: 0 6px 20px rgba(0,0,0,.4); pointer-events: auto; }
-        #logHeader { cursor: pointer; font-size: 12px; color: #9ab; font-weight: 600; user-select: none; }
+        #logBar { border-top: 1px solid #2b313b; background: #1b2028; padding: 4px 14px 8px; }
+        #logHeader { cursor: pointer; font-size: 12px; color: #9ab; font-weight: 600; user-select: none; padding: 4px 0; }
         #logHeader:hover { color: #fff; }
         #viewerImg { width: 100%; border-radius: 7px; display: block; background: #11151b; }
         #viewerInfo { margin-top: 7px; font-size: 12.5px; line-height: 1.35; }
@@ -84,6 +83,7 @@
         .card.playable { box-shadow: 0 0 0 2px #4a7; }
         .card.targetable { box-shadow: 0 0 0 3px #fd5; cursor: pointer; }
         .card.dim { opacity: .4; }
+        .card.eligible { box-shadow: 0 0 0 3px #ef7d4a; cursor: pointer; } /* combat: eligible attacker/blocker */
         .card.tapped { transform: rotate(8deg); opacity: .8; }
         .phead.clickable { cursor: pointer; padding: 3px 6px; border-radius: 5px; }
         .phead.clickable:hover { background: #2b3340; }
@@ -108,7 +108,9 @@
                  font-size: 13px; cursor: pointer; }
         button:hover { background: #4767a0; }
         button.alt { background: #5a3a3a; } button.alt:hover { background: #784c4c; }
-        #log { margin-top: 6px; max-height: 40vh; overflow: auto; font-size: 11px; color: #8a9; font-family: ui-monospace, monospace; }
+        #log { resize: vertical; overflow: auto; height: 150px; min-height: 40px; max-height: 60vh;
+               font-size: 11px; color: #8a9; font-family: ui-monospace, monospace; border: 1px solid #2b313b;
+               border-radius: 6px; padding: 6px; background: #14181e; }
         #log .sent { color: #9cf; } #log .recv { color: #7a8; } #log .err { color: #f88; font-weight: 700; }
         .card.playable { box-shadow: 0 0 0 3px #5d7; }
         .card.playable::after { content: '▶ play'; position: absolute; left: 4px; bottom: 2px; font-size: 8px; color: #6e9; }
@@ -179,16 +181,16 @@
 
 <div id="skipbar"></div>
 <div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span></div>
+<div id="logBar">
+    <div id="logHeader">▸ Log</div>
+    <div id="log" style="display:none"></div>
+</div>
 
 <div id="rightbar">
     <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"></div></div>
     <div id="commanderPanel" style="display:none">
         <div id="commanderHeader">▸ Commander</div>
         <div id="commanderBody" class="zone" style="display:none"></div>
-    </div>
-    <div id="logPanel">
-        <div id="logHeader">▸ Log</div>
-        <div id="log" style="display:none"></div>
     </div>
 </div>
 
@@ -346,6 +348,7 @@ let playableIds = new Set();
 let validTargets = new Set();  // ids the server is currently asking us to pick (cards OR players)
 let priorityActive = false;    // true while the server is asking us to act at priority (GAME_SELECT)
 let myHandIds = new Set();      // ids of cards in our hand (to dim the un-castable ones at priority)
+let combatMode = null;         // 'attack' | 'block' while declaring attackers/blockers (to highlight creatures)
 
 // callbacks that START a fresh decision (so stale target highlights should clear)
 const ACTIONABLE = new Set(['GAME_SELECT','GAME_PLAY_MANA','GAME_ASK','GAME_GET_AMOUNT',
@@ -449,6 +452,10 @@ ws.onmessage = (ev) => {
         else if (msg.method === 'GAME_PLAY_MANA') validTargets = new Set(untappedLandIds(data.gameView || {}));
         else if (ACTIONABLE.has(msg.method)) validTargets = new Set();
         priorityActive = (msg.method === 'GAME_SELECT');
+        const rawMsg = String(data.message || '');
+        if (msg.method === 'GAME_SELECT' && /select attackers/i.test(rawMsg)) combatMode = 'attack';
+        else if (msg.method === 'GAME_SELECT' && /select blockers/i.test(rawMsg)) combatMode = 'block';
+        else if (ACTIONABLE.has(msg.method)) combatMode = null;
         const gv = data.gameView || (data.players ? data : null);
         if (gv) { lastGameView = gv; computePlayable(gv); renderBoard(gv); }
         renderPicker(msg.method, data);
@@ -481,9 +488,12 @@ function cardEl(card, clickable) {
     const isTarget = validTargets.has(card.id);
     // at priority, dim hand cards we can't play right now (wrong phase / not enough mana / not our turn)
     const dim = priorityActive && myHandIds.has(card.id) && !playableIds.has(card.id) && !isTarget;
+    // during combat, highlight my untapped creatures (eligible attackers/blockers)
+    const eligible = combatMode && card.controlled && (card.cardTypes||[]).includes('CREATURE') && !card.tapped;
     d.className = 'card' + (clickable ? ' clickable' : '')
         + (playableIds.has(card.id) ? ' playable' : '')
         + (isTarget ? ' targetable' : '')
+        + (eligible ? ' eligible' : '')
         + (dim ? ' dim' : '')
         + (card.tapped ? ' tapped' : '');
     const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
@@ -631,7 +641,21 @@ function handle(method, data) {
             setupEl.style.display = 'none'; log('Game started');
             setPrompt('Game started — waiting for the first decision…'); break;
 
-        case 'GAME_SELECT': { // priority: play a card (click) or pass
+        case 'GAME_SELECT': { // priority: play a card / declare attackers or blockers / pass
+            const raw = String(data.message || '');
+            if (/select attackers/i.test(raw)) {
+                setPrompt('<b>⚔ Declare attackers.</b> Click your highlighted creatures to attack. '
+                    + 'If there\'s more than one target (a player or a planeswalker) you\'ll then pick which to attack. '
+                    + 'Click Done when finished.',
+                    [{label:'Done attacking ▸', onClick:()=>send('playerBoolean', false)}]);
+                break;
+            }
+            if (/select blockers/i.test(raw)) {
+                setPrompt('<b>🛡 Declare blockers.</b> Click your creature, then click the attacker it should block. '
+                    + 'Click Done when finished.',
+                    [{label:'Done blocking ▸', onClick:()=>send('playerBoolean', false)}]);
+                break;
+            }
             const gv = lastGameView || {};
             const meP = (gv.players||[]).find(p => p.controlled);
             const myTurn = meP && gv.activePlayerId === meP.playerId;
