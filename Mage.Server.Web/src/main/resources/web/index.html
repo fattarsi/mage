@@ -5,7 +5,7 @@
     <title>XMage Web — Play vs AI</title>
     <style>
         * { box-sizing: border-box; }
-        :root { --card-w: 104px; }
+        :root { --card-w: 104px; --bf-card-w: 78px; }
         body { font-family: system-ui, sans-serif; margin: 0; background: #14161a; color: #e7e7e7; }
         header { padding: 8px 14px; background: #1f242c; border-bottom: 1px solid #333;
                  display: flex; align-items: center; gap: 14px; }
@@ -60,6 +60,17 @@
         .active { color: #7f7; }
         .zone-label { font-size: 11px; color: #789; margin: 4px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
         .zone { display: flex; flex-wrap: wrap; gap: 5px; min-height: 8px; }
+        /* battlefield: type rows, with their own (smaller) card size */
+        .bf { display: flex; flex-direction: column; gap: 3px; }
+        .bf .card { width: var(--bf-card-w); min-height: calc(var(--bf-card-w) * 1.4); }
+        .bf .zone-label { margin: 2px 0 1px; }
+        /* settings dropdown */
+        #settingsBtn { background: #3a4150; font-size: 12px; padding: 5px 12px; }
+        #settings { position: fixed; top: 44px; right: 10px; z-index: 60; width: 280px; background: #1c2230;
+                    border: 1px solid #3a4658; border-radius: 9px; padding: 12px 14px; box-shadow: 0 8px 28px rgba(0,0,0,.5); }
+        #settings .setrow { margin: 8px 0; font-size: 13px; color: #bcd; }
+        #settings .setrow label { display: block; margin-bottom: 3px; }
+        #settings input[type=range] { width: 100%; }
         .card { width: var(--card-w); min-height: calc(var(--card-w) * 1.4); border: 1px solid #3a4150;
                 border-radius: 6px; padding: 4px 4px 14px; font-size: 10px; background: #232a33; cursor: default;
                 position: relative; line-height: 1.3; overflow: hidden; transition: width .12s, min-height .12s; }
@@ -123,16 +134,15 @@
     <b>XMage Web</b> — play vs AI
     <span id="status">connecting…</span>
     <button id="newGameBtn">New game</button>
-    <span id="zoomwrap">🔍 <input type="range" id="zoom" min="64" max="200" step="4" value="104"></span>
-    <label id="viewerToggleWrap"><input type="checkbox" id="viewerToggle"> Card viewer</label>
+    <button id="settingsBtn">⚙ Settings</button>
 </header>
 
-<div id="leftbar">
-    <div id="commanderPanel" style="display:none">
-        <div id="commanderHeader">▸ Commander</div>
-        <div id="commanderBody" class="zone" style="display:none"></div>
-    </div>
+<div id="settings" style="display:none">
+    <div class="setrow"><label>Hand card size</label><input type="range" id="zoom" min="64" max="220" step="4" value="104"></div>
+    <div class="setrow"><label>Battlefield card size</label><input type="range" id="bfzoom" min="44" max="180" step="4" value="78"></div>
+    <div class="setrow"><label><input type="checkbox" id="viewerToggle"> Card viewer (hover preview)</label></div>
 </div>
+
 
 <div id="setup" class="overlay" style="display:none">
     <div class="panel">
@@ -162,6 +172,10 @@
 
 <div id="rightbar">
     <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"></div></div>
+    <div id="commanderPanel" style="display:none">
+        <div id="commanderHeader">▸ Commander</div>
+        <div id="commanderBody" class="zone" style="display:none"></div>
+    </div>
     <div id="logPanel">
         <div id="logHeader">▸ Log</div>
         <div id="log" style="display:none"></div>
@@ -194,6 +208,18 @@ if (savedZoom) { zoom.value = savedZoom; document.documentElement.style.setPrope
 zoom.oninput = () => {
     document.documentElement.style.setProperty('--card-w', zoom.value + 'px');
     localStorage.setItem('cardZoom', zoom.value);
+};
+// settings panel toggle
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsPanel = document.getElementById('settings');
+settingsBtn.onclick = () => { settingsPanel.style.display = (settingsPanel.style.display === 'none' ? 'block' : 'none'); };
+// battlefield card size (smaller than hand by default)
+const bfzoom = document.getElementById('bfzoom');
+const savedBf = localStorage.getItem('bfZoom');
+if (savedBf) { bfzoom.value = savedBf; document.documentElement.style.setProperty('--bf-card-w', savedBf + 'px'); }
+bfzoom.oninput = () => {
+    document.documentElement.style.setProperty('--bf-card-w', bfzoom.value + 'px');
+    localStorage.setItem('bfZoom', bfzoom.value);
 };
 
 // hover card viewer (toggleable, persisted)
@@ -458,6 +484,26 @@ function cardEl(card, clickable) {
     return d;
 }
 
+function classifyPerm(p) {
+    const t = p.cardTypes || [];
+    if (t.includes('LAND')) return 'land';
+    if (t.includes('CREATURE')) return 'creature';
+    return 'other';
+}
+// battlefield laid out as rows by type (playmat convention): creatures up top, then
+// artifacts/enchantments/walkers, then lands. Opponents are mirrored (lands at top).
+function battlefieldEl(battlefield, mirrored) {
+    const wrap = document.createElement('div'); wrap.className = 'bf';
+    const groups = { creature: [], other: [], land: [] };
+    Object.values(battlefield || {}).forEach(p => groups[classifyPerm(p)].push(p));
+    const order = mirrored ? ['land', 'other', 'creature'] : ['creature', 'other', 'land'];
+    const labels = { creature: 'Creatures', other: 'Artifacts / Enchantments / Walkers', land: 'Lands' };
+    let any = false;
+    order.forEach(g => { if (groups[g].length) { any = true; wrap.appendChild(zone(labels[g], groups[g], true)); } });
+    if (!any) { const e = document.createElement('div'); e.className = 'meta'; e.textContent = '— empty —'; wrap.appendChild(e); }
+    return wrap;
+}
+
 function zone(label, cardsMap, clickable) {
     const wrap = document.createElement('div');
     const l = document.createElement('div'); l.className = 'zone-label'; l.textContent = label;
@@ -493,13 +539,13 @@ function renderBoard(gv) {
         const panel = document.createElement('div');
         panel.className = 'player' + (opponents.length > 1 ? ' compact' : '');
         panel.innerHTML = pheadHtml(opp, gv.activePlayerId === opp.playerId);
-        panel.appendChild(zone('Battlefield', opp.battlefield, true)); // clickable as targets
+        panel.appendChild(battlefieldEl(opp.battlefield, true)); // mirrored; clickable as targets
         if (opp.commandList && opp.commandList.length) panel.appendChild(zone('Command', opp.commandList, true));
         opponentsEl.appendChild(panel);
     }
 
     meEl.innerHTML = pheadHtml(me, myTurn);
-    meEl.appendChild(zone('My battlefield', me.battlefield, true));
+    meEl.appendChild(battlefieldEl(me.battlefield, false));
     meEl.appendChild(zone('My hand', gv.myHand, true));
 
     // my commander lives in the collapsible left-side panel
