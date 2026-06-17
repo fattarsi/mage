@@ -32,6 +32,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Embedded WebSocket/JSON gateway that re-serves the existing in-process XMage server to web clients.
@@ -134,6 +138,33 @@ public class WebGatewayServer {
 
     /** Optional external deck source (e.g. the user's Deck Manager site). */
     private volatile DeckSource deckSource;
+
+    /**
+     * A persistent play session tied to a stable browser client id, so a reload/disconnect can
+     * re-attach to the same game. The mage session and user stay alive across WS reconnects; only the
+     * {@link #ctx current socket} changes.
+     */
+    private static final class PlaySession {
+        final String clientId;
+        final String mageSessionId;
+        volatile WsContext ctx;
+        volatile UUID gameId;
+        volatile ScheduledFuture<?> grace;
+        PlaySession(String clientId, String mageSessionId) {
+            this.clientId = clientId;
+            this.mageSessionId = mageSessionId;
+        }
+    }
+
+    /** How long a game is kept alive after a disconnect, waiting for the browser to reconnect. */
+    private static final int RECONNECT_GRACE_SECONDS = 120;
+    private final Map<String, PlaySession> playByClient = new ConcurrentHashMap<>();
+    private final Map<String, PlaySession> playByWs = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService graceScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "web-reconnect-grace");
+        t.setDaemon(true);
+        return t;
+    });
 
     private Javalin app;
 
@@ -313,8 +344,10 @@ public class WebGatewayServer {
             // older/newer Jetty signature differences — non-fatal
         }
 
-        if (managerFactory != null) {
-            // Production path: give this browser its own internal session, wired to push JSON down this socket.
+        if (managerFactory != null && playOrchestrator != null) {
+            onConnectPlay(ctx);
+        } else if (managerFactory != null) {
+            // SPECTATE: give this browser its own session and watch the shared game
             String mageSessionId = UUID.randomUUID().toString();
             wsToMageSession.put(ctx.getSessionId(), mageSessionId);
             SpectatorCallbackHandler handler = new SpectatorCallbackHandler(json -> {
@@ -324,34 +357,101 @@ public class WebGatewayServer {
             });
             managerFactory.sessionManager().createSession(mageSessionId, handler);
             try {
-                if (playOrchestrator != null) {
-                    // PLAY: connect as a human now; the actual game starts when the browser sends "newGame"
-                    // (so the player can pick a format and paste a deck first).
-                    String humanName = "h-" + mageSessionId.substring(0, 8);
-                    server.connectUser(humanName, "", mageSessionId, "",
-                            Main.getVersion(), UUID.randomUUID().toString());
-                    ctx.send(JsonCodec.encodeCallback("GATEWAY_READY", null, readyPayload()));
-                    logger.info("web gateway: play session " + humanName + " connected, awaiting newGame");
-                } else {
-                    // SPECTATE: connect anon and watch the shared game
-                    server.connectUser("w-" + mageSessionId.substring(0, 8), "", mageSessionId, "",
-                            Main.getVersion(), UUID.randomUUID().toString());
-                    if (spectateGameId != null) {
-                        wsToGameId.put(ctx.getSessionId(), spectateGameId);
-                        boolean watching = server.gameWatchStart(spectateGameId, mageSessionId);
-                        logger.info("web gateway: watching game " + spectateGameId + " = " + watching);
-                    }
+                server.connectUser("w-" + mageSessionId.substring(0, 8), "", mageSessionId, "",
+                        Main.getVersion(), UUID.randomUUID().toString());
+                if (spectateGameId != null) {
+                    wsToGameId.put(ctx.getSessionId(), spectateGameId);
+                    server.gameWatchStart(spectateGameId, mageSessionId);
                 }
             } catch (Exception e) {
-                logger.warn("web gateway: failed to set up web session", e);
-                ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
-                        Map.of("message", String.valueOf(e.getMessage()))));
+                logger.warn("web gateway: failed to set up watcher session", e);
             }
         }
 
         ctx.send(JsonCodec.encodeCallback("GATEWAY_HELLO", null,
                 Map.of("message", "connected to XMage web gateway")));
         logger.info("web gateway: client connected" + (managerFactory == null ? " (demo mode)" : ""));
+    }
+
+    /**
+     * Play-mode connect with reconnect support. A stable browser client id ({@code ?cid=}) lets a reload
+     * re-attach to the same in-progress game instead of starting over.
+     */
+    private void onConnectPlay(WsContext ctx) {
+        String cid = ctx.queryParam("cid");
+        if (cid == null || cid.isEmpty()) {
+            cid = UUID.randomUUID().toString();
+        }
+        PlaySession existing = playByClient.get(cid);
+        boolean gameAlive = existing != null && existing.gameId != null
+                && managerFactory.gameManager().getGameController().containsKey(existing.gameId);
+
+        if (gameAlive) {
+            // RECONNECT: re-point the session's socket at the new WS and resync board + pending prompt
+            cancelGrace(existing);
+            existing.ctx = ctx;
+            playByWs.put(ctx.getSessionId(), existing);
+            try {
+                server.gameJoin(existing.gameId, existing.mageSessionId);            // re-send game state
+                server.sendPlayerString(existing.gameId, existing.mageSessionId, ""); // nudge re-send of the open request
+            } catch (Exception e) {
+                logger.warn("web gateway: reconnect resync failed", e);
+            }
+            ctx.send(JsonCodec.encodeCallback("GATEWAY_RECONNECTED", existing.gameId,
+                    Map.of("message", "reconnected to your game")));
+            logger.info("web gateway: reconnected client " + cid + " to game " + existing.gameId);
+            return;
+        }
+
+        // fresh session (no live game): clean any stale one, connect a user, await newGame
+        if (existing != null) {
+            cleanupPlay(existing);
+        }
+        String mageSessionId = UUID.randomUUID().toString();
+        PlaySession ps = new PlaySession(cid, mageSessionId);
+        ps.ctx = ctx;
+        SpectatorCallbackHandler handler = new SpectatorCallbackHandler(json -> {
+            WsContext c = ps.ctx;
+            if (c != null && c.session.isOpen()) {
+                c.send(json);
+            }
+        });
+        managerFactory.sessionManager().createSession(mageSessionId, handler);
+        try {
+            server.connectUser("h-" + mageSessionId.substring(0, 8), "", mageSessionId, "",
+                    Main.getVersion(), UUID.randomUUID().toString());
+        } catch (Exception e) {
+            logger.warn("web gateway: play connect failed", e);
+        }
+        playByClient.put(cid, ps);
+        playByWs.put(ctx.getSessionId(), ps);
+        ctx.send(JsonCodec.encodeCallback("GATEWAY_READY", null, readyPayload()));
+        logger.info("web gateway: play client " + cid + " connected, awaiting newGame");
+    }
+
+    private void cancelGrace(PlaySession ps) {
+        ScheduledFuture<?> g = ps.grace;
+        if (g != null) {
+            g.cancel(false);
+            ps.grace = null;
+        }
+    }
+
+    private void cleanupPlay(PlaySession ps) {
+        playByClient.remove(ps.clientId, ps);
+        try {
+            if (ps.gameId != null) {
+                server.matchQuit(ps.gameId, ps.mageSessionId);
+            }
+        } catch (Exception ignore) {
+            // best-effort
+        }
+        try {
+            managerFactory.sessionManager().disconnect(ps.mageSessionId, DisconnectReason.LostConnection, true);
+        } catch (Exception ignore) {
+            // best-effort
+        }
+        logger.info("web gateway: cleaned up play session " + ps.clientId + " (game " + ps.gameId + ")");
     }
 
     /**
@@ -364,7 +464,8 @@ public class WebGatewayServer {
         if (server == null) {
             return; // demo mode is broadcast-only
         }
-        String sessionId = wsToMageSession.get(ctx.getSessionId());
+        PlaySession ps = playByWs.get(ctx.getSessionId());
+        String sessionId = (ps != null) ? ps.mageSessionId : wsToMageSession.get(ctx.getSessionId());
         if (sessionId == null) {
             return;
         }
@@ -380,7 +481,7 @@ public class WebGatewayServer {
         // Control action: (re)start a game with a chosen format and optional pasted deck.
         if ("newGame".equals(action)) {
             try {
-                startGameForSession(ctx, sessionId, msg);
+                startGameForSession(ctx, ps, sessionId, msg);
             } catch (Exception e) {
                 logger.warn("web gateway: newGame failed", e);
                 ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
@@ -390,7 +491,7 @@ public class WebGatewayServer {
         }
 
         // In-game responses require an active game for this connection.
-        UUID gameId = wsToGameId.get(ctx.getSessionId());
+        UUID gameId = (ps != null) ? ps.gameId : wsToGameId.get(ctx.getSessionId());
         if (gameId == null) {
             return;
         }
@@ -424,7 +525,7 @@ public class WebGatewayServer {
     }
 
     /** Start (or restart) a Human-vs-AI game for this connection from a "newGame" control message. */
-    private void startGameForSession(WsContext ctx, String sessionId, JsonObject msg) throws Exception {
+    private void startGameForSession(WsContext ctx, PlaySession ps, String sessionId, JsonObject msg) throws Exception {
         if (playOrchestrator == null) {
             return;
         }
@@ -433,7 +534,7 @@ public class WebGatewayServer {
         Format fmt = findFormat(formatKey);
 
         // tear down any existing game for this connection
-        UUID old = wsToGameId.remove(ctx.getSessionId());
+        UUID old = (ps != null) ? ps.gameId : wsToGameId.remove(ctx.getSessionId());
         if (old != null) {
             try {
                 server.matchQuit(old, sessionId);
@@ -497,7 +598,11 @@ public class WebGatewayServer {
         String humanName = "h-" + sessionId.substring(0, 8);
         UUID newId = playOrchestrator.startHumanVsAi(sessionId, humanName,
                 fmt.gameType, fmt.deckType, fmt.aiSeats, deck, aiDecks);
-        wsToGameId.put(ctx.getSessionId(), newId);
+        if (ps != null) {
+            ps.gameId = newId;
+        } else {
+            wsToGameId.put(ctx.getSessionId(), newId);
+        }
         logger.info("web gateway: started " + fmt.gameType + " for " + humanName + " -> " + newId);
     }
 
@@ -541,10 +646,22 @@ public class WebGatewayServer {
 
     private void onClose(WsContext ctx) {
         clients.remove(ctx);
+
+        // PLAY: keep the game alive for a grace period so a reload can reconnect to it
+        PlaySession ps = playByWs.remove(ctx.getSessionId());
+        if (ps != null) {
+            ps.ctx = null; // stop sending; the game pauses on the player's pending response
+            cancelGrace(ps);
+            ps.grace = graceScheduler.schedule(() -> cleanupPlay(ps), RECONNECT_GRACE_SECONDS, TimeUnit.SECONDS);
+            logger.info("web gateway: client " + ps.clientId + " disconnected; game " + ps.gameId
+                    + " kept " + RECONNECT_GRACE_SECONDS + "s for reconnect");
+            return;
+        }
+
+        // SPECTATE/other: tear down immediately
         UUID gameId = wsToGameId.remove(ctx.getSessionId());
         String mageSessionId = wsToMageSession.remove(ctx.getSessionId());
         if (mageSessionId != null && managerFactory != null) {
-            // quit the player's game so it doesn't linger and clog the server (each reload would otherwise leak one)
             if (gameId != null) {
                 try {
                     server.matchQuit(gameId, mageSessionId);

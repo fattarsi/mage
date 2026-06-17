@@ -310,7 +310,13 @@ function showError(text) { showBanner('JS error: ' + text); }
 window.onerror = (m, src, line, col) => { showError(m + ' @' + line + ':' + col); };
 window.addEventListener('unhandledrejection', e => showError('promise: ' + (e.reason && e.reason.message || e.reason)));
 
-const ws = new WebSocket(`ws://${location.host}/ws/spectate`);
+// stable client id so a reload reconnects to the same in-progress game
+let clientId = localStorage.getItem('xmageClientId');
+if (!clientId) {
+    clientId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2));
+    localStorage.setItem('xmageClientId', clientId);
+}
+const ws = new WebSocket(`ws://${location.host}/ws/spectate?cid=${encodeURIComponent(clientId)}`);
 ws.onopen = () => statusEl.textContent = 'connected';
 ws.onclose = () => statusEl.textContent = 'disconnected';
 ws.onerror = () => statusEl.textContent = 'error';
@@ -572,6 +578,9 @@ function handle(method, data) {
     switch (method) {
         case 'GATEWAY_HELLO': setPrompt('Connected.'); break;
         case 'GATEWAY_READY': showSetup(data); setPrompt('Pick a format (and optionally a deck) then click Start game.'); break;
+        case 'GATEWAY_RECONNECTED':
+            setupEl.style.display = 'none'; hideBanner();
+            log('Reconnected to your game'); setPrompt('Reconnected — resuming…'); break;
         case 'GATEWAY_INFO': log(esc(data.message)); break;
         case 'GATEWAY_ERROR':
             showBanner(data.message || 'error'); setPrompt('<span class="over">Couldn\'t start — see the banner above.</span>');
