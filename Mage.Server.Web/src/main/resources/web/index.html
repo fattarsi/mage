@@ -15,15 +15,23 @@
         #board { padding: 10px 14px; }
         .player { border: 1px solid #2b313b; border-radius: 8px; padding: 8px; margin-bottom: 8px; background: #1a1e24; }
         .player.me { background: #1a221c; }
-        /* multiplayer: opponents are compact by default, expand to full size on hover */
+        /* multiplayer: opponents are compact by default; click the 🔍 to zoom one open as an overlay */
         #opponents { display: flex; gap: 8px; align-items: flex-start; }
         #opponents.multi > .player { flex: 1; }
-        .player.compact .zone .card { width: 56px; min-height: 78px; font-size: 8px; padding: 2px 2px 10px; }
+        .player.compact .zone .card { width: 52px; min-height: 73px; font-size: 8px; padding: 2px 2px 10px; }
         .player.compact .card .rules { display: none; }
-        .player.compact:hover { box-shadow: 0 0 0 2px #4a6; }
-        .player.compact:hover .zone .card { width: var(--card-w); min-height: calc(var(--card-w)*1.4);
-                                            font-size: 10px; padding: 4px 4px 14px; }
-        .player.compact:hover .card .rules { display: block; }
+        /* a zoomed opponent expands as an overlay above the other play areas (not confined to its column) */
+        .player.zoomed { position: fixed; top: 50px; left: 10px; right: 356px; max-height: 76vh; overflow: auto;
+                         z-index: 45; background: #10141a; border: 2px solid #4a7a5a; box-shadow: 0 10px 40px rgba(0,0,0,.7); }
+        .player.zoomed .zone .card, .player.zoomed .bf .card {
+            width: var(--card-w); min-height: calc(var(--card-w)*1.4); font-size: 10px; padding: 4px 4px 14px; }
+        .player.zoomed .card .rules { display: block; }
+        .opp-row { display: flex; gap: 8px; align-items: flex-start; }
+        .opp-row .bf { flex: 1; }
+        .opp-cmd { flex: 0 0 auto; border: 1px solid #3a4658; border-radius: 6px; padding: 4px 6px; background: #1a1e24; }
+        .opp-cmd-hdr { cursor: pointer; font-size: 11px; color: #cdd; white-space: nowrap; user-select: none; }
+        .opp-cmd-hdr:hover { color: #fff; }
+        .zoombtn { background: #2e3a4a; font-size: 11px; padding: 2px 7px; }
         #zoomwrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #9ab; }
         #viewerToggleWrap { font-size: 12px; color: #9ab; display: flex; align-items: center; gap: 4px; }
         /* left sidebar: collapsible commander section + hover card viewer */
@@ -364,6 +372,26 @@ function send(action, value, extra) {
 // players are valid targets/choices too (e.g. "select a starting player", "target player")
 window.pickPlayer = (playerId) => send('playerUUID', playerId);
 
+// per-opponent UI state: which are zoomed open, and which have their commander expanded
+const oppZoomed = {};
+const oppCmdExpanded = {};
+window.toggleOppZoom = (pid) => { oppZoomed[pid] = !oppZoomed[pid]; if (lastGameView) renderBoard(lastGameView); };
+window.toggleOppCmd = (pid) => { oppCmdExpanded[pid] = !oppCmdExpanded[pid]; if (lastGameView) renderBoard(lastGameView); };
+function oppCommanderEl(opp) {
+    const wrap = document.createElement('div'); wrap.className = 'opp-cmd';
+    const expanded = !!oppCmdExpanded[opp.playerId];
+    const hdr = document.createElement('div'); hdr.className = 'opp-cmd-hdr';
+    hdr.textContent = (expanded ? '▾ ' : '▸ ') + 'Cmd';
+    hdr.onclick = () => window.toggleOppCmd(opp.playerId);
+    wrap.appendChild(hdr);
+    if (expanded) {
+        const z = document.createElement('div'); z.className = 'zone'; z.style.marginTop = '4px';
+        opp.commandList.forEach(c => z.appendChild(cardEl(c, true)));
+        wrap.appendChild(z);
+    }
+    return wrap;
+}
+
 function act(a) { send('playerAction', a); }
 // XMage-style skip shortcuts (matches the desktop F-keys)
 const SKIPS = [
@@ -561,9 +589,13 @@ function renderBoard(gv) {
     turnInfoEl.innerHTML = `T${gv.turn} · ${esc(gv.step||gv.phase||'')} · `
         + (myTurn ? '<span style="color:#7f7">YOUR TURN</span>' : '<span style="color:#fa8">opp turn</span>');
 
-    function pheadHtml(p, active) {
+    function pheadHtml(p, active, isOpp) {
         const tgt = validTargets.has(p.playerId) ? ' targetable' : '';
+        const zoomBtn = isOpp
+            ? `<button class="zoombtn" onclick="event.stopPropagation(); toggleOppZoom('${p.playerId}')">${oppZoomed[p.playerId] ? '✕ close' : '🔍 zoom'}</button> `
+            : '';
         return `<div class="phead clickable${tgt}" onclick="pickPlayer('${p.playerId}')" title="click to target this player">`
+            + zoomBtn
             + `<span class="pname">${esc(p.name)}</span> `
             + `<span class="life">♥ ${p.life}</span> `
             + `<span class="meta">hand ${p.handCount} · lib ${p.libraryCount} · gy ${Object.keys(p.graveyard||{}).length}</span>`
@@ -576,10 +608,14 @@ function renderBoard(gv) {
     opponentsEl.className = opponents.length > 1 ? 'multi' : '';
     for (const opp of opponents) {
         const panel = document.createElement('div');
-        panel.className = 'player' + (opponents.length > 1 ? ' compact' : '');
-        panel.innerHTML = pheadHtml(opp, gv.activePlayerId === opp.playerId);
-        panel.appendChild(battlefieldEl(opp.battlefield, true)); // mirrored; clickable as targets
-        if (opp.commandList && opp.commandList.length) panel.appendChild(zone('Command', opp.commandList, true));
+        const zoomed = !!oppZoomed[opp.playerId];
+        panel.className = 'player' + (opponents.length > 1 && !zoomed ? ' compact' : '') + (zoomed ? ' zoomed' : '');
+        panel.innerHTML = pheadHtml(opp, gv.activePlayerId === opp.playerId, true);
+        // battlefield + a collapsed commander section to its right
+        const row = document.createElement('div'); row.className = 'opp-row';
+        row.appendChild(battlefieldEl(opp.battlefield, true)); // mirrored; clickable as targets
+        if (opp.commandList && opp.commandList.length) row.appendChild(oppCommanderEl(opp));
+        panel.appendChild(row);
         opponentsEl.appendChild(panel);
     }
 
