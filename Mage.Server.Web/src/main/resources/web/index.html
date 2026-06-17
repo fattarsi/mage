@@ -31,6 +31,7 @@
         .card.clickable:hover { border-color: #9cf; background: #2b3340; }
         .card.playable { box-shadow: 0 0 0 2px #4a7; }
         .card.targetable { box-shadow: 0 0 0 3px #fd5; cursor: pointer; }
+        .card.dim { opacity: .4; }
         .card.tapped { transform: rotate(8deg); opacity: .8; }
         .phead.clickable { cursor: pointer; padding: 3px 6px; border-radius: 5px; }
         .phead.clickable:hover { background: #2b3340; }
@@ -131,6 +132,8 @@ ws.onerror = () => statusEl.textContent = 'error';
 let lastGameView = null;
 let playableIds = new Set();
 let validTargets = new Set();  // ids the server is currently asking us to pick (cards OR players)
+let priorityActive = false;    // true while the server is asking us to act at priority (GAME_SELECT)
+let myHandIds = new Set();      // ids of cards in our hand (to dim the un-castable ones at priority)
 
 // callbacks that START a fresh decision (so stale target highlights should clear)
 const ACTIONABLE = new Set(['GAME_SELECT','GAME_PLAY_MANA','GAME_ASK','GAME_GET_AMOUNT',
@@ -189,6 +192,13 @@ function logc(cls, s) {
     while (logEl.childNodes.length > 200) logEl.removeChild(logEl.firstChild);
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function untappedLandIds(gv) {
+    const me = (gv.players||[]).find(p => p.controlled);
+    if (!me || !me.battlefield) return [];
+    return Object.entries(me.battlefield)
+        .filter(([id,p]) => (p.cardTypes||[]).includes('LAND') && !p.tapped)
+        .map(([id]) => id);
+}
 
 ws.onmessage = (ev) => {
     let msg;
@@ -199,7 +209,9 @@ ws.onmessage = (ev) => {
     try {
         // update the valid-target highlight set BEFORE rendering, so highlights show this frame
         if (msg.method === 'GAME_TARGET') validTargets = new Set(data.targets || []);
+        else if (msg.method === 'GAME_PLAY_MANA') validTargets = new Set(untappedLandIds(data.gameView || {}));
         else if (ACTIONABLE.has(msg.method)) validTargets = new Set();
+        priorityActive = (msg.method === 'GAME_SELECT');
         const gv = data.gameView || (data.players ? data : null);
         if (gv) { lastGameView = gv; computePlayable(gv); renderBoard(gv); }
         handle(msg.method, data);
@@ -229,9 +241,12 @@ function computePlayable(gv) {
 function cardEl(card, clickable) {
     const d = document.createElement('div');
     const isTarget = validTargets.has(card.id);
+    // at priority, dim hand cards we can't play right now (wrong phase / not enough mana / not our turn)
+    const dim = priorityActive && myHandIds.has(card.id) && !playableIds.has(card.id) && !isTarget;
     d.className = 'card' + (clickable ? ' clickable' : '')
         + (playableIds.has(card.id) ? ' playable' : '')
         + (isTarget ? ' targetable' : '')
+        + (dim ? ' dim' : '')
         + (card.tapped ? ' tapped' : '');
     const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
     const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
@@ -269,9 +284,12 @@ function zone(label, cardsMap, clickable) {
 }
 
 function renderBoard(gv) {
-    turnEl.textContent = `Turn ${gv.turn} · ${gv.phase||''} · ${gv.step||''}`;
     const me = gv.players.find(p => p.controlled) || gv.players[0];
     const opp = gv.players.find(p => p !== me) || gv.players[1];
+    myHandIds = new Set(Object.keys(gv.myHand || {}));
+    const myTurn = gv.activePlayerId === me.playerId;
+    turnEl.innerHTML = `Turn ${gv.turn} · ${esc(gv.step||gv.phase||'')} · `
+        + (myTurn ? '<span style="color:#7f7">YOUR TURN</span>' : '<span style="color:#fa8">Opponent\'s turn</span>');
 
     function pheadHtml(p, active) {
         const tgt = validTargets.has(p.playerId) ? ' targetable' : '';
@@ -319,16 +337,34 @@ function handle(method, data) {
             setPrompt('Game started — waiting for the first decision…'); break;
 
         case 'GAME_SELECT': { // priority: play a card (click) or pass
-            const np = playableIds.size;
-            setPrompt('<b>Your priority.</b> ' + message
-                + (np ? ` <i>Click a <span style="color:#6e9">green ▶ card</span> (${np}) to play it, or pass.</i>`
-                      : ' <i>Nothing to play — pass.</i>'),
-                [{label:'Pass priority ▸', alt:true, onClick:()=>send('playerBoolean', false)}]);
+            const gv = lastGameView || {};
+            const meP = (gv.players||[]).find(p => p.controlled);
+            const myTurn = meP && gv.activePlayerId === meP.playerId;
+            const hand = gv.myHand || {};
+            const stack = gv.stack ? Object.values(gv.stack) : [];
+            const playableHand = [...playableIds].filter(id => hand[id]).map(id => hand[id].name);
+            let body;
+            if (stack.length) {
+                body = `<b>On the stack:</b> <span style="color:#9cf">${stack.map(c=>esc(c.name)).join(', ')}</span> `
+                     + `<i>— Pass to let it resolve (or respond if you can).</i>`;
+                setPrompt(body, [{label:'Pass (resolve) ▸', onClick:()=>send('playerBoolean', false)}]);
+                break;
+            }
+            if (playableHand.length) {
+                body = `<b>Your priority.</b> You can play: <span style="color:#6e9">${playableHand.map(esc).join(', ')}</span> `
+                     + `<i>— click the highlighted card, then tap lands if asked. Or pass.</i>`;
+            } else {
+                body = `<b>Your priority.</b> Nothing in hand is playable right now `
+                     + (myTurn ? `<i>(not enough untapped mana, or wrong step — e.g. creatures only at sorcery speed in your main phase).</i>`
+                               : `<i>— it's your opponent's turn (you'd only act with instants/abilities).</i>`)
+                     + ` Pass, or use a skip button below to jump ahead.`;
+            }
+            setPrompt(body, [{label:'Pass priority ▸', alt:true, onClick:()=>send('playerBoolean', false)}]);
             break;
         }
         case 'GAME_PLAY_MANA':
-            setPrompt(message + ' <i>(click a land to tap)</i>',
-                [{label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)}]);
+            setPrompt('<b>Pay mana:</b> ' + message + ' <i>— click your highlighted untapped lands to tap them.</i>',
+                [{label:'Cancel cast', alt:true, onClick:()=>send('playerBoolean', false)}]);
             break;
         case 'GAME_TARGET': {
             const n = validTargets.size;
