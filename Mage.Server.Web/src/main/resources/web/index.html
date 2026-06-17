@@ -68,7 +68,8 @@
         #log .sent { color: #9cf; } #log .recv { color: #7a8; } #log .err { color: #f88; font-weight: 700; }
         .card.playable { box-shadow: 0 0 0 3px #5d7; }
         .card.playable::after { content: '▶ play'; position: absolute; left: 4px; bottom: 2px; font-size: 8px; color: #6e9; }
-        #banner { display:none; padding: 8px 14px; background: #5a2a2a; color: #fdd; font-size: 13px; }
+        #banner { display:none; padding: 8px 14px; background: #5a2a2a; color: #fdd; font-size: 13px;
+                  white-space: pre-line; }
         input[type=number] { width: 70px; padding: 5px; }
         .over { color: #fe7; font-size: 16px; font-weight: 700; }
         .overlay { position: fixed; inset: 0; background: rgba(8,10,13,.82); display: flex;
@@ -140,12 +141,15 @@ zoom.oninput = () => {
     localStorage.setItem('cardZoom', zoom.value);
 };
 
-// surface any JS error on-screen (so issues are visible without devtools)
-function showError(text) {
+// show a prominent banner message (multi-line) and log it
+function showBanner(text) {
     const b = document.getElementById('banner');
-    b.style.display = 'block'; b.textContent = 'JS error: ' + text;
-    logc('err', '⚠ ' + text);
+    b.style.display = 'block'; b.textContent = text;
+    logc('err', text);
 }
+function hideBanner() { document.getElementById('banner').style.display = 'none'; }
+// surface any JS error on-screen (so issues are visible without devtools)
+function showError(text) { showBanner('JS error: ' + text); }
 window.onerror = (m, src, line, col) => { showError(m + ' @' + line + ':' + col); };
 window.addEventListener('unhandledrejection', e => showError('promise: ' + (e.reason && e.reason.message || e.reason)));
 
@@ -389,7 +393,7 @@ function handle(method, data) {
         case 'GATEWAY_READY': showSetup(data); setPrompt('Pick a format (and optionally a deck) then click Start game.'); break;
         case 'GATEWAY_INFO': log(esc(data.message)); break;
         case 'GATEWAY_ERROR':
-            showError(data.message); setPrompt('<span class="over">' + esc(data.message) + '</span>');
+            showBanner(data.message || 'error'); setPrompt('<span class="over">Couldn\'t start — see the banner above.</span>');
             showSetup(); break;
         case 'START_GAME': case 'GAME_INIT':
             setupEl.style.display = 'none'; log('Game started');
@@ -474,7 +478,11 @@ function handle(method, data) {
         case 'GAME_UPDATE': case 'GAME_UPDATE_AND_INFORM':
             if (data.message) log(data.message);
             break;
-        case 'GAME_INFORM_PERSONAL': case 'GAME_ERROR': case 'SHOW_USERMESSAGE': case 'CHATMESSAGE':
+        case 'SHOW_USERMESSAGE': {
+            const t = data.message || data.text || (typeof data === 'string' ? data : JSON.stringify(data));
+            showBanner(t); break; // e.g. server-side deck/join validation messages
+        }
+        case 'GAME_INFORM_PERSONAL': case 'GAME_ERROR': case 'CHATMESSAGE':
             if (data.message) log(data.message); break;
     }
 }
