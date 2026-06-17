@@ -37,9 +37,11 @@
         /* right sidebar: hover card viewer (top) + collapsible log (below) */
         #rightbar { position: fixed; right: 10px; top: 64px; width: 336px; z-index: 40;
                     display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-        #viewer { display: none; width: 100%; background: #1b212b; border: 1px solid #3a4658; border-radius: 9px;
-                  padding: 9px; box-shadow: 0 8px 28px rgba(0,0,0,.55); pointer-events: none; }
+        #viewer { display: none; opacity: 0; transition: opacity .55s ease; width: 100%; background: #1b212b;
+                  border: 1px solid #3a4658; border-radius: 9px; padding: 9px; box-shadow: 0 8px 28px rgba(0,0,0,.55);
+                  pointer-events: auto; }
         body.viewer-on #viewer.has-card { display: block; }
+        #viewer.show { opacity: 1; }
         #viewerInfo .vpr { color: #8fd29a; font-size: 12px; margin-top: 4px; }
         #logPanel { background: #1b212b; border: 1px solid #2c3340; border-radius: 9px; padding: 6px 9px;
                     box-shadow: 0 6px 20px rgba(0,0,0,.4); pointer-events: auto; }
@@ -160,6 +162,14 @@
     </div>
 </div>
 
+<div id="picker" class="overlay" style="display:none">
+    <div class="panel" style="width:min(820px,94vw)">
+        <h2 id="pickerMsg">Choose a card</h2>
+        <div id="pickerCards" class="zone" style="max-height:62vh;overflow:auto"></div>
+        <div style="margin-top:10px"><button id="pickerDone">Done / none</button></div>
+    </div>
+</div>
+
 <div id="banner"></div>
 <div id="board">
     <div id="opponents"></div>
@@ -267,15 +277,25 @@ function fetchPrice(set, num, key) {
         })
         .catch(() => { priceCache[key] = 'price n/a'; setViewerPrice(key, 'price n/a'); });
 }
-let viewerHideTimer = null;
+let viewerHideTimer = null, viewerRemoveTimer = null;
 function scheduleHideViewer() {
     clearTimeout(viewerHideTimer);
-    viewerHideTimer = setTimeout(() => viewerEl.classList.remove('has-card'), 700); // delay before auto-close
+    viewerHideTimer = setTimeout(() => {
+        viewerEl.classList.remove('show'); // start the slow fade-out
+        clearTimeout(viewerRemoveTimer);
+        viewerRemoveTimer = setTimeout(() => {
+            if (!viewerEl.classList.contains('show')) viewerEl.classList.remove('has-card');
+        }, 600);
+    }, 900); // delay before auto-close begins
 }
+// hovering the viewer itself keeps it open
+viewerEl.onmouseenter = () => { clearTimeout(viewerHideTimer); clearTimeout(viewerRemoveTimer); };
+viewerEl.onmouseleave = () => scheduleHideViewer();
 function showCardViewer(card) {
     if (!viewerToggle.checked || !card) return;
-    clearTimeout(viewerHideTimer); // cancel pending auto-close when moving onto another card
+    clearTimeout(viewerHideTimer); clearTimeout(viewerRemoveTimer); // cancel pending auto-close
     viewerEl.classList.add('has-card');
+    requestAnimationFrame(() => viewerEl.classList.add('show')); // fade in
     const url = scryUrl(card);
     if (url) { viewerImg.style.display = ''; viewerImg.src = url; } else { viewerImg.style.display = 'none'; }
     const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
@@ -407,6 +427,8 @@ function logc(cls, s) {
     while (logEl.childNodes.length > 200) logEl.removeChild(logEl.firstChild);
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// XMage messages embed HTML-ish markup (e.g. <font color=#ff0>...</font>); strip tags for clean display
+function msg(s){return esc(String(s||'').replace(/<[^>]+>/g,''));}
 function untappedLandIds(gv) {
     const me = (gv.players||[]).find(p => p.controlled);
     if (!me || !me.battlefield) return [];
@@ -429,6 +451,7 @@ ws.onmessage = (ev) => {
         priorityActive = (msg.method === 'GAME_SELECT');
         const gv = data.gameView || (data.players ? data : null);
         if (gv) { lastGameView = gv; computePlayable(gv); renderBoard(gv); }
+        renderPicker(msg.method, data);
         handle(msg.method, data);
     } catch (e) {
         showError((e && e.message || e) + ' (method ' + msg.method + ')');
@@ -563,6 +586,25 @@ function renderBoard(gv) {
     else stack.forEach(c => stackZone.appendChild(cardEl(c, false)));
 }
 
+// Some dialogs (library search like Terramorphic Expanse, reveal, choose-from-pile) provide a card
+// list (cardsView1) that isn't on the battlefield. Render those in a modal picker so they're clickable.
+const pickerEl = document.getElementById('picker');
+const pickerMsgEl = document.getElementById('pickerMsg');
+const pickerCardsEl = document.getElementById('pickerCards');
+document.getElementById('pickerDone').onclick = () => { pickerEl.style.display = 'none'; send('playerBoolean', false); };
+function renderPicker(method, data) {
+    const cards = data.cardsView1 ? Object.values(data.cardsView1) : [];
+    const isDialog = method === 'GAME_TARGET' || method === 'GAME_SELECT' || method === 'GAME_CHOOSE_PILE';
+    if (isDialog && cards.length) {
+        pickerMsgEl.textContent = String(data.message || 'Choose a card').replace(/<[^>]+>/g, '');
+        pickerCardsEl.innerHTML = '';
+        cards.forEach(c => pickerCardsEl.appendChild(cardEl(c, true))); // click -> playerUUID(id)
+        pickerEl.style.display = 'flex';
+    } else if (ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO') {
+        pickerEl.style.display = 'none';
+    }
+}
+
 function setPrompt(message, buttons) {
     promptMain.innerHTML = '';
     const m = document.createElement('span'); m.className = 'msg'; m.innerHTML = message; promptMain.appendChild(m);
@@ -574,7 +616,7 @@ function setPrompt(message, buttons) {
 }
 
 function handle(method, data) {
-    const message = esc(data.message || '');
+    const message = msg(data.message);
     switch (method) {
         case 'GATEWAY_HELLO': setPrompt('Connected.'); break;
         case 'GATEWAY_READY': showSetup(data); setPrompt('Pick a format (and optionally a deck) then click Start game.'); break;
