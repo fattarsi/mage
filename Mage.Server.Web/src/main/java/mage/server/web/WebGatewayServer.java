@@ -167,6 +167,18 @@ public class WebGatewayServer {
         t.setDaemon(true);
         return t;
     });
+    /**
+     * XMage expires an idle user/session after {@code USER_CONNECTION_TIMEOUT_SESSION_EXPIRE_AFTER_SECS}
+     * (3 min) unless it receives a ping. The desktop client pings on its own; our gateway must do the
+     * same for every live play session, or a user who sits at the lobby/board too long gets silently
+     * removed and the next "new game" fails with a null table. Ping well under the 3-minute window.
+     */
+    private static final int KEEPALIVE_SECONDS = 45;
+    private final ScheduledExecutorService keepAliveScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "web-session-keepalive");
+        t.setDaemon(true);
+        return t;
+    });
 
     private Javalin app;
 
@@ -232,7 +244,25 @@ public class WebGatewayServer {
         app.get("/imgtoken/{name}", this::serveTokenImage);
 
         app.start(port);
+        if (server != null) {
+            keepAliveScheduler.scheduleAtFixedRate(this::pingLiveSessions,
+                    KEEPALIVE_SECONDS, KEEPALIVE_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+        }
         logger.info("XMage web gateway listening on http://localhost:" + port + " (ws: /ws/spectate)");
+    }
+
+    /** Ping every live play session so XMage doesn't expire idle users out from under us. */
+    private void pingLiveSessions() {
+        for (PlaySession ps : playByClient.values()) {
+            try {
+                server.ping(ps.mageSessionId, "");
+            } catch (Exception ignore) {
+                // a session that's already gone just fails the ping; nothing to do
+            }
+        }
+        if (playOrchestrator != null) {
+            playOrchestrator.keepAlive();
+        }
     }
 
     public void stop() {
