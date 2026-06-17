@@ -21,7 +21,9 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * {@link DeckSource} for the user's "Deck Manager" REST API (Django-style), at e.g. your-deck-host.
+ * {@link DeckSource} for a self-hosted "Deck Manager" REST API (Django-style). Point it at your own
+ * deck host via {@code -Dxmage.web.deckSourceUrl} / {@code XMAGE_WEB_DECK_SOURCE_URL}; the expected
+ * endpoints are below.
  * <ul>
  *   <li>{@code GET /api/decks/} -&gt; {@code {results: [{id, name, commander:{name}, partner}]}}</li>
  *   <li>{@code GET /api/decks/{id}/} -&gt; {@code {name, commander, partner, cards: [{name, oracle_card:{set_code, collector_number}}]}}</li>

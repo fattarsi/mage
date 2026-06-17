@@ -36,8 +36,17 @@ public final class WebServerMain {
         RealGameOrchestrator orchestrator = new RealGameOrchestrator(boot.managerFactory, boot.mageServer);
         gateway.setPlayMode(orchestrator);
 
-        // Optional external deck source, e.g. -Dxmage.web.deckSourceUrl=https://your-deck-host
+        // Optional external deck source — a "Deck Manager" REST API to load decks from. It's
+        // environment-specific, so it is NOT baked into the code: configure it per-deployment via the
+        // system property -Dxmage.web.deckSourceUrl=https://your-deck-host, or the environment variable
+        // XMAGE_WEB_DECK_SOURCE_URL. Leave it unset to run with pasted/random decks only.
         String deckSourceUrl = System.getProperty("xmage.web.deckSourceUrl", "").trim();
+        if (deckSourceUrl.isEmpty()) {
+            String envUrl = System.getenv("XMAGE_WEB_DECK_SOURCE_URL");
+            if (envUrl != null) {
+                deckSourceUrl = envUrl.trim();
+            }
+        }
         if (!deckSourceUrl.isEmpty()) {
             gateway.setDeckSource(new DeckManagerSource(deckSourceUrl));
             logger.info("external deck source enabled: " + deckSourceUrl);
