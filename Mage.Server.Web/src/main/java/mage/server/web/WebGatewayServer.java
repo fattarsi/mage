@@ -573,6 +573,27 @@ public class WebGatewayServer {
             return;
         }
 
+        // Control action: end the current game right now (no winner played out, no AIs left running).
+        if ("endGame".equals(action)) {
+            endSessionGame(ctx, ps);
+            ctx.send(JsonCodec.encodeCallback("GATEWAY_GAME_ENDED", null,
+                    Map.of("message", "Game ended.")));
+            return;
+        }
+
+        // Control action: concede the current game; the remaining AI seats keep playing it out.
+        if ("resign".equals(action)) {
+            UUID g = (ps != null) ? ps.gameId : wsToGameId.get(ctx.getSessionId());
+            if (g != null) {
+                try {
+                    server.matchQuit(g, sessionId);
+                } catch (Exception ignore) {
+                    // best-effort
+                }
+            }
+            return;
+        }
+
         // Control action: update the player's skip/stop preferences live (no game required).
         if ("setSkips".equals(action)) {
             try {
@@ -628,6 +649,21 @@ public class WebGatewayServer {
     }
 
     /** Start (or restart) a Human-vs-AI game for this connection from a "newGame" control message. */
+    /** Hard-end this connection's current game (if any) and forget it. Safe to call with no game. */
+    private void endSessionGame(WsContext ctx, PlaySession ps) {
+        UUID old = (ps != null) ? ps.gameId : wsToGameId.remove(ctx.getSessionId());
+        if (old != null && playOrchestrator != null) {
+            try {
+                playOrchestrator.endGame(old);
+            } catch (Exception ignore) {
+                // best-effort cleanup
+            }
+        }
+        if (ps != null) {
+            ps.gameId = null;
+        }
+    }
+
     private void startGameForSession(WsContext ctx, PlaySession ps, String sessionId, JsonObject msg) throws Exception {
         if (playOrchestrator == null) {
             return;
@@ -636,15 +672,8 @@ public class WebGatewayServer {
         String deckText = msg.has("deck") && !msg.get("deck").isJsonNull() ? msg.get("deck").getAsString() : "";
         Format fmt = findFormat(formatKey);
 
-        // tear down any existing game for this connection
-        UUID old = (ps != null) ? ps.gameId : wsToGameId.remove(ctx.getSessionId());
-        if (old != null) {
-            try {
-                server.matchQuit(old, sessionId);
-            } catch (Exception ignore) {
-                // best-effort cleanup
-            }
-        }
+        // Starting a new game hard-ends the previous one (so it doesn't keep running with the AIs).
+        endSessionGame(ctx, ps);
 
         String deckId = msg.has("deckId") && !msg.get("deckId").isJsonNull() ? msg.get("deckId").getAsString() : "";
 
