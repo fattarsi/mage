@@ -34,10 +34,17 @@
         #commanderHeader { cursor: pointer; font-size: 12px; color: #cdd; font-weight: 600; user-select: none; }
         #commanderHeader:hover { color: #fff; }
         #commanderBody { margin-top: 6px; }
-        /* hover card viewer; purely visual so it never blocks hovering */
+        /* right sidebar: hover card viewer (top) + collapsible log (below) */
+        #rightbar { position: fixed; right: 10px; top: 64px; width: 280px; z-index: 40;
+                    display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
         #viewer { display: none; width: 100%; background: #1b212b; border: 1px solid #3a4658; border-radius: 9px;
                   padding: 9px; box-shadow: 0 8px 28px rgba(0,0,0,.55); pointer-events: none; }
         body.viewer-on #viewer.has-card { display: block; }
+        #viewerInfo .vpr { color: #8fd29a; font-size: 12px; margin-top: 4px; }
+        #logPanel { background: #1b212b; border: 1px solid #2c3340; border-radius: 9px; padding: 6px 9px;
+                    box-shadow: 0 6px 20px rgba(0,0,0,.4); pointer-events: auto; }
+        #logHeader { cursor: pointer; font-size: 12px; color: #9ab; font-weight: 600; user-select: none; }
+        #logHeader:hover { color: #fff; }
         #viewerImg { width: 100%; border-radius: 7px; display: block; background: #11151b; }
         #viewerInfo { margin-top: 7px; font-size: 12.5px; line-height: 1.35; }
         #viewerInfo .vc { float: right; color: #ad8; }
@@ -79,13 +86,16 @@
         #skipbar button { background: #2e3a4a; font-size: 12px; padding: 5px 9px; }
         #skipbar button:hover { background: #3d4d63; }
         #prompt { position: sticky; bottom: 0; background: #232a36; border-top: 2px solid #3a587e;
-                  padding: 10px 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-        #prompt .msg { font-size: 14px; color: #fff; flex: 1 1 280px; }
+                  padding: 10px 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        #turninfo { font-size: 12.5px; font-weight: 600; color: #fc9; white-space: nowrap;
+                    border-right: 1px solid #3a4658; padding-right: 12px; }
+        #promptmain { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1 1 280px; }
+        #prompt .msg { font-size: 14px; color: #fff; flex: 1 1 220px; }
         button { background: #34507a; color: #fff; border: 0; border-radius: 5px; padding: 7px 14px;
                  font-size: 13px; cursor: pointer; }
         button:hover { background: #4767a0; }
         button.alt { background: #5a3a3a; } button.alt:hover { background: #784c4c; }
-        #log { padding: 6px 14px; max-height: 150px; overflow: auto; font-size: 11px; color: #8a9; border-top: 1px solid #2b313b; font-family: ui-monospace, monospace; }
+        #log { margin-top: 6px; max-height: 40vh; overflow: auto; font-size: 11px; color: #8a9; font-family: ui-monospace, monospace; }
         #log .sent { color: #9cf; } #log .recv { color: #7a8; } #log .err { color: #f88; font-weight: 700; }
         .card.playable { box-shadow: 0 0 0 3px #5d7; }
         .card.playable::after { content: '▶ play'; position: absolute; left: 4px; bottom: 2px; font-size: 8px; color: #6e9; }
@@ -115,7 +125,6 @@
     <button id="newGameBtn">New game</button>
     <span id="zoomwrap">🔍 <input type="range" id="zoom" min="64" max="200" step="4" value="104"></span>
     <label id="viewerToggleWrap"><input type="checkbox" id="viewerToggle"> Card viewer</label>
-    <span id="turn"></span>
 </header>
 
 <div id="leftbar">
@@ -123,7 +132,6 @@
         <div id="commanderHeader">▸ Commander</div>
         <div id="commanderBody" class="zone" style="display:none"></div>
     </div>
-    <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"></div></div>
 </div>
 
 <div id="setup" class="overlay" style="display:none">
@@ -150,17 +158,34 @@
 </div>
 
 <div id="skipbar"></div>
-<div id="prompt"><span class="msg">waiting…</span></div>
-<div id="log"></div>
+<div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span></div>
+
+<div id="rightbar">
+    <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"></div></div>
+    <div id="logPanel">
+        <div id="logHeader">▸ Log</div>
+        <div id="log" style="display:none"></div>
+    </div>
+</div>
 
 <script>
 const statusEl = document.getElementById('status');
-const turnEl = document.getElementById('turn');
+const turnInfoEl = document.getElementById('turninfo');
 const opponentsEl = document.getElementById('opponents');
 const meEl = document.getElementById('me');
 const stackZone = document.getElementById('stackZone');
-const promptEl = document.getElementById('prompt');
+const promptMain = document.getElementById('promptmain');
 const logEl = document.getElementById('log');
+
+// collapsible log panel (right side), collapsed by default; state persisted
+let logExpanded = localStorage.getItem('logOpen') === '1';
+const logHeader = document.getElementById('logHeader');
+function renderLogHeader() {
+    logHeader.textContent = (logExpanded ? '▾ ' : '▸ ') + 'Log';
+    logEl.style.display = logExpanded ? 'block' : 'none';
+}
+logHeader.onclick = () => { logExpanded = !logExpanded; localStorage.setItem('logOpen', logExpanded ? '1' : '0'); renderLogHeader(); };
+renderLogHeader();
 
 // card zoom (persisted)
 const zoom = document.getElementById('zoom');
@@ -202,6 +227,20 @@ function renderCommanderPanel(commandList) {
     if (commanderExpanded) commandList.forEach(c => commanderBody.appendChild(cardEl(c, true))); // click to cast
 }
 
+const priceCache = {};
+function setViewerPrice(key, txt) {
+    if (viewerEl.dataset.key !== key) return;
+    const el = viewerInfo.querySelector('.vpr'); if (el) el.textContent = txt;
+}
+function fetchPrice(set, num, key) {
+    fetch('/cardinfo/' + encodeURIComponent(set) + '/' + encodeURIComponent(num))
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+            const txt = (d && d.usd) ? ('$' + d.usd + (d.usd_foil ? '  ·  foil $' + d.usd_foil : '')) : 'price n/a';
+            priceCache[key] = txt; setViewerPrice(key, txt);
+        })
+        .catch(() => { priceCache[key] = 'price n/a'; setViewerPrice(key, 'price n/a'); });
+}
 function showCardViewer(card) {
     if (!viewerToggle.checked || !card) return;
     viewerEl.classList.add('has-card');
@@ -214,7 +253,17 @@ function showCardViewer(card) {
     viewerInfo.innerHTML = `<span class="vc">${esc(cost)}</span><span class="vn">${esc(card.name||'?')}</span>`
         + `<div class="vt">${esc(types)}</div>`
         + (pt ? `<div class="vpt">${esc(pt)}</div>` : '')
-        + (card.rules && card.rules.length ? `<div class="vr">${card.rules.map(esc).join('\n')}</div>` : '');
+        + (card.rules && card.rules.length ? `<div class="vr">${card.rules.map(esc).join('\n')}</div>` : '')
+        + `<div class="vpr"></div>`;
+    // price (cached, fetched from the gateway's Scryfall proxy)
+    const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
+    const set = card.expansionSetCode ? String(card.expansionSetCode).toLowerCase() : null;
+    if (set && rawNum && !card.faceDown) {
+        const key = set + '/' + rawNum;
+        viewerEl.dataset.key = key;
+        if (priceCache[key] !== undefined) setViewerPrice(key, priceCache[key]);
+        else { setViewerPrice(key, 'price…'); fetchPrice(set, rawNum, key); }
+    } else { viewerEl.dataset.key = ''; }
 }
 
 // show a prominent banner message (multi-line) and log it
@@ -417,8 +466,8 @@ function renderBoard(gv) {
     const me = gv.players.find(p => p.controlled) || gv.players[0];
     myHandIds = new Set(Object.keys(gv.myHand || {}));
     const myTurn = gv.activePlayerId === me.playerId;
-    turnEl.innerHTML = `Turn ${gv.turn} · ${esc(gv.step||gv.phase||'')} · `
-        + (myTurn ? '<span style="color:#7f7">YOUR TURN</span>' : '<span style="color:#fa8">Opponent\'s turn</span>');
+    turnInfoEl.innerHTML = `T${gv.turn} · ${esc(gv.step||gv.phase||'')} · `
+        + (myTurn ? '<span style="color:#7f7">YOUR TURN</span>' : '<span style="color:#fa8">opp turn</span>');
 
     function pheadHtml(p, active) {
         const tgt = validTargets.has(p.playerId) ? ' targetable' : '';
@@ -456,12 +505,12 @@ function renderBoard(gv) {
 }
 
 function setPrompt(message, buttons) {
-    promptEl.innerHTML = '';
-    const m = document.createElement('span'); m.className = 'msg'; m.innerHTML = message; promptEl.appendChild(m);
+    promptMain.innerHTML = '';
+    const m = document.createElement('span'); m.className = 'msg'; m.innerHTML = message; promptMain.appendChild(m);
     (buttons || []).forEach(b => {
         const btn = document.createElement('button');
         btn.textContent = b.label; if (b.alt) btn.className = 'alt';
-        btn.onclick = b.onClick; promptEl.appendChild(btn);
+        btn.onclick = b.onClick; promptMain.appendChild(btn);
     });
 }
 
@@ -522,11 +571,11 @@ function handle(method, data) {
             break;
         case 'GAME_GET_AMOUNT': case 'GAME_PLAY_XMANA': {
             const min = data.min||0, max = data.max!==undefined?data.max:99;
-            promptEl.innerHTML = '';
-            const m=document.createElement('span'); m.className='msg'; m.innerHTML=message+` (${min}–${max})`; promptEl.appendChild(m);
-            const inp=document.createElement('input'); inp.type='number'; inp.min=min; inp.max=max; inp.value=min; promptEl.appendChild(inp);
+            promptMain.innerHTML = '';
+            const m=document.createElement('span'); m.className='msg'; m.innerHTML=message+` (${min}–${max})`; promptMain.appendChild(m);
+            const inp=document.createElement('input'); inp.type='number'; inp.min=min; inp.max=max; inp.value=min; promptMain.appendChild(inp);
             const ok=document.createElement('button'); ok.textContent='OK';
-            ok.onclick=()=>send('playerInteger', Math.max(min, Math.min(max, parseInt(inp.value)||min))); promptEl.appendChild(ok);
+            ok.onclick=()=>send('playerInteger', Math.max(min, Math.min(max, parseInt(inp.value)||min))); promptMain.appendChild(ok);
             break;
         }
         case 'GAME_CHOOSE_CHOICE': {
