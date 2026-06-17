@@ -67,6 +67,7 @@
         body.viewer-on #viewer.has-card { display: block; }
         #viewer.show { opacity: 1; }
         #viewerInfo .vpr { color: #8fd29a; font-size: 12px; margin-top: 4px; }
+        #arrows { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 38; }
         #logBar { border-top: 1px solid #2b313b; background: #1b2028; padding: 4px 14px 8px; }
         #logHeader { cursor: pointer; font-size: 12px; color: #9ab; font-weight: 600; user-select: none; padding: 4px 0; }
         #logHeader:hover { color: #fff; }
@@ -169,6 +170,7 @@
     <div class="setrow"><label>Hand card size</label><input type="range" id="zoom" min="64" max="220" step="4" value="104"></div>
     <div class="setrow"><label>Battlefield card size</label><input type="range" id="bfzoom" min="44" max="180" step="4" value="78"></div>
     <div class="setrow"><label><input type="checkbox" id="viewerToggle"> Card viewer (hover preview)</label></div>
+    <div class="setrow"><label><input type="checkbox" id="soundToggle"> Sound effects</label></div>
     <div class="setrow" style="border-top:1px solid #2c3340; padding-top:8px; margin-top:8px;">
         <b style="color:#cde">When skipping (e.g. “My next turn”), stop if…</b>
     </div>
@@ -220,7 +222,13 @@
 </div>
 
 <div id="rightbar">
-    <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"></div></div>
+    <svg id="arrows" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <marker id="ahead-atk" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e55"/></marker>
+        <marker id="ahead-blk" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5af"/></marker>
+    </defs>
+</svg>
+<div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"></div></div>
     <div id="commanderPanel" style="display:none">
         <div id="commanderHeader">▸ Commander</div>
         <div id="commanderBody" class="zone" style="display:none"></div>
@@ -277,12 +285,7 @@ viewerToggle.onchange = () => {
     document.body.classList.toggle('viewer-on', viewerToggle.checked);
     localStorage.setItem('viewerOn', viewerToggle.checked ? '1' : '0');
 };
-function scryUrl(card) {
-    const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
-    if (card.expansionSetCode && rawNum && !card.faceDown)
-        return `/img/${encodeURIComponent(String(card.expansionSetCode).toLowerCase())}/${encodeURIComponent(rawNum)}`;
-    return null;
-}
+function scryUrl(card) { return artUrlFor(card); }
 // collapsible commander section (left side), hidden by default; click the header to expand
 let commanderExpanded = false;
 const commanderPanel = document.getElementById('commanderPanel');
@@ -477,6 +480,58 @@ document.getElementById('startBtn').onclick = () => {
 };
 document.getElementById('newGameBtn').onclick = () => showSetup();
 
+// --- sound effects (synthesized via Web Audio, no asset files) ---
+let soundOn = localStorage.getItem('soundOn') === '1';
+let audioCtx = null;
+function beep(freq, durMs, type, gain, when) {
+    if (!soundOn) return;
+    try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const t0 = audioCtx.currentTime + (when || 0);
+        const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
+        osc.type = type || 'sine'; osc.frequency.value = freq;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(gain || 0.07, t0 + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + durMs / 1000);
+        osc.connect(g); g.connect(audioCtx.destination);
+        osc.start(t0); osc.stop(t0 + durMs / 1000 + 0.02);
+    } catch (e) {}
+}
+const SFX = {
+    cast:     () => { beep(523, 110, 'triangle', 0.06); beep(784, 140, 'triangle', 0.05, 0.06); },
+    damage:   () => { beep(150, 200, 'sawtooth', 0.09); },
+    turn:     () => { beep(392, 90, 'sine', 0.05); },
+    needInput:() => { beep(680, 70, 'square', 0.035); },
+    win:      () => { beep(523,140,'sine',0.08); beep(659,140,'sine',0.08,0.13); beep(784,260,'sine',0.08,0.26); },
+    lose:     () => { beep(392,200,'sine',0.07); beep(294,320,'sine',0.07,0.18); },
+};
+const soundToggle = document.getElementById('soundToggle');
+soundToggle.checked = soundOn;
+soundToggle.onchange = () => { soundOn = soundToggle.checked; localStorage.setItem('soundOn', soundOn ? '1' : '0'); if (soundOn) SFX.turn(); };
+// detect game events from successive game views and play sounds
+let snap = null;
+function soundForFrame(method, data, gv) {
+    if (method === 'GAME_OVER' || method === 'END_GAME_INFO') {
+        const m = String(data.message || '');
+        (/(you).*(win)|won/i.test(m) ? SFX.win : SFX.lose)();
+        return;
+    }
+    if (['GAME_ASK','GAME_TARGET','GAME_GET_AMOUNT','GAME_PLAY_MANA','GAME_CHOOSE_CHOICE','GAME_CHOOSE_ABILITY','GAME_CHOOSE_PILE'].includes(method))
+        SFX.needInput();
+    if (!gv || !gv.players) return;
+    const me = gv.players.find(p => p.controlled) || gv.players[0];
+    const totalLife = gv.players.reduce((s,p) => s + (p.life||0), 0);
+    const stackSize = gv.stack ? Object.keys(gv.stack).length : 0;
+    const cur = { turn: gv.turn, myLife: me.life, totalLife, stackSize };
+    if (snap) {
+        if (cur.turn !== snap.turn) SFX.turn();
+        if (cur.myLife < snap.myLife) SFX.damage();
+        if (cur.stackSize > snap.stackSize) SFX.cast();
+    }
+    snap = cur;
+}
+
 // skip/stop preference toggles (sent live to the server's UserSkipPrioritySteps)
 const skipBoxes = ['stopNewStack','stopBlockers','stopAttackers','stopMains','stopEnds'];
 function loadSkips() {
@@ -499,6 +554,19 @@ function logc(cls, s) {
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 // XMage messages embed HTML-ish markup (e.g. <font color=#ff0>...</font>); strip tags for clean display
 function msg(s){return esc(String(s||'').replace(/<[^>]+>/g,''));}
+function strip(s){return String(s||'').replace(/<[^>]+>/g,'');}  // plain text (for title attributes)
+// art URL for a card: tokens (collector number "0") are looked up by name; others by set+number
+function artUrlFor(card) {
+    if (card.faceDown) return null;
+    const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
+    if (card.isToken || rawNum === '0' || rawNum === 0) {
+        return card.name ? `/imgtoken/${encodeURIComponent(card.name)}` : null;
+    }
+    if (card.expansionSetCode && rawNum) {
+        return `/img/${encodeURIComponent(String(card.expansionSetCode).toLowerCase())}/${encodeURIComponent(rawNum)}`;
+    }
+    return null;
+}
 function untappedLandIds(gv) {
     const me = (gv.players||[]).find(p => p.controlled);
     if (!me || !me.battlefield) return [];
@@ -527,6 +595,8 @@ ws.onmessage = (ev) => {
         if (gv) { lastGameView = gv; computePlayable(gv); renderBoard(gv); }
         renderPicker(msg.method, data);
         handle(msg.method, data);
+        soundForFrame(msg.method, data, gv);
+        if (gv) drawArrows(gv);
     } catch (e) {
         showError((e && e.message || e) + ' (method ' + msg.method + ')');
     }
@@ -567,20 +637,19 @@ function cardEl(card, clickable) {
     const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
     const pt = (card.power !== undefined && (card.cardTypes||[]).includes('CREATURE'))
         ? `${card.power}/${card.toughness}` : '';
-    d.innerHTML = `<span class="cc">${esc(cost)}</span><span class="cn">${esc(card.name||'?')}</span>`
+    if (card.id) d.dataset.cid = card.id; // for combat arrows
+    d.innerHTML = `<span class="cc">${esc(cost)}</span><span class="cn">${card.isAbility?'⚡ ':''}${msg(card.name||'?')}</span>`
         + `<div class="ct">${esc(types)}</div>`
-        + (card.rules && card.rules.length ? `<div class="rules">${esc(card.rules.join(' • '))}</div>` : '')
+        + (card.rules && card.rules.length ? `<div class="rules">${msg(card.rules.join(' • '))}</div>` : '')
         + (pt ? `<div class="pt">${esc(pt)}</div>` : '');
-    d.title = `${card.name||'?'}${cost?'  '+cost:''}${pt?'  '+pt:''}`
-        + (types?'\n'+types:'') + (card.rules&&card.rules.length?'\n\n'+card.rules.join('\n'):'');
-    // real card art from Scryfall (set + collector number); on failure, the text card shows through.
-    // command-zone objects expose imageNumber instead of cardNumber.
-    const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
-    if (card.expansionSetCode && rawNum && !card.faceDown) {
+    d.title = strip(`${card.name||'?'}${cost?'  '+cost:''}${pt?'  '+pt:''}`
+        + (types?'\n'+types:'') + (card.rules&&card.rules.length?'\n\n'+card.rules.join('\n'):''));
+    // real card art (tokens looked up by name); on failure the text card shows through
+    const artUrl = artUrlFor(card);
+    if (artUrl) {
         const img = document.createElement('img');
         img.className = 'art'; img.loading = 'lazy'; img.alt = card.name || '';
-        const set = encodeURIComponent(String(card.expansionSetCode).toLowerCase());
-        img.src = `/img/${set}/${encodeURIComponent(rawNum)}`;
+        img.src = artUrl;
         img.onerror = () => img.remove();
         d.appendChild(img);
     }
@@ -642,6 +711,46 @@ function manaPoolHtml(pool) {
     return s ? ` <span class="manapool" title="floating mana">[ ${s} ]</span>` : '';
 }
 
+// combat arrows: attacker -> defender (red), blocker -> attacker (blue), drawn over the board
+const SVGNS = 'http://www.w3.org/2000/svg';
+function elCenter(selector) {
+    const el = document.querySelector(selector);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return null;
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+function drawArrow(svg, from, to, marker, color) {
+    if (!from || !to) return;
+    const line = document.createElementNS(SVGNS, 'line');
+    line.setAttribute('x1', from.x); line.setAttribute('y1', from.y);
+    line.setAttribute('x2', to.x); line.setAttribute('y2', to.y);
+    line.setAttribute('stroke', color); line.setAttribute('stroke-width', '3');
+    line.setAttribute('opacity', '0.85'); line.setAttribute('marker-end', marker);
+    svg.appendChild(line);
+}
+function drawArrows(gv) {
+    const svg = document.getElementById('arrows');
+    // keep the <defs>, clear drawn lines
+    [...svg.querySelectorAll('line')].forEach(l => l.remove());
+    const groups = (gv && gv.combat) || [];
+    for (const g of groups) {
+        const defC = elCenter(`[data-cid="${g.defenderId}"]`) || elCenter(`[data-pid="${g.defenderId}"]`);
+        const atkIds = Object.keys(g.attackers || {});
+        const blkIds = Object.keys(g.blockers || {});
+        for (const aid of atkIds) {
+            const atkC = elCenter(`[data-cid="${aid}"]`);
+            drawArrow(svg, atkC, defC, 'url(#ahead-atk)', '#e55');
+            for (const bid of blkIds) drawArrow(svg, elCenter(`[data-cid="${bid}"]`), atkC, 'url(#ahead-blk)', '#5af');
+        }
+    }
+}
+// keep arrows aligned when the page scrolls/resizes
+let arrowRaf = null;
+function scheduleArrows() { if (arrowRaf) return; arrowRaf = requestAnimationFrame(() => { arrowRaf = null; if (lastGameView) drawArrows(lastGameView); }); }
+window.addEventListener('scroll', scheduleArrows, true);
+window.addEventListener('resize', scheduleArrows);
+
 function classifyPerm(p) {
     const t = p.cardTypes || [];
     if (t.includes('LAND')) return 'land';
@@ -686,7 +795,7 @@ function renderBoard(gv) {
         const zoomBtn = isOpp
             ? `<button class="zoombtn" onclick="event.stopPropagation(); toggleOppZoom('${p.playerId}')">${oppZoomed[p.playerId] ? '✕ close' : '🔍 zoom'}</button> `
             : '';
-        return `<div class="phead clickable${tgt}" onclick="pickPlayer('${p.playerId}')" title="click to target this player">`
+        return `<div class="phead clickable${tgt}" data-pid="${p.playerId}" onclick="pickPlayer('${p.playerId}')" title="click to target this player">`
             + zoomBtn
             + `<span class="pname">${esc(p.name)}</span> `
             + `<span class="life">♥ ${p.life}</span> `

@@ -24,6 +24,7 @@ import java.io.File;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
@@ -227,6 +228,8 @@ public class WebGatewayServer {
         app.get("/img/{set}/{num}", this::serveImage);
         // cached card data (prices, etc.) from Scryfall's JSON endpoint
         app.get("/cardinfo/{set}/{num}", this::serveCardInfo);
+        // token images: tokens have collector number "0", so look them up by name (type:token)
+        app.get("/imgtoken/{name}", this::serveTokenImage);
 
         app.start(port);
         logger.info("XMage web gateway listening on http://localhost:" + port + " (ws: /ws/spectate)");
@@ -240,6 +243,85 @@ public class WebGatewayServer {
 
     private static final File IMAGE_CACHE_DIR = new File("image-cache");
     private static final File CARDINFO_CACHE_DIR = new File("cardinfo-cache");
+
+    /** Token images keyed by name (tokens have collector number 0). Search Scryfall for the token printing. */
+    private void serveTokenImage(io.javalin.http.Context ctx) {
+        String name = ctx.pathParam("name").replaceAll("[^a-zA-Z0-9 ,'\\-]", "").trim();
+        if (name.isEmpty()) {
+            ctx.status(400);
+            return;
+        }
+        try {
+            File dir = new File(IMAGE_CACHE_DIR, "_tokens");
+            File file = new File(dir, name.replaceAll("[^a-zA-Z0-9]", "_") + ".jpg");
+            byte[] bytes;
+            if (file.isFile() && file.length() > 0) {
+                bytes = Files.readAllBytes(file.toPath());
+            } else {
+                // find the token's Scryfall printing, then fetch its image
+                String q = URLEncoder.encode("!\"" + name + "\" type:token", StandardCharsets.UTF_8);
+                String imageUrl = scryfallFirstImage("https://api.scryfall.com/cards/search?q=" + q + "&order=released&dir=desc&unique=prints");
+                if (imageUrl == null) {
+                    ctx.status(404);
+                    return;
+                }
+                bytes = fetchBytes(imageUrl);
+                dir.mkdirs();
+                Files.write(file.toPath(), bytes);
+            }
+            ctx.contentType("image/jpeg");
+            ctx.header("Cache-Control", "public, max-age=2592000");
+            ctx.result(bytes);
+        } catch (Exception e) {
+            ctx.status(404);
+        }
+    }
+
+    /** Run a Scryfall search and return the first result's normal image URL (handles double-faced). */
+    private String scryfallFirstImage(String searchUrl) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(searchUrl).openConnection();
+        conn.setRequestProperty("User-Agent", "xmage-web-gateway/1.0");
+        conn.setRequestProperty("Accept", "application/json");
+        conn.setConnectTimeout(8000);
+        conn.setReadTimeout(12000);
+        if (conn.getResponseCode() != 200) {
+            conn.disconnect();
+            return null;
+        }
+        String json;
+        try (InputStream in = conn.getInputStream()) {
+            json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        conn.disconnect();
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        if (!root.has("data") || root.getAsJsonArray("data").size() == 0) {
+            return null;
+        }
+        JsonObject card = root.getAsJsonArray("data").get(0).getAsJsonObject();
+        if (card.has("image_uris") && card.getAsJsonObject("image_uris").has("normal")) {
+            return card.getAsJsonObject("image_uris").get("normal").getAsString();
+        }
+        if (card.has("card_faces") && card.getAsJsonArray("card_faces").size() > 0) {
+            JsonObject face = card.getAsJsonArray("card_faces").get(0).getAsJsonObject();
+            if (face.has("image_uris") && face.getAsJsonObject("image_uris").has("normal")) {
+                return face.getAsJsonObject("image_uris").get("normal").getAsString();
+            }
+        }
+        return null;
+    }
+
+    private byte[] fetchBytes(String url) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestProperty("User-Agent", "xmage-web-gateway/1.0");
+        conn.setConnectTimeout(8000);
+        conn.setReadTimeout(12000);
+        conn.setInstanceFollowRedirects(true);
+        try (InputStream in = conn.getInputStream()) {
+            return in.readAllBytes();
+        } finally {
+            conn.disconnect();
+        }
+    }
 
     /**
      * Serve cached card data (currently just prices) from Scryfall's JSON endpoint, one fetch per card.
