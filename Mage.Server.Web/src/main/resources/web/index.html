@@ -25,6 +25,27 @@
                                             font-size: 10px; padding: 4px 4px 14px; }
         .player.compact:hover .card .rules { display: block; }
         #zoomwrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #9ab; }
+        #viewerToggleWrap { font-size: 12px; color: #9ab; display: flex; align-items: center; gap: 4px; }
+        /* left sidebar: collapsible commander section + hover card viewer */
+        #leftbar { position: fixed; left: 10px; top: 64px; width: 268px; z-index: 40;
+                   display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+        #commanderPanel { background: #1b212b; border: 1px solid #3a4658; border-radius: 9px; padding: 6px 9px;
+                          box-shadow: 0 6px 20px rgba(0,0,0,.45); pointer-events: auto; }
+        #commanderHeader { cursor: pointer; font-size: 12px; color: #cdd; font-weight: 600; user-select: none; }
+        #commanderHeader:hover { color: #fff; }
+        #commanderBody { margin-top: 6px; }
+        /* hover card viewer; purely visual so it never blocks hovering */
+        #viewer { display: none; width: 100%; background: #1b212b; border: 1px solid #3a4658; border-radius: 9px;
+                  padding: 9px; box-shadow: 0 8px 28px rgba(0,0,0,.55); pointer-events: none; }
+        body.viewer-on #viewer.has-card { display: block; }
+        #viewerImg { width: 100%; border-radius: 7px; display: block; background: #11151b; }
+        #viewerInfo { margin-top: 7px; font-size: 12.5px; line-height: 1.35; }
+        #viewerInfo .vc { float: right; color: #ad8; }
+        #viewerInfo .vn { font-weight: 700; color: #e7ecf2; }
+        #viewerInfo .vt { color: #9ab; font-size: 11.5px; margin: 3px 0; }
+        #viewerInfo .vpt { color: #fe9; font-weight: 700; margin: 2px 0; }
+        #viewerInfo .vr { color: #cdd; font-size: 11.5px; margin-top: 5px; white-space: pre-line;
+                          border-top: 1px solid #2c3340; padding-top: 5px; }
         .phead { display: flex; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 6px; }
         .pname { font-weight: 700; }
         .life { color: #f88; font-weight: 700; }
@@ -93,8 +114,17 @@
     <span id="status">connecting…</span>
     <button id="newGameBtn">New game</button>
     <span id="zoomwrap">🔍 <input type="range" id="zoom" min="64" max="200" step="4" value="104"></span>
+    <label id="viewerToggleWrap"><input type="checkbox" id="viewerToggle"> Card viewer</label>
     <span id="turn"></span>
 </header>
+
+<div id="leftbar">
+    <div id="commanderPanel" style="display:none">
+        <div id="commanderHeader">▸ Commander</div>
+        <div id="commanderBody" class="zone" style="display:none"></div>
+    </div>
+    <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"></div></div>
+</div>
 
 <div id="setup" class="overlay" style="display:none">
     <div class="panel">
@@ -140,6 +170,52 @@ zoom.oninput = () => {
     document.documentElement.style.setProperty('--card-w', zoom.value + 'px');
     localStorage.setItem('cardZoom', zoom.value);
 };
+
+// hover card viewer (toggleable, persisted)
+const viewerToggle = document.getElementById('viewerToggle');
+const viewerEl = document.getElementById('viewer');
+const viewerImg = document.getElementById('viewerImg');
+const viewerInfo = document.getElementById('viewerInfo');
+if (localStorage.getItem('viewerOn') === '1') { viewerToggle.checked = true; document.body.classList.add('viewer-on'); }
+viewerToggle.onchange = () => {
+    document.body.classList.toggle('viewer-on', viewerToggle.checked);
+    localStorage.setItem('viewerOn', viewerToggle.checked ? '1' : '0');
+};
+function scryUrl(card) {
+    const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
+    if (card.expansionSetCode && rawNum && !card.faceDown)
+        return `/img/${encodeURIComponent(String(card.expansionSetCode).toLowerCase())}/${encodeURIComponent(rawNum)}`;
+    return null;
+}
+// collapsible commander section (left side), hidden by default; click the header to expand
+let commanderExpanded = false;
+const commanderPanel = document.getElementById('commanderPanel');
+const commanderHeader = document.getElementById('commanderHeader');
+const commanderBody = document.getElementById('commanderBody');
+commanderHeader.onclick = () => { commanderExpanded = !commanderExpanded; if (lastGameView) renderBoard(lastGameView); };
+function renderCommanderPanel(commandList) {
+    if (!commandList.length) { commanderPanel.style.display = 'none'; return; }
+    commanderPanel.style.display = 'block';
+    commanderHeader.textContent = (commanderExpanded ? '▾ ' : '▸ ') + 'Commander (' + commandList.length + ')';
+    commanderBody.style.display = commanderExpanded ? 'flex' : 'none';
+    commanderBody.innerHTML = '';
+    if (commanderExpanded) commandList.forEach(c => commanderBody.appendChild(cardEl(c, true))); // click to cast
+}
+
+function showCardViewer(card) {
+    if (!viewerToggle.checked || !card) return;
+    viewerEl.classList.add('has-card');
+    const url = scryUrl(card);
+    if (url) { viewerImg.style.display = ''; viewerImg.src = url; } else { viewerImg.style.display = 'none'; }
+    const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
+    const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
+    const pt = (card.power !== undefined && (card.cardTypes||[]).includes('CREATURE')) ? `${card.power}/${card.toughness}`
+             : (card.loyalty ? 'Loyalty ' + card.loyalty : '');
+    viewerInfo.innerHTML = `<span class="vc">${esc(cost)}</span><span class="vn">${esc(card.name||'?')}</span>`
+        + `<div class="vt">${esc(types)}</div>`
+        + (pt ? `<div class="vpt">${esc(pt)}</div>` : '')
+        + (card.rules && card.rules.length ? `<div class="vr">${card.rules.map(esc).join('\n')}</div>` : '');
+}
 
 // show a prominent banner message (multi-line) and log it
 function showBanner(text) {
@@ -321,6 +397,7 @@ function cardEl(card, clickable) {
         img.onerror = () => img.remove();
         d.appendChild(img);
     }
+    d.onmouseenter = () => showCardViewer(card);
     if (clickable) d.onclick = () => send('playerUUID', card.id);
     return d;
 }
@@ -367,8 +444,10 @@ function renderBoard(gv) {
 
     meEl.innerHTML = pheadHtml(me, myTurn);
     meEl.appendChild(zone('My battlefield', me.battlefield, true));
-    if (me.commandList && me.commandList.length) meEl.appendChild(zone('Command zone (click to cast)', me.commandList, true));
     meEl.appendChild(zone('My hand', gv.myHand, true));
+
+    // my commander lives in the collapsible left-side panel
+    renderCommanderPanel(me.commandList || []);
 
     stackZone.innerHTML = '';
     const stack = gv.stack ? Object.values(gv.stack) : [];
