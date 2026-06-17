@@ -169,6 +169,14 @@
     <div class="setrow"><label>Hand card size</label><input type="range" id="zoom" min="64" max="220" step="4" value="104"></div>
     <div class="setrow"><label>Battlefield card size</label><input type="range" id="bfzoom" min="44" max="180" step="4" value="78"></div>
     <div class="setrow"><label><input type="checkbox" id="viewerToggle"> Card viewer (hover preview)</label></div>
+    <div class="setrow" style="border-top:1px solid #2c3340; padding-top:8px; margin-top:8px;">
+        <b style="color:#cde">When skipping (e.g. “My next turn”), stop if…</b>
+    </div>
+    <div class="setrow"><label><input type="checkbox" id="stopNewStack" checked> …I can respond (new spell/ability on the stack)</label></div>
+    <div class="setrow"><label><input type="checkbox" id="stopBlockers" checked> …I can declare blockers</label></div>
+    <div class="setrow"><label><input type="checkbox" id="stopAttackers" checked> …I can declare attackers</label></div>
+    <div class="setrow"><label><input type="checkbox" id="stopMains" checked> …at my main phases</label></div>
+    <div class="setrow"><label><input type="checkbox" id="stopEnds" checked> …at end steps</label></div>
 </div>
 
 
@@ -468,6 +476,19 @@ document.getElementById('startBtn').onclick = () => {
     setPrompt('Starting game…');
 };
 document.getElementById('newGameBtn').onclick = () => showSetup();
+
+// skip/stop preference toggles (sent live to the server's UserSkipPrioritySteps)
+const skipBoxes = ['stopNewStack','stopBlockers','stopAttackers','stopMains','stopEnds'];
+function loadSkips() {
+    skipBoxes.forEach(id => { const v = localStorage.getItem('skip_'+id); if (v !== null) document.getElementById(id).checked = (v === '1'); });
+}
+function sendSkips() {
+    const m = {};
+    skipBoxes.forEach(id => { const c = document.getElementById(id).checked; m[id] = c; localStorage.setItem('skip_'+id, c?'1':'0'); });
+    send('setSkips', undefined, m);
+}
+loadSkips();
+skipBoxes.forEach(id => document.getElementById(id).onchange = sendSkips);
 function log(s) { logc('', s); }
 function logc(cls, s) {
     s = String(s).replace(/<[^>]+>/g, ''); // strip XMage's embedded <font> markup
@@ -749,7 +770,7 @@ function handle(method, data) {
     const message = msg(data.message);
     switch (method) {
         case 'GATEWAY_HELLO': setPrompt('Connected.'); break;
-        case 'GATEWAY_READY': showSetup(data); setPrompt('Pick a format (and optionally a deck) then click Start game.'); break;
+        case 'GATEWAY_READY': showSetup(data); sendSkips(); setPrompt('Pick a format (and optionally a deck) then click Start game.'); break;
         case 'GATEWAY_RECONNECTED':
             setupEl.style.display = 'none'; hideBanner();
             log('Reconnected to your game'); setPrompt('Reconnected — resuming…'); break;

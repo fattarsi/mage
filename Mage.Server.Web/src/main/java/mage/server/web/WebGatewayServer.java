@@ -13,6 +13,7 @@ import mage.cards.decks.DeckValidatorError;
 import mage.cards.decks.DeckValidatorFactory;
 import mage.constants.ManaType;
 import mage.constants.PlayerAction;
+import mage.players.net.UserSkipPrioritySteps;
 import mage.interfaces.MageServer;
 import mage.server.DisconnectReason;
 import mage.server.Main;
@@ -486,6 +487,26 @@ public class WebGatewayServer {
                 logger.warn("web gateway: newGame failed", e);
                 ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
                         Map.of("message", "Couldn't start game: " + e.getMessage())));
+            }
+            return;
+        }
+
+        // Control action: update the player's skip/stop preferences live (no game required).
+        if ("setSkips".equals(action)) {
+            try {
+                UUID userId = managerFactory.sessionManager().getSession(sessionId).map(s -> s.getUserId()).orElse(null);
+                if (userId != null) {
+                    managerFactory.userManager().getUser(userId).ifPresent(u -> {
+                        UserSkipPrioritySteps sk = u.getUserData().getUserSkipPrioritySteps();
+                        if (msg.has("stopNewStack")) sk.setStopOnStackNewObjects(msg.get("stopNewStack").getAsBoolean());
+                        if (msg.has("stopBlockers")) sk.setStopOnDeclareBlockersWithAnyPermanents(msg.get("stopBlockers").getAsBoolean());
+                        if (msg.has("stopAttackers")) sk.setStopOnDeclareAttackersDuringSkipActions(msg.get("stopAttackers").getAsBoolean());
+                        if (msg.has("stopMains")) sk.setStopOnAllMainPhases(msg.get("stopMains").getAsBoolean());
+                        if (msg.has("stopEnds")) sk.setStopOnAllEndPhases(msg.get("stopEnds").getAsBoolean());
+                    });
+                }
+            } catch (Exception e) {
+                logger.warn("web gateway: setSkips failed", e);
             }
             return;
         }
