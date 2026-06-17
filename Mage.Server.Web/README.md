@@ -74,6 +74,11 @@ mvn -pl Mage.Server.Web exec:java -Dexec.mainClass=mage.server.web.WebServerMain
 export XMAGE_WEB_DECK_SOURCE_URL=https://your-deck-host
 ```
 
+The convenient, no-leak way to keep a personal URL out of git: copy `.env.example`
+to `.env` (which is git-ignored) and set `XMAGE_WEB_DECK_SOURCE_URL` there.
+`docker compose up` reads it automatically, and `./run-web.sh` (from the repo
+root) loads it for local runs.
+
 The expected REST shape (Django-style) is documented in
 [`DeckManagerSource.java`](src/main/java/mage/server/web/DeckManagerSource.java):
 
