@@ -15,7 +15,13 @@ import mage.server.Main;
 import mage.server.managers.ManagerFactory;
 import org.apache.log4j.Logger;
 
+import java.io.File;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -62,6 +68,8 @@ public class WebGatewayServer {
             new Format("duel", "Duel — Freeform (vs 1 AI)", "Two Player Duel", "Constructed - Freeform", 1),
             new Format("standard", "Duel — Standard (vs 1 AI)", "Two Player Duel", "Constructed - Standard", 1),
             new Format("commander", "Commander 1v1 (vs 1 AI)", "Commander Two Player Duel", "Variant Magic - Commander", 1),
+            new Format("commander3", "Commander — 3 players (vs 2 AI)", "Commander Free For All", "Variant Magic - Commander", 2),
+            new Format("commander4", "Commander — 4 players (vs 3 AI)", "Commander Free For All", "Variant Magic - Commander", 3),
             new Format("ffa3", "Free-for-all — 3 players (vs 2 AI)", "Free For All", "Constructed - Freeform", 2),
             new Format("ffa4", "Free-for-all — 4 players (vs 3 AI)", "Free For All", "Constructed - Freeform", 3)
     );
@@ -70,15 +78,34 @@ public class WebGatewayServer {
         return FORMATS.stream().filter(f -> f.key.equals(key)).findFirst().orElse(FORMATS.get(0));
     }
 
-    private static Map<String, Object> formatsPayload() {
-        JsonArray arr = new JsonArray();
+    /** Payload for GATEWAY_READY: the format catalog plus (if configured) the external deck list. */
+    private Map<String, Object> readyPayload() {
+        JsonArray formats = new JsonArray();
         for (Format f : FORMATS) {
             JsonObject o = new JsonObject();
             o.addProperty("key", f.key);
             o.addProperty("label", f.label);
-            arr.add(o);
+            formats.add(o);
         }
-        return Map.of("formats", arr);
+        Map<String, Object> m = new HashMap<>();
+        m.put("formats", formats);
+        if (deckSource != null) {
+            m.put("deckSourceLabel", deckSource.label());
+            try {
+                JsonArray decks = new JsonArray();
+                for (Map<String, Object> d : deckSource.listDecks()) {
+                    JsonObject o = new JsonObject();
+                    o.addProperty("id", String.valueOf(d.get("id")));
+                    o.addProperty("name", String.valueOf(d.get("name")));
+                    if (d.get("commander") != null) o.addProperty("commander", String.valueOf(d.get("commander")));
+                    decks.add(o);
+                }
+                m.put("decks", decks);
+            } catch (Exception e) {
+                logger.warn("web gateway: failed to list external decks", e);
+            }
+        }
+        return m;
     }
 
     private final ManagerFactory managerFactory;
@@ -97,6 +124,9 @@ public class WebGatewayServer {
 
     /** If set, each browser gets its own Human-vs-AI game on connect (play path). */
     private volatile RealGameOrchestrator playOrchestrator;
+
+    /** Optional external deck source (e.g. the user's Deck Manager site). */
+    private volatile DeckSource deckSource;
 
     private Javalin app;
 
@@ -118,6 +148,11 @@ public class WebGatewayServer {
     /** Give each new browser connection its own Human-vs-AI game (play path). */
     public void setPlayMode(RealGameOrchestrator orchestrator) {
         this.playOrchestrator = orchestrator;
+    }
+
+    /** Enable loading decks from an external site (Deck Manager, etc.). */
+    public void setDeckSource(DeckSource source) {
+        this.deckSource = source;
     }
 
     /**
@@ -149,6 +184,9 @@ public class WebGatewayServer {
             ws.onError(ctx -> logger.warn("web gateway: ws error", ctx.error()));
         });
 
+        // cached card-image proxy: fetch from Scryfall once, then serve from local disk
+        app.get("/img/{set}/{num}", this::serveImage);
+
         app.start(port);
         logger.info("XMage web gateway listening on http://localhost:" + port + " (ws: /ws/spectate)");
     }
@@ -156,6 +194,52 @@ public class WebGatewayServer {
     public void stop() {
         if (app != null) {
             app.stop();
+        }
+    }
+
+    private static final File IMAGE_CACHE_DIR = new File("image-cache");
+
+    /**
+     * Serve a card image, caching it on local disk so we hit Scryfall at most once per card.
+     * URL: {@code /img/{set}/{num}} — fetches the Scryfall image endpoint on a cache miss.
+     */
+    private void serveImage(io.javalin.http.Context ctx) {
+        String set = ctx.pathParam("set").replaceAll("[^a-zA-Z0-9]", "");
+        String num = ctx.pathParam("num").replaceAll("[^a-zA-Z0-9]", "");
+        if (set.isEmpty() || num.isEmpty()) {
+            ctx.status(400);
+            return;
+        }
+        try {
+            File dir = new File(IMAGE_CACHE_DIR, set);
+            File file = new File(dir, num + ".jpg");
+            byte[] bytes;
+            if (file.isFile() && file.length() > 0) {
+                bytes = Files.readAllBytes(file.toPath());
+            } else {
+                String url = "https://api.scryfall.com/cards/" + set + "/" + num + "?format=image&version=normal";
+                HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setRequestProperty("User-Agent", "xmage-web-gateway/1.0");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(12000);
+                conn.setInstanceFollowRedirects(true);
+                if (conn.getResponseCode() != 200) {
+                    conn.disconnect();
+                    ctx.status(404);
+                    return;
+                }
+                try (InputStream in = conn.getInputStream()) {
+                    bytes = in.readAllBytes();
+                }
+                conn.disconnect();
+                dir.mkdirs();
+                Files.write(file.toPath(), bytes);
+            }
+            ctx.contentType("image/jpeg");
+            ctx.header("Cache-Control", "public, max-age=2592000");
+            ctx.result(bytes);
+        } catch (Exception e) {
+            ctx.status(404);
         }
     }
 
@@ -185,7 +269,7 @@ public class WebGatewayServer {
                     String humanName = "h-" + mageSessionId.substring(0, 8);
                     server.connectUser(humanName, "", mageSessionId, "",
                             Main.getVersion(), UUID.randomUUID().toString());
-                    ctx.send(JsonCodec.encodeCallback("GATEWAY_READY", null, formatsPayload()));
+                    ctx.send(JsonCodec.encodeCallback("GATEWAY_READY", null, readyPayload()));
                     logger.info("web gateway: play session " + humanName + " connected, awaiting newGame");
                 } else {
                     // SPECTATE: connect anon and watch the shared game
@@ -297,8 +381,12 @@ public class WebGatewayServer {
             }
         }
 
+        String deckId = msg.has("deckId") && !msg.get("deckId").isJsonNull() ? msg.get("deckId").getAsString() : "";
+
         DeckCardLists deck = null;
-        if (!deckText.trim().isEmpty()) {
+        if (!deckId.isEmpty() && deckSource != null) {
+            deck = deckSource.fetchDeck(deckId); // load from the external site
+        } else if (!deckText.trim().isEmpty()) {
             StringBuilder errs = new StringBuilder();
             deck = DeckFactory.parseDeckList(deckText, errs);
             if (errs.length() > 0) {
@@ -307,9 +395,30 @@ public class WebGatewayServer {
             }
         }
 
+        // Commander games need a real Commander deck for every seat — give the AIs decks from the source.
+        List<DeckCardLists> aiDecks = null;
+        boolean isCommander = fmt.deckType.toLowerCase().contains("commander");
+        if (isCommander) {
+            if (deckSource == null) {
+                throw new IllegalStateException("Commander vs AI needs a deck source (start with -Dxmage.web.deckSourceUrl=...).");
+            }
+            List<Map<String, Object>> all = deckSource.listDecks();
+            List<String> ids = new java.util.ArrayList<>();
+            for (Map<String, Object> d : all) {
+                String did = String.valueOf(d.get("id"));
+                if (!did.equals(deckId)) ids.add(did); // prefer decks other than the human's
+            }
+            if (ids.isEmpty()) for (Map<String, Object> d : all) ids.add(String.valueOf(d.get("id")));
+            if (ids.isEmpty()) throw new IllegalStateException("No decks available for AI commander opponents.");
+            aiDecks = new java.util.ArrayList<>();
+            for (int i = 0; i < fmt.aiSeats; i++) {
+                aiDecks.add(deckSource.fetchDeck(ids.get(i % ids.size())));
+            }
+        }
+
         String humanName = "h-" + sessionId.substring(0, 8);
         UUID newId = playOrchestrator.startHumanVsAi(sessionId, humanName,
-                fmt.gameType, fmt.deckType, fmt.aiSeats, deck);
+                fmt.gameType, fmt.deckType, fmt.aiSeats, deck, aiDecks);
         wsToGameId.put(ctx.getSessionId(), newId);
         logger.info("web gateway: started " + fmt.gameType + " for " + humanName + " -> " + newId);
     }

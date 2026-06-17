@@ -5,6 +5,7 @@
     <title>XMage Web — Play vs AI</title>
     <style>
         * { box-sizing: border-box; }
+        :root { --card-w: 104px; }
         body { font-family: system-ui, sans-serif; margin: 0; background: #14161a; color: #e7e7e7; }
         header { padding: 8px 14px; background: #1f242c; border-bottom: 1px solid #333;
                  display: flex; align-items: center; gap: 14px; }
@@ -14,6 +15,16 @@
         #board { padding: 10px 14px; }
         .player { border: 1px solid #2b313b; border-radius: 8px; padding: 8px; margin-bottom: 8px; background: #1a1e24; }
         .player.me { background: #1a221c; }
+        /* multiplayer: opponents are compact by default, expand to full size on hover */
+        #opponents { display: flex; gap: 8px; align-items: flex-start; }
+        #opponents.multi > .player { flex: 1; }
+        .player.compact .zone .card { width: 56px; min-height: 78px; font-size: 8px; padding: 2px 2px 10px; }
+        .player.compact .card .rules { display: none; }
+        .player.compact:hover { box-shadow: 0 0 0 2px #4a6; }
+        .player.compact:hover .zone .card { width: var(--card-w); min-height: calc(var(--card-w)*1.4);
+                                            font-size: 10px; padding: 4px 4px 14px; }
+        .player.compact:hover .card .rules { display: block; }
+        #zoomwrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #9ab; }
         .phead { display: flex; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 6px; }
         .pname { font-weight: 700; }
         .life { color: #f88; font-weight: 700; }
@@ -21,9 +32,9 @@
         .active { color: #7f7; }
         .zone-label { font-size: 11px; color: #789; margin: 4px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
         .zone { display: flex; flex-wrap: wrap; gap: 5px; min-height: 8px; }
-        .card { width: 104px; min-height: 145px; border: 1px solid #3a4150; border-radius: 6px; padding: 4px 4px 14px;
-                font-size: 10px; background: #232a33; cursor: default; position: relative; line-height: 1.3;
-                overflow: hidden; }
+        .card { width: var(--card-w); min-height: calc(var(--card-w) * 1.4); border: 1px solid #3a4150;
+                border-radius: 6px; padding: 4px 4px 14px; font-size: 10px; background: #232a33; cursor: default;
+                position: relative; line-height: 1.3; overflow: hidden; transition: width .12s, min-height .12s; }
         .card .cn { display: block; white-space: normal; word-break: break-word; }
         .card img.art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
                         border-radius: 5px; }
@@ -80,6 +91,7 @@
     <b>XMage Web</b> — play vs AI
     <span id="status">connecting…</span>
     <button id="newGameBtn">New game</button>
+    <span id="zoomwrap">🔍 <input type="range" id="zoom" min="64" max="200" step="4" value="104"></span>
     <span id="turn"></span>
 </header>
 
@@ -88,6 +100,10 @@
         <h2>New game vs AI</h2>
         <label for="formatSel">Format</label>
         <select id="formatSel"></select>
+        <div id="deckSourceWrap" style="display:none">
+            <label for="deckSourceSel">Load a deck from <span id="deckSourceLabel">your site</span></label>
+            <select id="deckSourceSel"><option value="">— none (use pasted or random) —</option></select>
+        </div>
         <label for="deckInput">Your deck — paste a decklist, or leave blank for a random deck</label>
         <textarea id="deckInput" placeholder="4 Lightning Bolt&#10;4 Monastery Swiftspear&#10;20 Mountain&#10;...&#10;&#10;(plain '<count> <card name>' per line, or paste an XMage .dck)"></textarea>
         <div><button id="startBtn">Start game</button></div>
@@ -97,7 +113,7 @@
 
 <div id="banner"></div>
 <div id="board">
-    <div id="opp" class="player"></div>
+    <div id="opponents"></div>
     <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div></div>
     <div id="me" class="player me"></div>
 </div>
@@ -109,11 +125,20 @@
 <script>
 const statusEl = document.getElementById('status');
 const turnEl = document.getElementById('turn');
-const oppEl = document.getElementById('opp');
+const opponentsEl = document.getElementById('opponents');
 const meEl = document.getElementById('me');
 const stackZone = document.getElementById('stackZone');
 const promptEl = document.getElementById('prompt');
 const logEl = document.getElementById('log');
+
+// card zoom (persisted)
+const zoom = document.getElementById('zoom');
+const savedZoom = localStorage.getItem('cardZoom');
+if (savedZoom) { zoom.value = savedZoom; document.documentElement.style.setProperty('--card-w', savedZoom + 'px'); }
+zoom.oninput = () => {
+    document.documentElement.style.setProperty('--card-w', zoom.value + 'px');
+    localStorage.setItem('cardZoom', zoom.value);
+};
 
 // surface any JS error on-screen (so issues are visible without devtools)
 function showError(text) {
@@ -172,15 +197,34 @@ document.addEventListener('keydown', (e) => {
 const setupEl = document.getElementById('setup');
 const formatSel = document.getElementById('formatSel');
 const deckInput = document.getElementById('deckInput');
-function showSetup(formats) {
-    if (formats && formatSel.options.length === 0) {
-        formats.forEach(f => { const o=document.createElement('option'); o.value=f.key; o.textContent=f.label; formatSel.appendChild(o); });
+let readyData = null;
+const deckSourceSel = document.getElementById('deckSourceSel');
+function populateSetup() {
+    if (!readyData) return;
+    if (formatSel.options.length === 0 && readyData.formats) {
+        readyData.formats.forEach(f => { const o=document.createElement('option'); o.value=f.key; o.textContent=f.label; formatSel.appendChild(o); });
     }
+    if (readyData.decks && deckSourceSel.options.length <= 1) {
+        document.getElementById('deckSourceLabel').textContent = readyData.deckSourceLabel || 'your site';
+        readyData.decks.forEach(d => {
+            const o=document.createElement('option'); o.value=d.id;
+            o.textContent = d.name + (d.commander ? ' — ' + d.commander : '');
+            deckSourceSel.appendChild(o);
+        });
+        document.getElementById('deckSourceWrap').style.display = 'block';
+        // a site deck is a Commander deck; default the format to Commander 1v1 if available
+        const cmd = [...formatSel.options].find(o => o.value === 'commander');
+        if (cmd) deckSourceSel.onchange = () => { if (deckSourceSel.value && formatSel.value.indexOf('commander') < 0) formatSel.value = 'commander'; };
+    }
+}
+function showSetup(ready) {
+    if (ready) { readyData = ready; populateSetup(); }
     setupEl.style.display = 'flex';
 }
 document.getElementById('startBtn').onclick = () => {
     document.getElementById('banner').style.display = 'none';
-    send('newGame', undefined, { format: formatSel.value, deck: deckInput.value });
+    const deckId = deckSourceSel.value;
+    send('newGame', undefined, { format: formatSel.value, deck: deckId ? '' : deckInput.value, deckId });
     setupEl.style.display = 'none';
     setPrompt('Starting game…');
 };
@@ -258,13 +302,14 @@ function cardEl(card, clickable) {
         + (pt ? `<div class="pt">${esc(pt)}</div>` : '');
     d.title = `${card.name||'?'}${cost?'  '+cost:''}${pt?'  '+pt:''}`
         + (types?'\n'+types:'') + (card.rules&&card.rules.length?'\n\n'+card.rules.join('\n'):'');
-    // real card art from Scryfall (set + collector number); on failure, the text card shows through
-    if (card.expansionSetCode && card.cardNumber && !card.faceDown) {
+    // real card art from Scryfall (set + collector number); on failure, the text card shows through.
+    // command-zone objects expose imageNumber instead of cardNumber.
+    const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
+    if (card.expansionSetCode && rawNum && !card.faceDown) {
         const img = document.createElement('img');
         img.className = 'art'; img.loading = 'lazy'; img.alt = card.name || '';
         const set = encodeURIComponent(String(card.expansionSetCode).toLowerCase());
-        const num = encodeURIComponent(String(card.cardNumber));
-        img.src = `https://api.scryfall.com/cards/${set}/${num}?format=image&version=normal`;
+        img.src = `/img/${set}/${encodeURIComponent(rawNum)}`;
         img.onerror = () => img.remove();
         d.appendChild(img);
     }
@@ -285,7 +330,6 @@ function zone(label, cardsMap, clickable) {
 
 function renderBoard(gv) {
     const me = gv.players.find(p => p.controlled) || gv.players[0];
-    const opp = gv.players.find(p => p !== me) || gv.players[1];
     myHandIds = new Set(Object.keys(gv.myHand || {}));
     const myTurn = gv.activePlayerId === me.playerId;
     turnEl.innerHTML = `Turn ${gv.turn} · ${esc(gv.step||gv.phase||'')} · `
@@ -300,11 +344,22 @@ function renderBoard(gv) {
             + (active ? ` <span class="active">● active</span>` : '') + `</div>`;
     }
 
-    oppEl.innerHTML = pheadHtml(opp, gv.activePlayerId===opp.playerId);
-    oppEl.appendChild(zone('Opponent battlefield', opp.battlefield, true)); // clickable as targets
+    // opponents: compact + hover-to-zoom when there's more than one (3-4 player games)
+    const opponents = gv.players.filter(p => p !== me);
+    opponentsEl.innerHTML = '';
+    opponentsEl.className = opponents.length > 1 ? 'multi' : '';
+    for (const opp of opponents) {
+        const panel = document.createElement('div');
+        panel.className = 'player' + (opponents.length > 1 ? ' compact' : '');
+        panel.innerHTML = pheadHtml(opp, gv.activePlayerId === opp.playerId);
+        panel.appendChild(zone('Battlefield', opp.battlefield, true)); // clickable as targets
+        if (opp.commandList && opp.commandList.length) panel.appendChild(zone('Command', opp.commandList, true));
+        opponentsEl.appendChild(panel);
+    }
 
-    meEl.innerHTML = pheadHtml(me, gv.activePlayerId===me.playerId);
+    meEl.innerHTML = pheadHtml(me, myTurn);
     meEl.appendChild(zone('My battlefield', me.battlefield, true));
+    if (me.commandList && me.commandList.length) meEl.appendChild(zone('Command zone (click to cast)', me.commandList, true));
     meEl.appendChild(zone('My hand', gv.myHand, true));
 
     stackZone.innerHTML = '';
@@ -327,7 +382,7 @@ function handle(method, data) {
     const message = esc(data.message || '');
     switch (method) {
         case 'GATEWAY_HELLO': setPrompt('Connected.'); break;
-        case 'GATEWAY_READY': showSetup(data.formats); setPrompt('Pick a format and click Start game.'); break;
+        case 'GATEWAY_READY': showSetup(data); setPrompt('Pick a format (and optionally a deck) then click Start game.'); break;
         case 'GATEWAY_INFO': log(esc(data.message)); break;
         case 'GATEWAY_ERROR':
             showError(data.message); setPrompt('<span class="over">' + esc(data.message) + '</span>');
