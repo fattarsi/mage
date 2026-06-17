@@ -161,6 +161,12 @@ public class WebGatewayServer {
 
     private void onConnect(WsContext ctx) {
         clients.add(ctx);
+        try {
+            // keep the socket alive during long thinks / reading the board (Jetty closes idle WS by default)
+            ctx.session.setIdleTimeout(java.time.Duration.ofHours(2));
+        } catch (Exception ignore) {
+            // older/newer Jetty signature differences — non-fatal
+        }
 
         if (managerFactory != null) {
             // Production path: give this browser its own internal session, wired to push JSON down this socket.
@@ -310,9 +316,17 @@ public class WebGatewayServer {
 
     private void onClose(WsContext ctx) {
         clients.remove(ctx);
-        wsToGameId.remove(ctx.getSessionId());
+        UUID gameId = wsToGameId.remove(ctx.getSessionId());
         String mageSessionId = wsToMageSession.remove(ctx.getSessionId());
         if (mageSessionId != null && managerFactory != null) {
+            // quit the player's game so it doesn't linger and clog the server (each reload would otherwise leak one)
+            if (gameId != null) {
+                try {
+                    server.matchQuit(gameId, mageSessionId);
+                } catch (Exception ignore) {
+                    // best-effort
+                }
+            }
             managerFactory.sessionManager().disconnect(mageSessionId, DisconnectReason.LostConnection, true);
             logger.info("web gateway: client disconnected, mage session " + mageSessionId);
         }
