@@ -156,6 +156,10 @@
         .overlay #startBtn { margin-top: 12px; font-size: 15px; padding: 9px 20px; }
         #newGameBtn { background: #2e6a40; font-size: 12px; padding: 5px 12px; }
         #newGameBtn:hover { background: #3c8a54; }
+        #resignBtn { background: #7a5a20; font-size: 12px; padding: 5px 12px; }
+        #resignBtn:hover { background: #9a7228; }
+        #endGameBtn { background: #7a2e2e; font-size: 12px; padding: 5px 12px; }
+        #endGameBtn:hover { background: #9a3838; }
     </style>
 </head>
 <body>
@@ -163,6 +167,8 @@
     <b>XMage Web</b> — play vs AI
     <span id="status">connecting…</span>
     <button id="newGameBtn">New game</button>
+    <button id="resignBtn" style="display:none">Resign</button>
+    <button id="endGameBtn" style="display:none">End game</button>
     <button id="settingsBtn">⚙ Settings</button>
 </header>
 
@@ -479,6 +485,25 @@ document.getElementById('startBtn').onclick = () => {
     setPrompt('Starting game…');
 };
 document.getElementById('newGameBtn').onclick = () => showSetup();
+
+// Resign vs End game are different: resign concedes (AIs play it out, you can watch);
+// end game stops the whole game immediately.
+const resignBtn = document.getElementById('resignBtn');
+const endGameBtn = document.getElementById('endGameBtn');
+function setGameActive(active) {
+    resignBtn.style.display = active ? '' : 'none';
+    endGameBtn.style.display = active ? '' : 'none';
+}
+resignBtn.onclick = () => {
+    if (!confirm('Resign this game?\n\nYou concede, but the AI opponents keep playing it out — you can keep watching.')) return;
+    send('resign');
+    log('You resigned — the AI opponents will finish the game.');
+    resignBtn.style.display = 'none'; // already conceded; End game stays available to stop the watched game
+};
+endGameBtn.onclick = () => {
+    if (!confirm('End this game now?\n\nThe game stops immediately for everyone (no winner is played out).')) return;
+    send('endGame');
+};
 
 // --- sound effects (synthesized via Web Audio, no asset files) ---
 let soundOn = localStorage.getItem('soundOn') === '1';
@@ -881,14 +906,17 @@ function handle(method, data) {
         case 'GATEWAY_HELLO': setPrompt('Connected.'); break;
         case 'GATEWAY_READY': showSetup(data); sendSkips(); setPrompt('Pick a format (and optionally a deck) then click Start game.'); break;
         case 'GATEWAY_RECONNECTED':
-            setupEl.style.display = 'none'; hideBanner();
+            setupEl.style.display = 'none'; hideBanner(); setGameActive(true);
             log('Reconnected to your game'); setPrompt('Reconnected — resuming…'); break;
+        case 'GATEWAY_GAME_ENDED':
+            setGameActive(false); log(esc(data.message || 'Game ended.'));
+            setPrompt('Game ended. Click “New game” to start another.'); showSetup(); break;
         case 'GATEWAY_INFO': log(esc(data.message)); break;
         case 'GATEWAY_ERROR':
             showBanner(data.message || 'error'); setPrompt('<span class="over">Couldn\'t start — see the banner above.</span>');
             showSetup(); break;
         case 'START_GAME': case 'GAME_INIT':
-            setupEl.style.display = 'none'; log('Game started');
+            setupEl.style.display = 'none'; log('Game started'); setGameActive(true);
             setPrompt('Game started — waiting for the first decision…'); break;
 
         case 'GAME_SELECT': { // priority: play a card / declare attackers or blockers / pass
@@ -992,6 +1020,7 @@ function handle(method, data) {
             break;
         }
         case 'GAME_OVER': case 'END_GAME_INFO':
+            setGameActive(false);
             setPrompt('<span class="over">Game over — ' + (esc(data.message) || 'see log') + '</span>');
             log('GAME OVER: ' + (data.message||'')); break;
 

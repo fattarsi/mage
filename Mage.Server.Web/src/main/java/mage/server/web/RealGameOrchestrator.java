@@ -35,6 +35,8 @@ public class RealGameOrchestrator {
     private String hostSession;
     private UUID roomId;
     private volatile UUID gameId;
+    /** Remember which table backs each running game so we can tear it down completely on demand. */
+    private final java.util.Map<UUID, UUID> gameToTable = new java.util.concurrent.ConcurrentHashMap<>();
 
     public RealGameOrchestrator(ManagerFactory managerFactory, MageServer server) {
         this.managerFactory = managerFactory;
@@ -106,10 +108,29 @@ public class RealGameOrchestrator {
         }
 
         UUID newGameId = pollGameId(room, tableId);
+        gameToTable.put(newGameId, tableId);
         // join the human to the game so HumanPlayer callbacks (priority, targets, ...) reach this session
         server.gameJoin(newGameId, humanSession);
         logger.info("web gateway: human-vs-AI game started (" + gameType + "), gameId=" + newGameId);
         return newGameId;
+    }
+
+    /**
+     * Hard-end a running game immediately: ends the game and removes its table and controller so it
+     * does NOT keep playing in the background. Distinct from a player conceding ({@code matchQuit}),
+     * which leaves the remaining AI seats to finish the game.
+     */
+    public void endGame(UUID gameId) {
+        if (gameId == null) {
+            return;
+        }
+        UUID tableId = gameToTable.remove(gameId);
+        if (tableId != null) {
+            managerFactory.tableManager().removeTable(tableId); // ends game + drops table/controller
+        } else {
+            managerFactory.gameManager().removeGame(gameId);    // fallback: at least kill the controller
+        }
+        logger.info("web gateway: hard-ended game " + gameId + " (table " + tableId + ")");
     }
 
     private UUID pollGameId(UUID room, UUID tableId) throws Exception {
