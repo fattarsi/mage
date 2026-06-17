@@ -86,33 +86,61 @@ public class RealGameOrchestrator {
         options.setMatchTimeLimit(MatchTimeLimit.MIN__15);
 
         TableView table = server.roomCreateTable(humanSession, room, options);
+        if (table == null) {
+            // Most often the human's XMage session expired (idle > 3 min with no ping) and was removed,
+            // so the server refused the table. Surface a clear, actionable message instead of an NPE.
+            throw new IllegalStateException("Couldn't create the table — your session may have timed out. "
+                    + "Please reload the page and try again.");
+        }
         UUID tableId = table.getTableId();
 
-        DeckCardLists deckForHuman = humanDeck != null ? humanDeck : DeckFactory.buildRandomDeckList("WUBRG");
-        boolean jHuman = server.roomJoinTable(humanSession, room, tableId, humanName,
-                PlayerType.HUMAN, 0, deckForHuman, "");
-        if (!jHuman) {
-            throw new IllegalStateException("web gateway: human failed to join the table");
+        // From here on a table exists; if any step fails, remove it so it doesn't linger as a
+        // "not started" table (which would block future table creation for this user).
+        try {
+            DeckCardLists deckForHuman = humanDeck != null ? humanDeck : DeckFactory.buildRandomDeckList("WUBRG");
+            boolean jHuman = server.roomJoinTable(humanSession, room, tableId, humanName,
+                    PlayerType.HUMAN, 0, deckForHuman, "");
+            if (!jHuman) {
+                throw new IllegalStateException("web gateway: human failed to join the table");
+            }
+            for (int i = 0; i < aiSeats; i++) {
+                DeckCardLists aiDeck = (aiDecks != null && i < aiDecks.size() && aiDecks.get(i) != null)
+                        ? aiDecks.get(i) : DeckFactory.buildRandomDeckList("WUBRG");
+                boolean jAi = server.roomJoinTable(humanSession, room, tableId, "AI " + (i + 1),
+                        PlayerType.COMPUTER_MAD, 2, aiDeck, "");
+                if (!jAi) {
+                    throw new IllegalStateException("web gateway: AI " + (i + 1) + " failed to join");
+                }
+            }
+            if (!server.matchStart(humanSession, room, tableId)) {
+                throw new IllegalStateException("web gateway: matchStart failed");
+            }
+
+            UUID newGameId = pollGameId(room, tableId);
+            gameToTable.put(newGameId, tableId);
+            // join the human to the game so HumanPlayer callbacks (priority, targets, ...) reach this session
+            server.gameJoin(newGameId, humanSession);
+            logger.info("web gateway: human-vs-AI game started (" + gameType + "), gameId=" + newGameId);
+            return newGameId;
+        } catch (Exception e) {
+            try {
+                managerFactory.tableManager().removeTable(tableId); // don't leak a half-built table
+            } catch (Exception ignore) {
+                // best-effort
+            }
+            throw e;
         }
-        for (int i = 0; i < aiSeats; i++) {
-            DeckCardLists aiDeck = (aiDecks != null && i < aiDecks.size() && aiDecks.get(i) != null)
-                    ? aiDecks.get(i) : DeckFactory.buildRandomDeckList("WUBRG");
-            boolean jAi = server.roomJoinTable(humanSession, room, tableId, "AI " + (i + 1),
-                    PlayerType.COMPUTER_MAD, 2, aiDeck, "");
-            if (!jAi) {
-                throw new IllegalStateException("web gateway: AI " + (i + 1) + " failed to join");
+    }
+
+    /** Keep the persistent host session alive (used for AI-vs-AI demo games). Null-safe before init(). */
+    public void keepAlive() {
+        if (hostSession != null) {
+            try {
+                server.ping(hostSession, "");
+            } catch (Exception ignore) {
+                // best-effort
             }
         }
-        if (!server.matchStart(humanSession, room, tableId)) {
-            throw new IllegalStateException("web gateway: matchStart failed");
-        }
-
-        UUID newGameId = pollGameId(room, tableId);
-        gameToTable.put(newGameId, tableId);
-        // join the human to the game so HumanPlayer callbacks (priority, targets, ...) reach this session
-        server.gameJoin(newGameId, humanSession);
-        logger.info("web gateway: human-vs-AI game started (" + gameType + "), gameId=" + newGameId);
-        return newGameId;
     }
 
     /**
