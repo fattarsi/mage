@@ -73,3 +73,4 @@ mage-bundle.zip
 .devcontainer/**/*lock.json
 
 image-cache/
+cardinfo-cache/

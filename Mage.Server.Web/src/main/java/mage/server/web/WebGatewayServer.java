@@ -23,6 +23,7 @@ import java.io.File;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -192,6 +193,8 @@ public class WebGatewayServer {
 
         // cached card-image proxy: fetch from Scryfall once, then serve from local disk
         app.get("/img/{set}/{num}", this::serveImage);
+        // cached card data (prices, etc.) from Scryfall's JSON endpoint
+        app.get("/cardinfo/{set}/{num}", this::serveCardInfo);
 
         app.start(port);
         logger.info("XMage web gateway listening on http://localhost:" + port + " (ws: /ws/spectate)");
@@ -204,6 +207,58 @@ public class WebGatewayServer {
     }
 
     private static final File IMAGE_CACHE_DIR = new File("image-cache");
+    private static final File CARDINFO_CACHE_DIR = new File("cardinfo-cache");
+
+    /**
+     * Serve cached card data (currently just prices) from Scryfall's JSON endpoint, one fetch per card.
+     * URL: {@code /cardinfo/{set}/{num}} -&gt; {@code {usd, usd_foil, name}}.
+     */
+    private void serveCardInfo(io.javalin.http.Context ctx) {
+        String set = ctx.pathParam("set").replaceAll("[^a-zA-Z0-9]", "");
+        String num = ctx.pathParam("num").replaceAll("[^a-zA-Z0-9]", "");
+        if (set.isEmpty() || num.isEmpty()) {
+            ctx.status(400);
+            return;
+        }
+        try {
+            File dir = new File(CARDINFO_CACHE_DIR, set);
+            File file = new File(dir, num + ".json");
+            String json;
+            if (file.isFile() && file.length() > 0) {
+                json = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
+            } else {
+                HttpURLConnection conn = (HttpURLConnection) new URL("https://api.scryfall.com/cards/" + set + "/" + num).openConnection();
+                conn.setRequestProperty("User-Agent", "xmage-web-gateway/1.0");
+                conn.setRequestProperty("Accept", "application/json");
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(12000);
+                if (conn.getResponseCode() != 200) {
+                    conn.disconnect();
+                    ctx.status(404);
+                    return;
+                }
+                try (InputStream in = conn.getInputStream()) {
+                    json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                }
+                conn.disconnect();
+                dir.mkdirs();
+                Files.write(file.toPath(), json.getBytes(StandardCharsets.UTF_8));
+            }
+            JsonObject card = JsonParser.parseString(json).getAsJsonObject();
+            JsonObject out = new JsonObject();
+            if (card.has("prices") && card.get("prices").isJsonObject()) {
+                JsonObject p = card.getAsJsonObject("prices");
+                out.add("usd", p.get("usd"));
+                out.add("usd_foil", p.get("usd_foil"));
+            }
+            if (card.has("name")) out.addProperty("name", card.get("name").getAsString());
+            ctx.contentType("application/json");
+            ctx.header("Cache-Control", "public, max-age=86400");
+            ctx.result(out.toString());
+        } catch (Exception e) {
+            ctx.status(404);
+        }
+    }
 
     /**
      * Serve a card image, caching it on local disk so we hit Scryfall at most once per card.
