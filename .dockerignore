@@ -1,11 +1,21 @@
-# keep the build context small and force a clean in-container build
+# keep the build context small and force a clean in-container build.
+#
+# NOTE: do NOT use "**/target" — it also matches the engine's source package
+# Mage/src/main/java/mage/target, which would break the build. Maven output
+# "target" dirs only live at module roots (depth 1-3), so anchor by depth.
 .git
-**/target
-db
-**/db
-image-cache
-cardinfo-cache
-gamesHistory
+/target
+*/target
+*/*/target
+*/*/*/target
+
+# runtime data/caches (root-level only, anchored so no source dir is matched)
+/db
+/gamesHistory
+/image-cache
+/cardinfo-cache
+
+# logs and editor cruft
 *.log
 **/*.log
 .idea
