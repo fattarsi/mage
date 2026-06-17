@@ -13,8 +13,16 @@
         #status { font-size: 12px; color: #8bd; }
         #turn { font-size: 12px; color: #fc9; margin-left: auto; }
         #board { padding: 10px 14px; }
-        /* phase progress bar */
-        #phasebar { display: flex; gap: 2px; margin-bottom: 10px; flex-wrap: wrap; }
+        /* phase progress bar (sticky at top while scrolling) */
+        #phasebar { display: flex; gap: 2px; flex-wrap: wrap; position: sticky; top: 0; z-index: 35;
+                    background: #14161a; margin: -10px -14px 10px; padding: 8px 14px; border-bottom: 1px solid #262d38; }
+        /* collapsible zone chips (graveyard / exile / emblems) */
+        .collapzone { border: 1px solid #3a4658; border-radius: 6px; padding: 4px 7px; background: #1a1e24; }
+        .collap-hdr { cursor: pointer; font-size: 11px; color: #cdd; white-space: nowrap; user-select: none; }
+        .collap-hdr:hover { color: #fff; }
+        .myzones, .oppzones { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; align-items: flex-start; }
+        .manapool { font-size: 12px; }
+        .manapool .mana { font-weight: 700; }
         #phasebar .ph { flex: 1 1 auto; text-align: center; font-size: 10px; padding: 4px 3px; border-radius: 4px;
                         background: #1b2028; color: #8090a0; border: 1px solid #262d38; white-space: nowrap; }
         #phasebar .ph.cur { background: #2e5a8a; color: #fff; font-weight: 700; border-color: #3a6ea8; }
@@ -462,6 +470,7 @@ document.getElementById('startBtn').onclick = () => {
 document.getElementById('newGameBtn').onclick = () => showSetup();
 function log(s) { logc('', s); }
 function logc(cls, s) {
+    s = String(s).replace(/<[^>]+>/g, ''); // strip XMage's embedded <font> markup
     const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = s;
     logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
     while (logEl.childNodes.length > 200) logEl.removeChild(logEl.firstChild);
@@ -586,6 +595,32 @@ function renderPhaseBar(gv) {
     });
 }
 
+// collapsible card zone (graveyard / exile / emblems), expand state persisted per key across re-renders
+const zoneExpanded = {};
+function collapsibleZone(label, cardsMap, stateKey) {
+    const cards = cardsMap ? Object.values(cardsMap) : [];
+    const wrap = document.createElement('div'); wrap.className = 'collapzone';
+    const expanded = !!zoneExpanded[stateKey];
+    const hdr = document.createElement('div'); hdr.className = 'collap-hdr';
+    hdr.textContent = (expanded ? '▾ ' : '▸ ') + label + ' (' + cards.length + ')';
+    hdr.onclick = () => { zoneExpanded[stateKey] = !zoneExpanded[stateKey]; if (lastGameView) renderBoard(lastGameView); };
+    wrap.appendChild(hdr);
+    if (expanded && cards.length) {
+        const z = document.createElement('div'); z.className = 'zone'; z.style.marginTop = '4px';
+        cards.forEach(c => z.appendChild(cardEl(c, true))); // clickable (targetable from gy/exile)
+        wrap.appendChild(z);
+    }
+    return wrap;
+}
+const MANA_COLORS = [['white','WHITE','W','#e9dca0'],['blue','BLUE','U','#86b5e6'],['black','BLACK','B','#b6a6c6'],
+                     ['red','RED','R','#e6877a'],['green','GREEN','G','#86c686'],['colorless','COLORLESS','C','#cfcfcf']];
+function manaPoolHtml(pool) {
+    if (!pool) return '';
+    const s = MANA_COLORS.filter(([k]) => pool[k] > 0)
+        .map(([k,t,sym,col]) => `<span class="mana" style="color:${col}">${pool[k]}${sym}</span>`).join(' ');
+    return s ? ` <span class="manapool" title="floating mana">[ ${s} ]</span>` : '';
+}
+
 function classifyPerm(p) {
     const t = p.cardTypes || [];
     if (t.includes('LAND')) return 'land';
@@ -635,6 +670,7 @@ function renderBoard(gv) {
             + `<span class="pname">${esc(p.name)}</span> `
             + `<span class="life">♥ ${p.life}</span> `
             + `<span class="meta">hand ${p.handCount} · lib ${p.libraryCount} · gy ${Object.keys(p.graveyard||{}).length}</span>`
+            + manaPoolHtml(p.manaPool)
             + (active ? ` <span class="active">● active</span>` : '') + `</div>`;
     }
 
@@ -652,11 +688,23 @@ function renderBoard(gv) {
         row.appendChild(battlefieldEl(opp.battlefield, true)); // mirrored; clickable as targets
         if (opp.commandList && opp.commandList.length) row.appendChild(oppCommanderEl(opp));
         panel.appendChild(row);
+        // opponent graveyard / exile chips
+        const oz = document.createElement('div'); oz.className = 'oppzones';
+        oz.appendChild(collapsibleZone('Graveyard', opp.graveyard, 'gy-' + opp.playerId));
+        oz.appendChild(collapsibleZone('Exile', opp.exile, 'ex-' + opp.playerId));
+        panel.appendChild(oz);
         opponentsEl.appendChild(panel);
     }
 
     meEl.innerHTML = pheadHtml(me, myTurn);
     meEl.appendChild(battlefieldEl(me.battlefield, false));
+    // graveyard / exile / emblems as collapsible chips
+    const myZones = document.createElement('div'); myZones.className = 'myzones';
+    myZones.appendChild(collapsibleZone('Graveyard', me.graveyard, 'my-gy'));
+    myZones.appendChild(collapsibleZone('Exile', me.exile, 'my-exile'));
+    if (gv.myHelperEmblems && Object.keys(gv.myHelperEmblems).length)
+        myZones.appendChild(collapsibleZone('Emblems', gv.myHelperEmblems, 'my-emblems'));
+    meEl.appendChild(myZones);
     meEl.appendChild(zone('My hand', gv.myHand, true));
 
     // my commander lives in the collapsible left-side panel
@@ -753,10 +801,24 @@ function handle(method, data) {
             setPrompt(body, [{label:'Pass priority ▸', alt:true, onClick:()=>send('playerBoolean', false)}]);
             break;
         }
-        case 'GAME_PLAY_MANA':
-            setPrompt('<b>Pay mana:</b> ' + message + ' <i>— click your highlighted untapped lands to tap them.</i>',
-                [{label:'Cancel cast', alt:true, onClick:()=>send('playerBoolean', false)}]);
+        case 'GAME_PLAY_MANA': {
+            const gv = lastGameView || {};
+            const meP = (gv.players||[]).find(p => p.controlled);
+            const pool = meP ? meP.manaPool : null;
+            const btns = [];
+            // spend floating mana from the pool (vs tapping lands)
+            if (pool && meP) {
+                MANA_COLORS.forEach(([k, type, sym]) => {
+                    if (pool[k] > 0) btns.push({ label: `Spend ${sym} (${pool[k]})`,
+                        onClick: () => send('playerManaType', type, { playerId: meP.playerId }) });
+                });
+            }
+            btns.push({ label: 'Cancel cast', alt: true, onClick: () => send('playerBoolean', false) });
+            // the message carries the still-needed cost (casting progress); show it prominently
+            setPrompt('<b>Pay mana — still needed:</b> ' + message
+                + ' <i>— click highlighted untapped lands, or spend floating mana:</i>', btns);
             break;
+        }
         case 'GAME_TARGET': {
             const n = validTargets.size;
             setPrompt(message + ` <i>(click a highlighted ${n?'target':'card/player'} — ${n} available)</i>`,
