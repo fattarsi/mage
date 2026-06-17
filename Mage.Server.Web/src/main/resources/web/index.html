@@ -31,6 +31,8 @@
         #phasebar .ph.clickable:hover { background: #2b3340; color: #cde; }
         .player { border: 1px solid #2b313b; border-radius: 8px; padding: 8px; margin-bottom: 8px; background: #1a1e24; }
         .player.me { background: #1a221c; }
+        /* subtle yellow border marks whose turn it is */
+        .player.activeturn { border-color: #c9a84a; box-shadow: 0 0 0 1px rgba(201,168,74,.35); }
         /* multiplayer: opponents are compact by default; click the 🔍 to zoom one open as an overlay */
         #opponents { display: flex; gap: 8px; align-items: flex-start; }
         #opponents.multi > .player { flex: 1; }
@@ -71,6 +73,11 @@
         #logBar { border-top: 1px solid #2b313b; background: #1b2028; padding: 4px 14px 8px; }
         #logHeader { cursor: pointer; font-size: 12px; color: #9ab; font-weight: 600; user-select: none; padding: 4px 0; }
         #logHeader:hover { color: #fff; }
+        #logSearchWrap { display: flex; align-items: center; gap: 8px; padding: 0 0 4px; }
+        #logSearch { flex: 1 1 auto; background: #11161d; color: #e7ecf2; border: 1px solid #2b313b;
+                     border-radius: 5px; padding: 4px 8px; font-size: 12px; }
+        #logSearch:focus { outline: 0; border-color: #4767a0; }
+        #log .hit mark { background: #5d4a12; color: #ffe9a8; border-radius: 2px; padding: 0 1px; }
         #viewerImg { width: 100%; border-radius: 7px; display: block; background: #11151b; }
         #viewerInfo { margin-top: 7px; font-size: 12.5px; line-height: 1.35; }
         #viewerInfo .vc { float: right; color: #ad8; }
@@ -122,9 +129,9 @@
         .card .pt { position: absolute; right: 4px; bottom: 2px; font-weight: 700; color: #fe9; }
         .card .rules { color: #aab; font-size: 9px; margin-top: 2px; max-height: 40px; overflow: hidden; }
         #stack { border: 1px dashed #56607a; border-radius: 6px; padding: 6px; margin: 8px 0; }
-        #skipbar { display: flex; gap: 6px; flex-wrap: wrap; padding: 6px 14px; background: #1b2028;
-                   border-top: 1px solid #2b313b; }
-        #skipbar button { background: #2e3a4a; font-size: 12px; padding: 5px 9px; }
+        /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
+        #skipbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 4px; margin: -2px 0 4px; }
+        #skipbar button { background: #2e3a4a; font-size: 11px; padding: 3px 8px; border-radius: 4px; }
         #skipbar button:hover { background: #3d4d63; }
         /* compact action bar sitting directly under the stack */
         #prompt { background: #232a36; border: 1px solid #3a587e; border-radius: 6px;
@@ -226,12 +233,16 @@
     <div id="opponents"></div>
     <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div></div>
     <div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span></div>
+    <div id="skipbar"></div>
     <div id="me" class="player me"></div>
 </div>
 
-<div id="skipbar"></div>
 <div id="logBar">
     <div id="logHeader">▸ Log</div>
+    <div id="logSearchWrap" style="display:none">
+        <input id="logSearch" type="search" placeholder="search log (e.g. a card name)…" autocomplete="off">
+        <span id="logCount" class="meta"></span>
+    </div>
     <div id="log" style="display:none"></div>
 </div>
 
@@ -261,11 +272,16 @@ const logEl = document.getElementById('log');
 // collapsible log panel (right side), collapsed by default; state persisted
 let logExpanded = localStorage.getItem('logOpen') === '1';
 const logHeader = document.getElementById('logHeader');
+const logSearch = document.getElementById('logSearch');
+const logCount = document.getElementById('logCount');
+const logSearchWrap = document.getElementById('logSearchWrap');
 function renderLogHeader() {
     logHeader.textContent = (logExpanded ? '▾ ' : '▸ ') + 'Log';
     logEl.style.display = logExpanded ? 'block' : 'none';
+    logSearchWrap.style.display = logExpanded ? 'flex' : 'none';
 }
 logHeader.onclick = () => { logExpanded = !logExpanded; localStorage.setItem('logOpen', logExpanded ? '1' : '0'); renderLogHeader(); };
+logSearch.oninput = applyLogFilter;
 renderLogHeader();
 
 // card zoom (persisted)
@@ -590,8 +606,33 @@ function log(s) { logc('', s); }
 function logc(cls, s) {
     s = String(s).replace(/<[^>]+>/g, ''); // strip XMage's embedded <font> markup
     const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = s;
-    logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight;
-    while (logEl.childNodes.length > 200) logEl.removeChild(logEl.firstChild);
+    logEl.appendChild(d);
+    if (logSearch && logSearch.value.trim()) { filterLogLine(d); updateLogCount(); } // honor active search
+    logEl.scrollTop = logEl.scrollHeight;
+    while (logEl.childNodes.length > 500) logEl.removeChild(logEl.firstChild);
+}
+// --- log search: filter to matching lines, highlight the match, jump to the first ---
+function filterLogLine(d) {
+    const q = logSearch.value.trim().toLowerCase();
+    const text = d.textContent;
+    if (!q) { d.style.display = ''; d.classList.remove('hit'); d.textContent = text; return false; }
+    const idx = text.toLowerCase().indexOf(q);
+    if (idx < 0) { d.style.display = 'none'; d.classList.remove('hit'); return false; }
+    d.style.display = ''; d.classList.add('hit');
+    d.innerHTML = esc(text.slice(0, idx)) + '<mark>' + esc(text.slice(idx, idx + q.length)) + '</mark>'
+        + esc(text.slice(idx + q.length));
+    return true;
+}
+function updateLogCount() {
+    const q = logSearch.value.trim();
+    const hits = logEl.querySelectorAll('div.hit').length;
+    logCount.textContent = q ? (hits + (hits === 1 ? ' match' : ' matches')) : '';
+}
+function applyLogFilter() {
+    let first = null;
+    for (const d of logEl.children) { if (filterLogLine(d) && !first) first = d; }
+    updateLogCount();
+    if (first) first.scrollIntoView({ block: 'center' });
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 // XMage messages embed HTML-ish markup (e.g. <font color=#ff0>...</font>); strip tags for clean display
@@ -872,7 +913,8 @@ function renderBoard(gv) {
     for (const opp of opponents) {
         const panel = document.createElement('div');
         const zoomed = !!oppZoomed[opp.playerId];
-        panel.className = 'player' + (opponents.length > 1 && !zoomed ? ' compact' : '') + (zoomed ? ' zoomed' : '');
+        panel.className = 'player' + (opponents.length > 1 && !zoomed ? ' compact' : '') + (zoomed ? ' zoomed' : '')
+            + (gv.activePlayerId === opp.playerId ? ' activeturn' : '');
         panel.innerHTML = pheadHtml(opp, gv.activePlayerId === opp.playerId, true);
         // battlefield + a collapsed commander section to its right
         const row = document.createElement('div'); row.className = 'opp-row';
@@ -887,6 +929,7 @@ function renderBoard(gv) {
         opponentsEl.appendChild(panel);
     }
 
+    meEl.className = 'player me' + (myTurn ? ' activeturn' : '');
     meEl.innerHTML = pheadHtml(me, myTurn);
     meEl.appendChild(battlefieldEl(me.battlefield, false));
     // graveyard / exile / emblems as collapsible chips
@@ -896,7 +939,7 @@ function renderBoard(gv) {
     if (gv.myHelperEmblems && Object.keys(gv.myHelperEmblems).length)
         myZones.appendChild(collapsibleZone('Emblems', gv.myHelperEmblems, 'my-emblems'));
     meEl.appendChild(myZones);
-    meEl.appendChild(zone('My hand', gv.myHand, true));
+    meEl.appendChild(zone('My hand (' + Object.keys(gv.myHand || {}).length + ')', gv.myHand, true));
 
     // my commander lives in the collapsible left-side panel
     renderCommanderPanel(me.commandList || []);
