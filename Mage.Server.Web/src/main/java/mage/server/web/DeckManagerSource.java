@@ -70,6 +70,8 @@ public class DeckManagerSource implements DeckSource {
             m.put("id", d.get("id").getAsString());
             m.put("name", d.get("name").getAsString());
             m.put("commander", commanderName(d, "commander"));
+            m.put("active", d.has("is_active") && d.get("is_active").getAsBoolean());
+            m.put("cardCount", d.has("card_count") ? d.get("card_count").getAsInt() : 0);
             out.add(m);
         }
         return out;
