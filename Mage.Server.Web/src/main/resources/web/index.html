@@ -13,6 +13,14 @@
         #status { font-size: 12px; color: #8bd; }
         #turn { font-size: 12px; color: #fc9; margin-left: auto; }
         #board { padding: 10px 14px; }
+        /* phase progress bar */
+        #phasebar { display: flex; gap: 2px; margin-bottom: 10px; flex-wrap: wrap; }
+        #phasebar .ph { flex: 1 1 auto; text-align: center; font-size: 10px; padding: 4px 3px; border-radius: 4px;
+                        background: #1b2028; color: #8090a0; border: 1px solid #262d38; white-space: nowrap; }
+        #phasebar .ph.cur { background: #2e5a8a; color: #fff; font-weight: 700; border-color: #3a6ea8; }
+        #phasebar .ph.bp { box-shadow: inset 0 0 0 2px #d76; } /* breakpoint set */
+        #phasebar .ph.clickable { cursor: pointer; }
+        #phasebar .ph.clickable:hover { background: #2b3340; color: #cde; }
         .player { border: 1px solid #2b313b; border-radius: 8px; padding: 8px; margin-bottom: 8px; background: #1a1e24; }
         .player.me { background: #1a221c; }
         /* multiplayer: opponents are compact by default; click the 🔍 to zoom one open as an overlay */
@@ -182,6 +190,7 @@
 
 <div id="banner"></div>
 <div id="board">
+    <div id="phasebar"></div>
     <div id="opponents"></div>
     <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div></div>
     <div id="me" class="player me"></div>
@@ -551,6 +560,32 @@ function cardEl(card, clickable) {
     return d;
 }
 
+// turn phases in order; clicking Main/End skips ahead to that phase (via the pass-to-phase actions)
+const PHASE_STEPS = [
+    ['UNTAP','Untap'], ['UPKEEP','Upkeep'], ['DRAW','Draw'], ['PRECOMBAT_MAIN','Main 1'],
+    ['BEGIN_COMBAT','Combat'], ['DECLARE_ATTACKERS','Attack'], ['DECLARE_BLOCKERS','Block'],
+    ['COMBAT_DAMAGE','Damage'], ['END_COMBAT','End Cbt'], ['POSTCOMBAT_MAIN','Main 2'],
+    ['END_TURN','End'], ['CLEANUP','Cleanup']
+];
+const PHASE_SKIP = {
+    PRECOMBAT_MAIN: 'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE', POSTCOMBAT_MAIN: 'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE',
+    END_TURN: 'PASS_PRIORITY_UNTIL_TURN_END_STEP', CLEANUP: 'PASS_PRIORITY_UNTIL_TURN_END_STEP'
+};
+function renderPhaseBar(gv) {
+    const bar = document.getElementById('phasebar');
+    bar.innerHTML = '';
+    let cur = gv.step || '';
+    if (cur === 'FIRST_COMBAT_DAMAGE') cur = 'COMBAT_DAMAGE';
+    PHASE_STEPS.forEach(([key, label]) => {
+        const d = document.createElement('div');
+        d.className = 'ph' + (key === cur ? ' cur' : '');
+        d.textContent = label;
+        const skip = PHASE_SKIP[key];
+        if (skip) { d.className += ' clickable'; d.title = 'Skip ahead to ' + label; d.onclick = () => act(skip); }
+        bar.appendChild(d);
+    });
+}
+
 function classifyPerm(p) {
     const t = p.cardTypes || [];
     if (t.includes('LAND')) return 'land';
@@ -583,6 +618,7 @@ function zone(label, cardsMap, clickable) {
 }
 
 function renderBoard(gv) {
+    renderPhaseBar(gv);
     const me = gv.players.find(p => p.controlled) || gv.players[0];
     myHandIds = new Set(Object.keys(gv.myHand || {}));
     const myTurn = gv.activePlayerId === me.playerId;
