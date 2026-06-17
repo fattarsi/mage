@@ -35,7 +35,7 @@
         #commanderHeader:hover { color: #fff; }
         #commanderBody { margin-top: 6px; }
         /* right sidebar: hover card viewer (top) + collapsible log (below) */
-        #rightbar { position: fixed; right: 10px; top: 64px; width: 280px; z-index: 40;
+        #rightbar { position: fixed; right: 10px; top: 64px; width: 336px; z-index: 40;
                     display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
         #viewer { display: none; width: 100%; background: #1b212b; border: 1px solid #3a4658; border-radius: 9px;
                   padding: 9px; box-shadow: 0 8px 28px rgba(0,0,0,.55); pointer-events: none; }
@@ -241,8 +241,14 @@ function fetchPrice(set, num, key) {
         })
         .catch(() => { priceCache[key] = 'price n/a'; setViewerPrice(key, 'price n/a'); });
 }
+let viewerHideTimer = null;
+function scheduleHideViewer() {
+    clearTimeout(viewerHideTimer);
+    viewerHideTimer = setTimeout(() => viewerEl.classList.remove('has-card'), 700); // delay before auto-close
+}
 function showCardViewer(card) {
     if (!viewerToggle.checked || !card) return;
+    clearTimeout(viewerHideTimer); // cancel pending auto-close when moving onto another card
     viewerEl.classList.add('has-card');
     const url = scryUrl(card);
     if (url) { viewerImg.style.display = ''; viewerImg.src = url; } else { viewerImg.style.display = 'none'; }
@@ -447,6 +453,7 @@ function cardEl(card, clickable) {
         d.appendChild(img);
     }
     d.onmouseenter = () => showCardViewer(card);
+    d.onmouseleave = () => scheduleHideViewer();
     if (clickable) d.onclick = () => send('playerUUID', card.id);
     return d;
 }
