@@ -126,12 +126,16 @@
                    border-top: 1px solid #2b313b; }
         #skipbar button { background: #2e3a4a; font-size: 12px; padding: 5px 9px; }
         #skipbar button:hover { background: #3d4d63; }
-        #prompt { position: sticky; bottom: 0; background: #232a36; border-top: 2px solid #3a587e;
-                  padding: 10px 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-        #turninfo { font-size: 12.5px; font-weight: 600; color: #fc9; white-space: nowrap;
-                    border-right: 1px solid #3a4658; padding-right: 12px; }
-        #promptmain { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: 1 1 280px; }
-        #prompt .msg { font-size: 14px; color: #fff; flex: 1 1 220px; }
+        /* compact action bar sitting directly under the stack */
+        #prompt { background: #232a36; border: 1px solid #3a587e; border-radius: 6px;
+                  padding: 5px 10px; margin: 6px 0; display: flex; flex-direction: column; gap: 3px; }
+        #turninfo { font-size: 12px; font-weight: 600; color: #fc9;
+                    display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        #promptmain { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        #prompt .msg { font-size: 12.5px; color: #fff; flex: 1 1 200px; }
+        #prompt button { padding: 4px 11px; font-size: 12px; }
+        .passbtn { background: #2e6a40; }
+        .passbtn:hover { background: #3c8a54; }
         button { background: #34507a; color: #fff; border: 0; border-radius: 5px; padding: 7px 14px;
                  font-size: 13px; cursor: pointer; }
         button:hover { background: #4767a0; }
@@ -221,11 +225,11 @@
     <div id="phasebar"></div>
     <div id="opponents"></div>
     <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div></div>
+    <div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span></div>
     <div id="me" class="player me"></div>
 </div>
 
 <div id="skipbar"></div>
-<div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span></div>
 <div id="logBar">
     <div id="logHeader">▸ Log</div>
     <div id="log" style="display:none"></div>
@@ -416,6 +420,8 @@ function send(action, value, extra) {
 }
 // players are valid targets/choices too (e.g. "select a starting player", "target player")
 window.pickPlayer = (playerId) => send('playerUUID', playerId);
+// inline "pass (resolve)" button on the action bar — passing priority lets the stack resolve
+window.passResolve = () => send('playerBoolean', false);
 
 // per-opponent UI state: which are zoomed open, and which have their commander expanded
 const oppZoomed = {};
@@ -835,7 +841,14 @@ function renderBoard(gv) {
     const me = gv.players.find(p => p.controlled) || gv.players[0];
     myHandIds = new Set(Object.keys(gv.myHand || {}));
     const myTurn = gv.activePlayerId === me.playerId;
-    turnInfoEl.innerHTML = `T${gv.turn} · ${esc(gv.step||gv.phase||'')} · `
+    // inline pass(resolve) button: shown whenever we hold plain priority (not mid combat-declaration),
+    // so it's a one-click way to move the game along right next to the stack.
+    const stackSize = gv.stack ? Object.keys(gv.stack).length : 0;
+    const showPass = priorityActive && !combatMode;
+    const passBtn = showPass
+        ? `<button type="button" class="passbtn" onclick="passResolve()">${stackSize ? 'pass (resolve) ▸' : 'pass ▸'}</button> · `
+        : '';
+    turnInfoEl.innerHTML = `T${gv.turn} · ${esc(gv.step||gv.phase||'')} · ` + passBtn
         + (myTurn ? '<span style="color:#7f7">YOUR TURN</span>' : '<span style="color:#fa8">opp turn</span>');
 
     function pheadHtml(p, active, isOpp) {
@@ -965,9 +978,9 @@ function handle(method, data) {
             const playableHand = [...playableIds].filter(id => hand[id]).map(id => hand[id].name);
             let body;
             if (stack.length) {
-                body = `<b>On the stack:</b> <span style="color:#9cf">${stack.map(c=>esc(c.name)).join(', ')}</span> `
+                body = `<b>On the stack:</b> <span style="color:#9cf">${stack.map(c=>msg(c.name)).join(', ')}</span> `
                      + `<i>— Pass to let it resolve (or respond if you can).</i>`;
-                setPrompt(body, [{label:'Pass (resolve) ▸', onClick:()=>send('playerBoolean', false)}]);
+                setPrompt(body); // the inline "pass (resolve)" button on the turn line handles passing
                 break;
             }
             if (playableHand.length) {
@@ -979,7 +992,7 @@ function handle(method, data) {
                                : `<i>— it's your opponent's turn (you'd only act with instants/abilities).</i>`)
                      + ` Pass, or use a skip button below to jump ahead.`;
             }
-            setPrompt(body, [{label:'Pass priority ▸', alt:true, onClick:()=>send('playerBoolean', false)}]);
+            setPrompt(body); // inline "pass ▸" button on the turn line handles passing priority
             break;
         }
         case 'GAME_PLAY_MANA': {
