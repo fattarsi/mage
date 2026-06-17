@@ -1,0 +1,21 @@
+# XMage Web Gateway — one-command run.
+#   docker compose up --build      # build (first time is slow) and start
+#   then open http://localhost:8080/
+services:
+  xmage-web:
+    build: .
+    image: xmage-web
+    ports:
+      - "8080:8080"
+    environment:
+      # Optional: point at your own "Deck Manager" REST API to load saved decks
+      # and enable Commander games. Leave empty to use pasted/random decks only.
+      XMAGE_WEB_DECK_SOURCE_URL: "${XMAGE_WEB_DECK_SOURCE_URL:-}"
+    # Persist the downloaded card art / price caches across restarts (optional).
+    volumes:
+      - xmage-image-cache:/app/image-cache
+      - xmage-cardinfo-cache:/app/cardinfo-cache
+
+volumes:
+  xmage-image-cache:
+  xmage-cardinfo-cache:

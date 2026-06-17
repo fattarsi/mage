@@ -1,0 +1,14 @@
+# keep the build context small and force a clean in-container build
+.git
+**/target
+db
+**/db
+image-cache
+cardinfo-cache
+gamesHistory
+*.log
+**/*.log
+.idea
+*.iml
+.vscode
+.DS_Store

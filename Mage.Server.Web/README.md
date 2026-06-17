@@ -8,9 +8,27 @@ Each browser connection gets its own game. The engine and all card
 implementations are the stock XMage ones; this module only adds the transport
 gateway (`Mage.Server.Web`) and a static web client (`src/main/resources/web/`).
 
-## Build
+## Run with Docker (easiest for others)
 
-From the repo root (JDK 17+, Maven):
+No JDK or Maven needed — just Docker. From the repo root:
+
+```bash
+docker compose up --build      # or: docker build -t xmage-web . && docker run --rm -p 8080:8080 xmage-web
+```
+
+Then open <http://localhost:8080/>. To enable a deck source (and Commander):
+
+```bash
+XMAGE_WEB_DECK_SOURCE_URL=https://your-deck-host docker compose up --build
+```
+
+> The first build compiles the full XMage card pool, so it is heavy — expect
+> several minutes and a few GB of RAM. After that, Docker layer caching makes
+> rebuilds fast unless sources change.
+
+## Build (local toolchain)
+
+If you prefer to build/run directly (JDK 17+, Maven), from the repo root:
 
 ```bash
 mvn -q -pl Mage.Server.Web -am install -DskipTests
