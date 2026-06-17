@@ -98,6 +98,8 @@ public class WebGatewayServer {
                     o.addProperty("id", String.valueOf(d.get("id")));
                     o.addProperty("name", String.valueOf(d.get("name")));
                     if (d.get("commander") != null) o.addProperty("commander", String.valueOf(d.get("commander")));
+                    if (d.get("cardCount") instanceof Number) o.addProperty("cardCount", ((Number) d.get("cardCount")).intValue());
+                    o.addProperty("active", Boolean.TRUE.equals(d.get("active")));
                     decks.add(o);
                 }
                 m.put("decks", decks);
@@ -403,13 +405,21 @@ public class WebGatewayServer {
                 throw new IllegalStateException("Commander vs AI needs a deck source (start with -Dxmage.web.deckSourceUrl=...).");
             }
             List<Map<String, Object>> all = deckSource.listDecks();
+            // only complete, active decks make legal commander opponents (skip incomplete/inactive ones)
             List<String> ids = new java.util.ArrayList<>();
             for (Map<String, Object> d : all) {
                 String did = String.valueOf(d.get("id"));
-                if (!did.equals(deckId)) ids.add(did); // prefer decks other than the human's
+                boolean active = Boolean.TRUE.equals(d.get("active"));
+                int count = d.get("cardCount") instanceof Number ? ((Number) d.get("cardCount")).intValue() : 0;
+                if (active && count >= 100 && !did.equals(deckId)) ids.add(did);
             }
-            if (ids.isEmpty()) for (Map<String, Object> d : all) ids.add(String.valueOf(d.get("id")));
-            if (ids.isEmpty()) throw new IllegalStateException("No decks available for AI commander opponents.");
+            if (ids.isEmpty()) { // last resort: any deck other than the human's
+                for (Map<String, Object> d : all) {
+                    String did = String.valueOf(d.get("id"));
+                    if (!did.equals(deckId)) ids.add(did);
+                }
+            }
+            if (ids.isEmpty()) throw new IllegalStateException("No complete commander decks available for AI opponents.");
             aiDecks = new java.util.ArrayList<>();
             for (int i = 0; i < fmt.aiSeats; i++) {
                 aiDecks.add(deckSource.fetchDeck(ids.get(i % ids.size())));

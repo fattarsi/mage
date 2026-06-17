@@ -208,7 +208,11 @@ function populateSetup() {
         document.getElementById('deckSourceLabel').textContent = readyData.deckSourceLabel || 'your site';
         readyData.decks.forEach(d => {
             const o=document.createElement('option'); o.value=d.id;
-            o.textContent = d.name + (d.commander ? ' — ' + d.commander : '');
+            const incomplete = (d.cardCount && d.cardCount < 100) || d.active === false;
+            o.textContent = d.name + (d.commander ? ' — ' + d.commander : '')
+                + (d.cardCount ? ' (' + d.cardCount + ')' : '')
+                + (incomplete ? ' ⚠ incomplete' : '');
+            if (incomplete) o.style.color = '#c99';
             deckSourceSel.appendChild(o);
         });
         document.getElementById('deckSourceWrap').style.display = 'block';
