@@ -1249,7 +1249,14 @@ public class HumanPlayer extends PlayerImpl {
             if (!quickStop && isGameUnderControl()) { // TODO: remove to enable skips for controlling player
 
                 if (passedAllTurns || passedTurnSkipStack) {
-                    if (passWithManaPoolCheck(game)) {
+                    // Stop skipping once when a new spell/ability appears on the stack, so the player can
+                    // respond (then skipping resumes). Honors the stopOnStackNewObjects toggle (default on).
+                    boolean stopForNewStackObject = !game.getStack().isEmpty()
+                            && !Objects.equals(dateLastAddedToStack, game.getStack().getDateLastAdded())
+                            && controllingUserData.getUserSkipPrioritySteps().isStopOnStackNewObjects();
+                    if (stopForNewStackObject) {
+                        dateLastAddedToStack = game.getStack().getDateLastAdded();
+                    } else if (passWithManaPoolCheck(game)) {
                         return false;
                     }
                 }
