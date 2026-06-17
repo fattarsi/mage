@@ -5,7 +5,7 @@
     <title>XMage Web — Play vs AI</title>
     <style>
         * { box-sizing: border-box; }
-        :root { --card-w: 104px; --bf-card-w: 78px; }
+        :root { --card-w: 104px; --bf-card-w: 78px; --opp-card-w: 78px; }
         body { font-family: system-ui, sans-serif; margin: 0; background: #14161a; color: #e7e7e7; }
         header { padding: 8px 14px; background: #1f242c; border-bottom: 1px solid #333;
                  display: flex; align-items: center; gap: 14px; }
@@ -89,6 +89,9 @@
         /* battlefield: type rows, with their own (smaller) card size */
         .bf { display: flex; flex-direction: column; gap: 3px; }
         .bf .card { width: var(--bf-card-w); min-height: calc(var(--bf-card-w) * 1.4); }
+        /* opponents get their own card size (when not compacted into the multi-player thumbnails or zoomed) */
+        #opponents > .player:not(.compact):not(.zoomed) .bf .card {
+            width: var(--opp-card-w); min-height: calc(var(--opp-card-w) * 1.4); }
         .bf .zone-label { margin: 2px 0 1px; }
         /* settings dropdown */
         #settingsBtn { background: #3a4150; font-size: 12px; padding: 5px 12px; }
@@ -175,6 +178,7 @@
 <div id="settings" style="display:none">
     <div class="setrow"><label>Hand card size</label><input type="range" id="zoom" min="64" max="220" step="4" value="104"></div>
     <div class="setrow"><label>Battlefield card size</label><input type="range" id="bfzoom" min="44" max="180" step="4" value="78"></div>
+    <div class="setrow"><label>Opponent card size</label><input type="range" id="oppzoom" min="44" max="180" step="4" value="78"></div>
     <div class="setrow"><label><input type="checkbox" id="viewerToggle"> Card viewer (hover preview)</label></div>
     <div class="setrow"><label><input type="checkbox" id="soundToggle"> Sound effects</label></div>
     <div class="setrow" style="border-top:1px solid #2c3340; padding-top:8px; margin-top:8px;">
@@ -280,6 +284,14 @@ bfzoom.oninput = () => {
     document.documentElement.style.setProperty('--bf-card-w', bfzoom.value + 'px');
     localStorage.setItem('bfZoom', bfzoom.value);
 };
+// opponent card size (independent of my battlefield)
+const oppzoom = document.getElementById('oppzoom');
+const savedOpp = localStorage.getItem('oppZoom');
+if (savedOpp) { oppzoom.value = savedOpp; document.documentElement.style.setProperty('--opp-card-w', savedOpp + 'px'); }
+oppzoom.oninput = () => {
+    document.documentElement.style.setProperty('--opp-card-w', oppzoom.value + 'px');
+    localStorage.setItem('oppZoom', oppzoom.value);
+};
 
 // hover card viewer (toggleable, persisted)
 const viewerToggle = document.getElementById('viewerToggle');
@@ -340,16 +352,15 @@ function showCardViewer(card) {
     clearTimeout(viewerHideTimer); clearTimeout(viewerRemoveTimer); // cancel pending auto-close
     viewerEl.classList.add('has-card');
     requestAnimationFrame(() => viewerEl.classList.add('show')); // fade in
-    const url = scryUrl(card);
-    if (url) { viewerImg.style.display = ''; viewerImg.src = url; } else { viewerImg.style.display = 'none'; }
+    if (artCandidates(card).length) { setCardImage(viewerImg, card); } else { viewerImg.onerror = null; viewerImg.style.display = 'none'; }
     const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
     const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
     const pt = (card.power !== undefined && (card.cardTypes||[]).includes('CREATURE')) ? `${card.power}/${card.toughness}`
              : (card.loyalty ? 'Loyalty ' + card.loyalty : '');
-    viewerInfo.innerHTML = `<span class="vc">${esc(cost)}</span><span class="vn">${esc(card.name||'?')}</span>`
+    viewerInfo.innerHTML = `<span class="vc">${esc(cost)}</span><span class="vn">${msg(card.name||'?')}</span>`
         + `<div class="vt">${esc(types)}</div>`
         + (pt ? `<div class="vpt">${esc(pt)}</div>` : '')
-        + (card.rules && card.rules.length ? `<div class="vr">${card.rules.map(esc).join('\n')}</div>` : '')
+        + (card.rules && card.rules.length ? `<div class="vr">${card.rules.map(msg).join('\n')}</div>` : '')
         + `<div class="vpr"></div>`;
     // price (cached, fetched from the gateway's Scryfall proxy)
     const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
@@ -580,17 +591,31 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','
 // XMage messages embed HTML-ish markup (e.g. <font color=#ff0>...</font>); strip tags for clean display
 function msg(s){return esc(String(s||'').replace(/<[^>]+>/g,''));}
 function strip(s){return String(s||'').replace(/<[^>]+>/g,'');}  // plain text (for title attributes)
-// art URL for a card: tokens (collector number "0") are looked up by name; others by set+number
-function artUrlFor(card) {
-    if (card.faceDown) return null;
+// Ordered list of art URLs to try for a card. Tokens (collector number "0") are looked up by
+// name; normal cards by set+number, and we always fall back to a by-name token search so that
+// tokens we failed to detect (or whose set/number art 404s) still resolve instead of going blank.
+function artCandidates(card) {
+    if (card.faceDown) return [];
+    const out = [];
     const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
-    if (card.isToken || rawNum === '0' || rawNum === 0) {
-        return card.name ? `/imgtoken/${encodeURIComponent(card.name)}` : null;
-    }
-    if (card.expansionSetCode && rawNum) {
-        return `/img/${encodeURIComponent(String(card.expansionSetCode).toLowerCase())}/${encodeURIComponent(rawNum)}`;
-    }
-    return null;
+    const set = card.expansionSetCode ? String(card.expansionSetCode).toLowerCase() : null;
+    const tokenish = card.isToken || rawNum === '0' || rawNum === 0;
+    if (!tokenish && set && rawNum) out.push(`/img/${encodeURIComponent(set)}/${encodeURIComponent(rawNum)}`);
+    if (card.name) out.push(`/imgtoken/${encodeURIComponent(card.name)}`);
+    return out;
+}
+function artUrlFor(card) { const c = artCandidates(card); return c.length ? c[0] : null; }
+// Point an <img> at a card's art, trying each candidate URL in turn on load failure.
+// On final failure: card tiles drop the <img> (text shows through); the viewer just hides it.
+function setCardImage(img, card) {
+    const urls = artCandidates(card);
+    let i = 0;
+    img.onerror = () => {
+        if (i < urls.length) { img.src = urls[i++]; }
+        else { img.onerror = null; if (img.classList.contains('art')) img.remove(); else img.style.display = 'none'; }
+    };
+    if (urls.length) { img.style.display = ''; img.onerror(); } // kick off the first attempt
+    else { img.onerror(); }
 }
 function untappedLandIds(gv) {
     const me = (gv.players||[]).find(p => p.controlled);
@@ -669,13 +694,11 @@ function cardEl(card, clickable) {
         + (pt ? `<div class="pt">${esc(pt)}</div>` : '');
     d.title = strip(`${card.name||'?'}${cost?'  '+cost:''}${pt?'  '+pt:''}`
         + (types?'\n'+types:'') + (card.rules&&card.rules.length?'\n\n'+card.rules.join('\n'):''));
-    // real card art (tokens looked up by name); on failure the text card shows through
-    const artUrl = artUrlFor(card);
-    if (artUrl) {
+    // real card art (tokens looked up by name, with fallback); on failure the text card shows through
+    if (artCandidates(card).length) {
         const img = document.createElement('img');
         img.className = 'art'; img.loading = 'lazy'; img.alt = card.name || '';
-        img.src = artUrl;
-        img.onerror = () => img.remove();
+        setCardImage(img, card);
         d.appendChild(img);
     }
     d.onmouseenter = () => showCardViewer(card);
