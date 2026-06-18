@@ -506,6 +506,9 @@ public class WebGatewayServer {
             playByWs.put(ctx.getSessionId(), existing);
             try {
                 server.gameJoin(existing.gameId, existing.mageSessionId);            // re-send game state
+                if (playOrchestrator != null) {                                       // re-subscribe to the game log chat
+                    playOrchestrator.joinGameChat(existing.gameId, existing.mageSessionId, "h-" + existing.mageSessionId.substring(0, 8));
+                }
                 server.sendPlayerString(existing.gameId, existing.mageSessionId, ""); // nudge re-send of the open request
             } catch (Exception e) {
                 logger.warn("web gateway: reconnect resync failed", e);

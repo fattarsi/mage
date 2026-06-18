@@ -120,6 +120,8 @@ public class RealGameOrchestrator {
             gameToTable.put(newGameId, tableId);
             // join the human to the game so HumanPlayer callbacks (priority, targets, ...) reach this session
             server.gameJoin(newGameId, humanSession);
+            // subscribe to the game chat too — XMage broadcasts the real game log there (plays/casts/etc.)
+            joinGameChat(newGameId, humanSession, humanName);
             logger.info("web gateway: human-vs-AI game started (" + gameType + "), gameId=" + newGameId);
             return newGameId;
         } catch (Exception e) {
@@ -129,6 +131,21 @@ public class RealGameOrchestrator {
                 // best-effort
             }
             throw e;
+        }
+    }
+
+    /** Subscribe a session to a game's chat room so it receives the game log (plays, casts, targets…). */
+    public void joinGameChat(UUID gameId, String sessionId, String userName) {
+        try {
+            managerFactory.gameManager().getChatId(gameId).ifPresent(chatId -> {
+                try {
+                    server.chatJoin(chatId, sessionId, userName);
+                } catch (Exception ignore) {
+                    // best-effort; log still works without it
+                }
+            });
+        } catch (Exception ignore) {
+            // best-effort
         }
     }
 

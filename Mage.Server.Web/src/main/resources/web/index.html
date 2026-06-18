@@ -35,9 +35,9 @@
         #phasebar .phs { display: flex; gap: 2px; flex-wrap: wrap; }
         #phasebar .ph { text-align: center; font-size: 10px; padding: 3px 5px; border-radius: 4px;
                         background: #1b2028; color: #8090a0; border: 1px solid #262d38; white-space: nowrap; }
-        #phasebar .ph.na { opacity: .45; }                 /* can't break here */
-        #phasebar .ph.cur { background: #2e5a8a; color: #fff; font-weight: 700; border-color: #3a6ea8; }
-        #phasebar .ph.bp { box-shadow: inset 0 0 0 2px #d76; color: #f0b9a0; } /* breakpoint set */
+        #phasebar .ph.cur { background: #2e7d46; color: #fff; font-weight: 700; border-color: #3fa05c; } /* current = green */
+        #phasebar .ph.bp { box-shadow: inset 0 0 0 2px #e0503a; color: #ffb4a4; border-color: #e0503a; }  /* breakpoint = red */
+        #phasebar .ph.cur.bp { box-shadow: inset 0 0 0 2px #e0503a; }    /* current AND breakpoint */
         #phasebar .ph.clickable { cursor: pointer; }
         #phasebar .ph.clickable:hover { background: #2b3340; color: #cde; }
         .player { border: 1px solid #2b313b; border-radius: 8px; padding: 8px; margin-bottom: 8px; background: #1a1e24; }
@@ -47,6 +47,10 @@
         /* multiplayer: opponents are compact by default; click the 🔍 to zoom one open as an overlay */
         #opponents { display: flex; gap: 8px; align-items: flex-start; }
         #opponents.multi > .player { flex: 1; }
+        /* eliminated/conceded opponent: shrink to just a label so the living players get the room */
+        #opponents.multi > .player.eliminated { flex: 0 0 auto; }
+        .player.eliminated { opacity: .5; filter: grayscale(.7); padding: 4px 8px; }
+        .player.eliminated .pname { text-decoration: line-through; }
         .player.compact .zone .card { width: 52px; min-height: 73px; font-size: 8px; padding: 2px 2px 10px; }
         .player.compact .card .rules { display: none; }
         /* a zoomed opponent expands as an overlay above the other play areas (not confined to its column) */
@@ -155,6 +159,8 @@
                       flex-direction: column; gap: 1px; align-items: flex-start; max-width: 80%; }
         .card .ctr { background: rgba(22,70,36,.92); color: #c6f0cf; font-size: 9px; font-weight: 700;
                      padding: 0 3px; border-radius: 3px; white-space: nowrap; }
+        .card .sick { position: absolute; left: 2px; top: 2px; z-index: 3; font-size: 11px;
+                      background: rgba(0,0,0,.6); border-radius: 3px; line-height: 1; padding: 1px; }
         #stack { border: 1px dashed #56607a; border-radius: 6px; padding: 6px; margin: 8px 0; }
         /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
         #skipbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 4px; margin: -2px 0 4px; }
@@ -444,6 +450,7 @@ ws.onclose = () => statusEl.textContent = 'disconnected';
 ws.onerror = () => statusEl.textContent = 'error';
 
 let lastGameView = null;
+let lastMethod = null, lastData = null;
 let playableIds = new Set();
 let validTargets = new Set();  // ids the server is currently asking us to pick (cards OR players)
 let priorityActive = false;    // true while the server is asking us to act at priority (GAME_SELECT)
@@ -498,6 +505,11 @@ const SKIPS = [
     {label:'Cancel skips (F3)',key:'F3', fn:()=>act('PASS_PRIORITY_CANCEL_ALL_ACTIONS')},
 ];
 const skipbar = document.getElementById('skipbar');
+// "run to breakpoint" button (shown only when breakpoints are set), then the standard skip buttons
+const advanceBtn = document.createElement('button');
+advanceBtn.id = 'advanceBtn'; advanceBtn.style.display = 'none'; advanceBtn.style.background = '#7a5a20';
+advanceBtn.textContent = '▶ Run to breakpoint'; advanceBtn.onclick = startAdvance;
+skipbar.appendChild(advanceBtn);
 SKIPS.forEach(s => { const b=document.createElement('button'); b.textContent=s.label; b.onclick=s.fn; skipbar.appendChild(b); });
 document.addEventListener('keydown', (e) => {
     if (document.getElementById('setup').style.display !== 'none') return; // don't skip while typing a deck
@@ -515,6 +527,8 @@ function populateSetup() {
     if (!readyData) return;
     if (formatSel.options.length === 0 && readyData.formats) {
         readyData.formats.forEach(f => { const o=document.createElement('option'); o.value=f.key; o.textContent=f.label; formatSel.appendChild(o); });
+        // default to 3-player Commander (you + 2 AI) if that format is offered
+        if ([...formatSel.options].some(o => o.value === 'commander3')) formatSel.value = 'commander3';
     }
     if (readyData.decks && deckSourceSel.options.length <= 1) {
         document.getElementById('deckSourceLabel').textContent = readyData.deckSourceLabel || 'your site';
@@ -703,8 +717,6 @@ ws.onmessage = (ev) => {
     let msg;
     try { msg = JSON.parse(ev.data); } catch (e) { showError('bad JSON frame'); return; }
     const data = msg.data || {};
-    if (msg.method && msg.method.startsWith('GAME_') && msg.method !== 'GAME_UPDATE')
-        logc('recv', '← ' + msg.method + (data.message ? ': ' + data.message : ''));
     try {
         // update the valid-target highlight set BEFORE rendering, so highlights show this frame
         if (msg.method === 'GAME_TARGET') validTargets = new Set(data.targets || []);
@@ -726,6 +738,8 @@ ws.onmessage = (ev) => {
         handle(msg.method, data);
         soundForFrame(msg.method, data, gv);
         if (gv) drawArrows(gv);
+        lastMethod = msg.method; lastData = data;
+        tryAdvance(msg.method, gv || lastGameView); // "run to breakpoint" auto-advance
     } catch (e) {
         showError((e && e.message || e) + ' (method ' + msg.method + ')');
     }
@@ -773,9 +787,12 @@ function cardEl(card, clickable) {
     const ptBadge = pt ? `${pt}` : (card.loyalty ? `◆${card.loyalty}` : '');
     const counterBadges = counters.map(c =>
         `<span class="ctr" title="${esc(c.name)} counters">${msg(c.name)}${c.count>1?' ×'+c.count:''}</span>`).join('');
+    // summoning sickness: a creature that came under control this turn can't attack/tap for abilities
+    const sick = isCreature && card.summoningSickness;
     d.innerHTML = `<span class="cc">${esc(cost)}</span><span class="cn">${card.isAbility?'⚡ ':''}${msg(card.name||'?')}</span>`
         + `<div class="ct">${esc(types)}</div>`
         + (card.rules && card.rules.length ? `<div class="rules">${msg(card.rules.join(' • '))}</div>` : '')
+        + (sick ? `<div class="sick" title="Summoning sickness — can't attack or tap this turn">💤</div>` : '')
         + (counterBadges ? `<div class="ctrs">${counterBadges}</div>` : '')
         + (ptBadge ? `<div class="ptbadge">${esc(ptBadge)}</div>` : '');
     d.title = strip(`${card.name||'?'}${cost?'  '+cost:''}${pt?'  '+pt:''}`
@@ -805,23 +822,24 @@ const PHASE_SKIP = {
     PRECOMBAT_MAIN: 'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE', POSTCOMBAT_MAIN: 'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE',
     END_TURN: 'PASS_PRIORITY_UNTIL_TURN_END_STEP', CLEANUP: 'PASS_PRIORITY_UNTIL_TURN_END_STEP'
 };
-// Which phase cells can be real breakpoints (the engine only stops where the human can act).
-// Maps a phase to the skip-stop toggle it corresponds to.
-const MY_PHASE_STOP  = { PRECOMBAT_MAIN:'stopMains', POSTCOMBAT_MAIN:'stopMains',
-                         DECLARE_ATTACKERS:'stopAttackers', END_TURN:'stopEnds', CLEANUP:'stopEnds' };
-const OPP_PHASE_STOP = { DECLARE_BLOCKERS:'stopBlockers' }; // I get to act (block) during an opponent's combat
-const STOP_DESC = { stopMains:'at your main phases', stopEnds:'at your end step',
-                    stopAttackers:'when you can declare attackers', stopBlockers:'when you can block' };
-const phaseExpanded = {}; // opponent playerId -> expanded?
-function breakOn(box) { const e = document.getElementById(box); return e && e.checked; }
-function toggleBreak(box) {
-    const e = document.getElementById(box); if (!e) return;
-    e.checked = !e.checked; sendSkips();           // sync with the Settings checkbox + push to server
+// Breakpoints: a per-(player, phase) set, enforced client-side by "run to breakpoint" auto-advance —
+// so you can break at ANY phase of ANY player, not only the engine's built-in stop points.
+const phaseExpanded = {};      // opponent playerId -> expanded?
+const breakpoints = new Set(); // keys: `${playerId}|${phaseKey}`
+function bpKey(pid, key) { return pid + '|' + key; }
+function toggleBreakpoint(pid, key) {
+    const k = bpKey(pid, key);
+    if (breakpoints.has(k)) breakpoints.delete(k); else breakpoints.add(k);
     if (lastGameView) renderPhaseBar(lastGameView);
+    updateAdvanceBtn();
+}
+function atBreakpoint(gv) {
+    let s = gv.step || ''; if (s === 'FIRST_COMBAT_DAMAGE') s = 'COMBAT_DAMAGE';
+    return breakpoints.has(bpKey(gv.activePlayerId, s));
 }
 // Looped, per-player phase bar: starts at the active player and goes around back to you. Your turn is
-// expanded; opponents collapse to a pill you can click to expand. Click a highlightable phase cell to
-// toggle a breakpoint (pause there). Skipping ahead (skip bar) stops at the next breakpoint.
+// expanded; opponents collapse to a pill you can click to expand. Click ANY phase cell to toggle a
+// breakpoint. Current phase = green, breakpoint = red. Use "▶ Run to breakpoint" to auto-pass to one.
 function renderPhaseBar(gv) {
     const bar = document.getElementById('phasebar');
     bar.innerHTML = '';
@@ -850,17 +868,11 @@ function renderPhaseBar(gv) {
             PHASE_STEPS.forEach(([key, label]) => {
                 const d = document.createElement('div');
                 const isCur = isActive && key === cur;
-                d.className = 'ph' + (isCur ? ' cur' : '');
+                const isBp = breakpoints.has(bpKey(p.playerId, key));
+                d.className = 'ph clickable' + (isCur ? ' cur' : '') + (isBp ? ' bp' : '');
                 d.textContent = label;
-                const stop = isMe ? MY_PHASE_STOP[key] : OPP_PHASE_STOP[key];
-                if (stop) { // a real, engine-supported breakpoint
-                    d.classList.add('clickable', 'bpable');
-                    if (breakOn(stop)) d.classList.add('bp');
-                    d.title = (breakOn(stop) ? 'Remove breakpoint — was pausing ' : 'Set breakpoint — pause ') + (STOP_DESC[stop] || '');
-                    d.onclick = () => toggleBreak(stop);
-                } else {
-                    d.classList.add('na'); // can't break here (no decision point for you)
-                }
+                d.title = (isBp ? 'Remove' : 'Set') + ' breakpoint at ' + (isMe ? 'your ' : strip(p.name) + "'s ") + label;
+                d.onclick = () => toggleBreakpoint(p.playerId, key);
                 phs.appendChild(d);
             });
             block.appendChild(phs);
@@ -871,6 +883,25 @@ function renderPhaseBar(gv) {
         }
         bar.appendChild(block);
     }
+}
+
+// --- "run to breakpoint": auto-pass priority until a breakpoint phase (or a decision that needs you) ---
+let advancing = false;
+function updateAdvanceBtn() {
+    const b = document.getElementById('advanceBtn'); if (!b) return;
+    b.style.display = breakpoints.size ? '' : 'none';
+    b.textContent = advancing ? '⏸ Stop' : '▶ Run to breakpoint';
+}
+function startAdvance() { advancing = !advancing; updateAdvanceBtn(); if (advancing) tryAdvance(lastMethod, lastGameView); }
+// called after each frame: if we're advancing and it's safe to pass, pass; otherwise stop at the decision/breakpoint
+function tryAdvance(method, gv) {
+    if (!advancing) return;
+    if (method !== 'GAME_SELECT') { advancing = false; updateAdvanceBtn(); return; } // a real decision arrived
+    if (!gv) return;
+    const raw = String((lastData && lastData.message) || '').toLowerCase();
+    if (/select attackers|select blockers/.test(raw)) { advancing = false; updateAdvanceBtn(); return; } // my combat
+    if (atBreakpoint(gv)) { advancing = false; updateAdvanceBtn(); return; }                              // reached a breakpoint
+    send('playerBoolean', false); // pass priority and keep going
 }
 
 // collapsible card zone (graveyard / exile / emblems), expand state persisted per key across re-renders
@@ -1013,11 +1044,12 @@ function renderBoard(gv) {
 
     function pheadHtml(p, active, isOpp) {
         const tgt = validTargets.has(p.playerId) ? ' targetable' : '';
-        const zoomBtn = isOpp
+        const zoomBtn = (isOpp && !p.hasLeft)
             ? `<button class="zoombtn" onclick="event.stopPropagation(); toggleOppZoom('${p.playerId}')">${oppZoomed[p.playerId] ? '✕ close' : '🔍 zoom'}</button> `
             : '';
         return `<div class="phead clickable${tgt}" data-pid="${p.playerId}" onclick="pickPlayer('${p.playerId}')" title="click to target this player">`
             + zoomBtn
+            + (p.hasLeft ? `<span class="out" title="out of the game">💀</span> ` : '')
             + (p.monarch ? `<span class="crown" title="Monarch">👑</span> ` : '')
             + `<span class="pname">${esc(p.name)}</span> `
             + `<span class="life">♥ ${p.life}</span> `
@@ -1033,19 +1065,23 @@ function renderBoard(gv) {
     for (const opp of opponents) {
         const panel = document.createElement('div');
         const zoomed = !!oppZoomed[opp.playerId];
-        panel.className = 'player' + (opponents.length > 1 && !zoomed ? ' compact' : '') + (zoomed ? ' zoomed' : '')
+        const out = !!opp.hasLeft; // eliminated / conceded — minimize to free up room
+        panel.className = 'player' + (out ? ' eliminated' : '')
+            + (!out && opponents.length > 1 && !zoomed ? ' compact' : '') + (!out && zoomed ? ' zoomed' : '')
             + (gv.activePlayerId === opp.playerId ? ' activeturn' : '');
         panel.innerHTML = pheadHtml(opp, gv.activePlayerId === opp.playerId, true);
-        // battlefield + a collapsed commander section to its right
-        const row = document.createElement('div'); row.className = 'opp-row';
-        row.appendChild(battlefieldEl(opp.battlefield, true)); // mirrored; clickable as targets
-        if (opp.commandList && opp.commandList.length) row.appendChild(oppCommanderEl(opp));
-        panel.appendChild(row);
-        // opponent graveyard / exile chips
-        const oz = document.createElement('div'); oz.className = 'oppzones';
-        oz.appendChild(collapsibleZone('Graveyard', opp.graveyard, 'gy-' + opp.playerId));
-        oz.appendChild(collapsibleZone('Exile', opp.exile, 'ex-' + opp.playerId));
-        panel.appendChild(oz);
+        if (!out) {
+            // battlefield + a collapsed commander section to its right
+            const row = document.createElement('div'); row.className = 'opp-row';
+            row.appendChild(battlefieldEl(opp.battlefield, true)); // mirrored; clickable as targets
+            if (opp.commandList && opp.commandList.length) row.appendChild(oppCommanderEl(opp));
+            panel.appendChild(row);
+            // opponent graveyard / exile chips
+            const oz = document.createElement('div'); oz.className = 'oppzones';
+            oz.appendChild(collapsibleZone('Graveyard', opp.graveyard, 'gy-' + opp.playerId));
+            oz.appendChild(collapsibleZone('Exile', opp.exile, 'ex-' + opp.playerId));
+            panel.appendChild(oz);
+        }
         opponentsEl.appendChild(panel);
     }
 
@@ -1121,10 +1157,11 @@ function handle(method, data) {
         case 'GAME_SELECT': { // priority: play a card / declare attackers or blockers / pass
             const raw = String(data.message || '');
             if (/select attackers/i.test(raw)) {
-                setPrompt('<b>⚔ Declare attackers.</b> Click your highlighted creatures to attack. '
-                    + 'If there\'s more than one target (a player or a planeswalker) you\'ll then pick which to attack. '
-                    + 'Click Done when finished.',
-                    [{label:'Done attacking ▸', onClick:()=>send('playerBoolean', false)}]);
+                setPrompt('<b>⚔ Declare attackers.</b> Click your highlighted creatures to attack '
+                    + '(then pick which opponent/planeswalker). Or use <b>Attack all</b> to send everyone, '
+                    + 'then choose a target. Click Done when finished.',
+                    [{label:'⚔ Attack all', onClick:()=>send('playerString', 'special')}, // engine: 'special' = all-attack
+                     {label:'Done attacking ▸', alt:true, onClick:()=>send('playerBoolean', false)}]);
                 break;
             }
             if (/select blockers/i.test(raw)) {
@@ -1229,14 +1266,19 @@ function handle(method, data) {
             log('GAME OVER: ' + (data.message||'')); break;
 
         case 'GAME_UPDATE': case 'GAME_UPDATE_AND_INFORM':
-            if (data.message) log(data.message);
+            // these carry only "PHASE - Waiting for X" status (shown in the turn bar already), not the
+            // real game log — don't clutter the log panel with them. Actual events arrive via CHATMESSAGE.
             break;
         case 'SHOW_USERMESSAGE': {
             const t = data.message || data.text || (typeof data === 'string' ? data : JSON.stringify(data));
             showBanner(t); break; // e.g. server-side deck/join validation messages
         }
-        case 'GAME_INFORM_PERSONAL': case 'GAME_ERROR': case 'CHATMESSAGE':
-            if (data.message) log(data.message); break;
+        case 'GAME_INFORM_PERSONAL': case 'GAME_ERROR': case 'CHATMESSAGE': {
+            // CHATMESSAGE on a vs-AI game IS the game log (plays, casts incl. targets, combat, etc.)
+            const txt = (data.username ? data.username + ': ' : '') + (data.message || '');
+            if (data.message) log(txt);
+            break;
+        }
     }
 }
 </script>
