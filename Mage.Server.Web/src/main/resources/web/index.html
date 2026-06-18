@@ -127,6 +127,16 @@
         .card .cc { float: right; color: #ad8; }
         .card .ct { color: #89a; font-size: 9px; }
         .card .rules { color: #aab; font-size: 9px; margin-top: 2px; max-height: 40px; overflow: hidden; }
+        /* attached auras/equipment: stacked under their host creature, shown as text strips */
+        .permstack { display: flex; flex-direction: column; align-items: stretch; gap: 0; width: var(--bf-card-w); }
+        .permstack > .card { width: 100%; }
+        .permstack > .card.attached { min-height: 0; margin-top: -3px; border-top: 0;
+            border-top-left-radius: 0; border-top-right-radius: 0; background: #222a36; padding: 2px 4px; }
+        .card.attached img.art { display: none; }                 /* show the text, not the art, for attachments */
+        .card.attached .cn { font-size: 9px; }
+        .card.attached .ct { display: none; }
+        .card.attached .rules { display: block; max-height: none; font-size: 8px; }
+        .card.attached .ptbadge { position: static; background: none; padding: 0; display: inline; }
         /* P/T (or loyalty) and counters drawn on top of the art so they're always visible */
         .card .ptbadge { position: absolute; right: 2px; bottom: 2px; z-index: 3; font-weight: 700;
                          color: #ffe9a8; background: rgba(0,0,0,.78); padding: 0 4px; border-radius: 4px; font-size: 11px; }
@@ -875,14 +885,40 @@ function classifyPerm(p) {
 // artifacts/enchantments/walkers, then lands. Opponents are mirrored (lands at top).
 function battlefieldEl(battlefield, mirrored) {
     const wrap = document.createElement('div'); wrap.className = 'bf';
+    const perms = Object.values(battlefield || {});
+    const byId = {}; perms.forEach(p => { if (p.id) byId[p.id] = p; });
+    // an aura/equipment attached to a permanent that's present is drawn UNDER its host, not standalone
+    const isAttached = p => p.attachedTo && byId[p.attachedTo];
     const groups = { creature: [], other: [], land: [] };
-    Object.values(battlefield || {}).forEach(p => groups[classifyPerm(p)].push(p));
+    perms.forEach(p => { if (!isAttached(p)) groups[classifyPerm(p)].push(p); });
     const order = mirrored ? ['land', 'other', 'creature'] : ['creature', 'other', 'land'];
     const labels = { creature: 'Creatures', other: 'Artifacts / Enchantments / Walkers', land: 'Lands' };
     let any = false;
-    order.forEach(g => { if (groups[g].length) { any = true; wrap.appendChild(zone(labels[g], groups[g], true)); } });
+    order.forEach(g => { if (groups[g].length) { any = true; wrap.appendChild(bfZone(labels[g], groups[g], byId)); } });
     if (!any) { const e = document.createElement('div'); e.className = 'meta'; e.textContent = '— empty —'; wrap.appendChild(e); }
     return wrap;
+}
+// a battlefield zone where each permanent carries its attachments (auras/equipment) stacked beneath it
+function bfZone(label, perms, byId) {
+    const wrap = document.createElement('div');
+    const l = document.createElement('div'); l.className = 'zone-label'; l.textContent = label;
+    const z = document.createElement('div'); z.className = 'zone';
+    for (const p of perms) z.appendChild(permStack(p, byId));
+    wrap.appendChild(l); wrap.appendChild(z);
+    return wrap;
+}
+function permStack(host, byId) {
+    const ids = new Set((host.attachments || []).filter(id => byId[id]));
+    // also catch anything pointing at this host that wasn't in its attachments list
+    Object.values(byId).forEach(p => { if (p.attachedTo === host.id) ids.add(p.id); });
+    if (!ids.size) return cardEl(host, true); // nothing attached → plain card
+    const col = document.createElement('div'); col.className = 'permstack';
+    col.appendChild(cardEl(host, true)); // creature on top
+    ids.forEach(id => {
+        const ae = cardEl(byId[id], true); ae.classList.add('attached'); // aura/equipment text shows beneath
+        col.appendChild(ae);
+    });
+    return col;
 }
 
 function zone(label, cardsMap, clickable) {

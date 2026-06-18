@@ -80,10 +80,10 @@ public class RealGameOrchestrator {
         }
         options.setDeckType(deckType);
         options.setLimited(false);
-        options.setAttackOption(MultiplayerAttackOption.LEFT);
+        options.setAttackOption(MultiplayerAttackOption.MULTIPLE); // free-for-all: attack any opponent
         options.setRange(RangeOfInfluence.ALL);
         options.setWinsNeeded(1);
-        options.setMatchTimeLimit(MatchTimeLimit.MIN__15);
+        options.setMatchTimeLimit(MatchTimeLimit.NONE);      // no priority clock (don't kick idle players)
 
         TableView table = server.roomCreateTable(humanSession, room, options);
         if (table == null) {
@@ -179,10 +179,10 @@ public class RealGameOrchestrator {
         options.getPlayerTypes().add(PlayerType.COMPUTER_MAD);
         options.setDeckType(DECK_TYPE);
         options.setLimited(false);
-        options.setAttackOption(MultiplayerAttackOption.LEFT);
+        options.setAttackOption(MultiplayerAttackOption.MULTIPLE); // free-for-all: attack any opponent
         options.setRange(RangeOfInfluence.ALL);
         options.setWinsNeeded(1);
-        options.setMatchTimeLimit(MatchTimeLimit.MIN__15);
+        options.setMatchTimeLimit(MatchTimeLimit.NONE);      // no priority clock (don't kick idle players)
 
         TableView table = server.roomCreateTable(hostSession, roomId, options);
         UUID tableId = table.getTableId();
