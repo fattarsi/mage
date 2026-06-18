@@ -51,7 +51,8 @@
         #opponents.multi > .player.eliminated { flex: 0 0 auto; }
         .player.eliminated { opacity: .5; filter: grayscale(.7); padding: 4px 8px; }
         .player.eliminated .pname { text-decoration: line-through; }
-        .player.compact .zone .card { width: 52px; height: 73px; font-size: 8px; padding: 2px 2px 10px; }
+        .player.compact .zone .card { width: var(--opp-card-w); height: calc(var(--opp-card-w) * 1.4);
+            min-height: 0; font-size: 8px; padding: 2px 2px 10px; } /* honor the opponent size slider */
         .player.compact .card .rules { display: none; }
         /* a zoomed opponent expands as an overlay above the other play areas (not confined to its column) */
         .player.zoomed { position: fixed; top: 50px; left: 10px; right: 356px; max-height: 76vh; overflow: auto;
@@ -92,7 +93,7 @@
                             font-size: 12px; font-weight: 600; color: #cde; }
         #zpClose { background: #3a2e2e; font-size: 12px; padding: 2px 9px; }
         #zpCards { display: flex; flex-wrap: wrap; gap: 5px; }
-        #zpCards .card { width: var(--bf-card-w); height: calc(var(--bf-card-w) * 1.4); } /* battlefield size */
+        #zpCards .card { width: var(--bf-card-w); height: calc(var(--bf-card-w) * 1.4); min-height: 0; } /* battlefield size */
         #sideMana { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 18px; }
         .manaicon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
                     border-radius: 50%; font-size: 11px; font-weight: 800; color: #111; border: 1px solid rgba(0,0,0,.3); }
@@ -131,11 +132,12 @@
         .zone { display: flex; flex-wrap: wrap; gap: 5px; min-height: 8px; }
         /* battlefield: type rows, with their own (smaller) card size */
         .bf { display: flex; flex-direction: column; gap: 3px; }
-        /* fixed (not min-) height so text-heavy permanents like commanders don't grow taller than others */
-        .bf .card { width: var(--bf-card-w); height: calc(var(--bf-card-w) * 1.4); }
+        /* fixed (not min-) height so text-heavy permanents like commanders don't grow taller than others;
+           min-height:0 is required to cancel the hand-sized .card min-height (else the ratio breaks/clips) */
+        .bf .card { width: var(--bf-card-w); height: calc(var(--bf-card-w) * 1.4); min-height: 0; }
         /* opponents get their own card size (when not compacted into the multi-player thumbnails or zoomed) */
         #opponents > .player:not(.compact):not(.zoomed) .bf .card {
-            width: var(--opp-card-w); height: calc(var(--opp-card-w) * 1.4); }
+            width: var(--opp-card-w); height: calc(var(--opp-card-w) * 1.4); min-height: 0; }
         .bf .zone-label { margin: 2px 0 1px; }
         /* settings dropdown */
         #settingsBtn { background: #3a4150; font-size: 12px; padding: 5px 12px; }
@@ -166,7 +168,7 @@
         .card .rules { color: #aab; font-size: 9px; margin-top: 2px; max-height: 40px; overflow: hidden; }
         /* attached auras/equipment: stacked under their host creature, shown as text strips */
         .permstack { display: flex; flex-direction: column; align-items: stretch; gap: 0; width: var(--bf-card-w); }
-        .permstack > .card { width: 100%; height: calc(var(--bf-card-w) * 1.4); } /* host = battlefield size */
+        .permstack > .card { width: 100%; height: calc(var(--bf-card-w) * 1.4); min-height: 0; } /* host = battlefield size */
         .permstack > .card.attached { height: auto; min-height: 0; margin-top: -3px; border-top: 0;
             border-top-left-radius: 0; border-top-right-radius: 0; background: #222a36; padding: 2px 4px; }
         .card.attached img.art { display: none; }                 /* show the text, not the art, for attachments */
