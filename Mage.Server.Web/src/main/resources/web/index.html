@@ -942,14 +942,19 @@ function renderPhaseBar(gv) {
     let cur = gv.step || '';
     if (cur === 'FIRST_COMBAT_DAMAGE') cur = 'COMBAT_DAMAGE';
     const players = gv.players || [];
-    const n = players.length;
+    if (!players.length) return;
+    // order by the REAL turn order (gv.playerOrder, seat/"left" order) — NOT the players[] map order
+    const byId = {}; players.forEach(p => { byId[p.playerId] = p; });
+    const order = (gv.playerOrder && gv.playerOrder.length ? gv.playerOrder : players.map(p => p.playerId))
+        .map(id => byId[id]).filter(Boolean);
+    const n = order.length;
     if (!n) return;
-    let start = players.findIndex(p => p.playerId === gv.activePlayerId);
+    let start = order.findIndex(p => p.playerId === gv.activePlayerId);
     if (start < 0) start = 0;
     const curIdx = Math.max(0, PHASE_STEPS.findIndex(s => s[0] === cur));
     const row = document.createElement('div'); row.className = 'phaserow';
     for (let k = 0; k < n; k++) {
-        const p = players[(start + k) % n]; // turn order, starting at the active player
+        const p = order[(start + k) % n]; // turn order, starting at the active player
         const isMe = !!p.controlled;
         const isActive = p.playerId === gv.activePlayerId;
         const chip = document.createElement('span');
