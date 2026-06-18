@@ -75,15 +75,28 @@
         #commanderHeader { cursor: pointer; font-size: 12px; color: #cdd; font-weight: 600; user-select: none; }
         #commanderHeader:hover { color: #fff; }
         #commanderBody { margin-top: 6px; }
-        /* right sidebar: hover card viewer (top) + collapsible log (below) */
-        #rightbar { position: fixed; right: 10px; top: 64px; width: 336px; z-index: 40;
-                    display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-        #viewer { display: none; opacity: 0; transition: opacity .55s ease; width: 100%; background: #1b212b;
-                  border: 1px solid #3a4658; border-radius: 9px; padding: 9px; box-shadow: 0 8px 28px rgba(0,0,0,.55);
-                  pointer-events: auto; }
-        body.viewer-on #viewer.has-card { display: block; }
-        #viewer.show { opacity: 1; }
+        /* fixed right column (always present, never overlaps content): viewer + mana + zone buttons + sliders */
+        :root { --sidecol-w: 340px; }
+        #sidecol { position: fixed; right: 0; top: 52px; bottom: 0; width: var(--sidecol-w); z-index: 40;
+                   display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow-y: auto;
+                   background: #14171c; border-left: 1px solid #2b313b; }
+        #board, #logBar { margin-right: var(--sidecol-w); }   /* reserve room so nothing hides under the column */
+        #viewer { width: 100%; background: #1b212b; border: 1px solid #3a4658; border-radius: 9px; padding: 9px; }
         #viewerInfo .vpr { color: #8fd29a; font-size: 12px; margin-top: 4px; }
+        #sideZone { max-height: 38vh; overflow-y: auto; background: #161a20; border: 1px solid #2b313b;
+                    border-radius: 8px; padding: 6px; }
+        #sideMana { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 18px; }
+        .manaicon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
+                    border-radius: 50%; font-size: 11px; font-weight: 800; color: #111; border: 1px solid rgba(0,0,0,.3); }
+        .manaicon .mc { margin-left: 2px; color: #fff; font-weight: 700; }
+        #sideBtns { display: flex; gap: 5px; flex-wrap: wrap; }
+        .sidebtn { background: #2e3a4a; font-size: 12px; padding: 5px 9px; flex: 1 1 auto; }
+        .sidebtn:hover { background: #3d4d63; }
+        .sidebtn.active { background: #34507a; }
+        #sideSpacer { flex: 1 1 auto; }      /* push the sliders to the bottom */
+        #sideSliders .setrow { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #9ab; margin: 2px 0; }
+        #sideSliders label { flex: 0 0 96px; }
+        #sideSliders input[type=range] { flex: 1 1 auto; }
         #arrows { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 38; }
         #logBar { border-top: 1px solid #2b313b; background: #1b2028; padding: 4px 14px 8px; }
         #logHeader { cursor: pointer; font-size: 12px; color: #9ab; font-weight: 600; user-select: none; padding: 4px 0; }
@@ -220,10 +233,8 @@
 </header>
 
 <div id="settings" style="display:none">
-    <div class="setrow"><label>Hand card size</label><input type="range" id="zoom" min="64" max="220" step="4" value="104"></div>
-    <div class="setrow"><label>Battlefield card size</label><input type="range" id="bfzoom" min="44" max="180" step="4" value="78"></div>
-    <div class="setrow"><label>Opponent card size</label><input type="range" id="oppzoom" min="44" max="180" step="4" value="78"></div>
-    <div class="setrow"><label><input type="checkbox" id="viewerToggle"> Card viewer (hover preview)</label></div>
+    <div class="setrow hint" style="color:#9ab">Card sizes are in the right column ▸</div>
+    <div class="setrow"><label><input type="checkbox" id="viewerToggle" checked> Update viewer on hover</label></div>
     <div class="setrow"><label><input type="checkbox" id="soundToggle"> Sound effects</label></div>
     <div class="setrow" style="border-top:1px solid #2c3340; padding-top:8px; margin-top:8px;">
         <b style="color:#cde">When skipping (e.g. “My next turn”), stop if…</b>
@@ -244,6 +255,12 @@
         <div id="deckSourceWrap" style="display:none">
             <label for="deckSourceSel">Load a deck from <span id="deckSourceLabel">your site</span></label>
             <select id="deckSourceSel"><option value="">— none (use pasted or random) —</option></select>
+        </div>
+        <div id="aiDecksWrap" style="display:none">
+            <label>AI opponent decks (optional — leave as auto to let the host pick)</label>
+            <select class="aiDeckSel"><option value="">— AI 1: auto —</option></select>
+            <select class="aiDeckSel"><option value="">— AI 2: auto —</option></select>
+            <select class="aiDeckSel"><option value="">— AI 3: auto —</option></select>
         </div>
         <label for="deckInput">Your deck — paste a decklist, or leave blank for a random deck</label>
         <textarea id="deckInput" placeholder="4 Lightning Bolt&#10;4 Monastery Swiftspear&#10;20 Mountain&#10;...&#10;&#10;(plain '<count> <card name>' per line, or paste an XMage .dck)"></textarea>
@@ -279,17 +296,27 @@
     <div id="log" style="display:none"></div>
 </div>
 
-<div id="rightbar">
-    <svg id="arrows" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-        <marker id="ahead-atk" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e55"/></marker>
-        <marker id="ahead-blk" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5af"/></marker>
-    </defs>
+<svg id="arrows" xmlns="http://www.w3.org/2000/svg">
+<defs>
+    <marker id="ahead-atk" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e55"/></marker>
+    <marker id="ahead-blk" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5af"/></marker>
+</defs>
 </svg>
-<div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"></div></div>
-    <div id="commanderPanel" style="display:none">
-        <div id="commanderHeader">▸ Commander</div>
-        <div id="commanderBody" class="zone" style="display:none"></div>
+<!-- fixed right column: card viewer (top), then floating mana, zone buttons, and size sliders (bottom) -->
+<div id="sidecol">
+    <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"><span class="meta">Hover a card to preview it here.</span></div></div>
+    <div id="sideZone" class="zone" style="display:none"></div>
+    <div id="sideMana" class="meta">No floating mana</div>
+    <div id="sideBtns">
+        <button id="btnCommander" class="sidebtn">Commander</button>
+        <button id="btnGrave" class="sidebtn">Graveyard</button>
+        <button id="btnExile" class="sidebtn">Exile</button>
+    </div>
+    <div id="sideSpacer"></div>
+    <div id="sideSliders">
+        <div class="setrow"><label>Hand card size</label><input type="range" id="zoom" min="64" max="220" step="4" value="104"></div>
+        <div class="setrow"><label>Battlefield card size</label><input type="range" id="bfzoom" min="44" max="180" step="4" value="78"></div>
+        <div class="setrow"><label>Opponent card size</label><input type="range" id="oppzoom" min="44" max="180" step="4" value="78"></div>
     </div>
 </div>
 
@@ -346,30 +373,59 @@ oppzoom.oninput = () => {
     localStorage.setItem('oppZoom', oppzoom.value);
 };
 
-// hover card viewer (toggleable, persisted)
+// card viewer lives in the fixed right column; "Update viewer on hover" just gates whether hover changes it
 const viewerToggle = document.getElementById('viewerToggle');
 const viewerEl = document.getElementById('viewer');
 const viewerImg = document.getElementById('viewerImg');
 const viewerInfo = document.getElementById('viewerInfo');
-if (localStorage.getItem('viewerOn') === '1') { viewerToggle.checked = true; document.body.classList.add('viewer-on'); }
-viewerToggle.onchange = () => {
-    document.body.classList.toggle('viewer-on', viewerToggle.checked);
-    localStorage.setItem('viewerOn', viewerToggle.checked ? '1' : '0');
-};
+viewerToggle.onchange = () => localStorage.setItem('viewerHover', viewerToggle.checked ? '1' : '0');
+if (localStorage.getItem('viewerHover') === '0') viewerToggle.checked = false;
 function scryUrl(card) { return artUrlFor(card); }
-// collapsible commander section (left side), hidden by default; click the header to expand
-let commanderExpanded = false;
-const commanderPanel = document.getElementById('commanderPanel');
-const commanderHeader = document.getElementById('commanderHeader');
-const commanderBody = document.getElementById('commanderBody');
-commanderHeader.onclick = () => { commanderExpanded = !commanderExpanded; if (lastGameView) renderBoard(lastGameView); };
-function renderCommanderPanel(commandList) {
-    if (!commandList.length) { commanderPanel.style.display = 'none'; return; }
-    commanderPanel.style.display = 'block';
-    commanderHeader.textContent = (commanderExpanded ? '▾ ' : '▸ ') + 'Commander (' + commandList.length + ')';
-    commanderBody.style.display = commanderExpanded ? 'flex' : 'none';
-    commanderBody.innerHTML = '';
-    if (commanderExpanded) commandList.forEach(c => commanderBody.appendChild(cardEl(c, true))); // click to cast
+
+// --- right-column zone buttons: Commander / Graveyard / Exile toggle a card list under the viewer ---
+const sideZoneEl = document.getElementById('sideZone');
+const sideManaEl = document.getElementById('sideMana');
+let sideView = null; // null | 'commander' | 'grave' | 'exile'
+function myView() { return (lastGameView && (lastGameView.players||[]).find(p => p.controlled)) || null; }
+function zoneCards(me, which) {
+    if (!me) return [];
+    if (which === 'commander') return Array.isArray(me.commandList) ? me.commandList : Object.values(me.commandList || {});
+    if (which === 'grave') return Object.values(me.graveyard || {});
+    if (which === 'exile') return Object.values(me.exile || {});
+    return [];
+}
+function setSideView(which) { sideView = (sideView === which) ? null : which; renderSide(); }
+document.getElementById('btnCommander').onclick = () => setSideView('commander');
+document.getElementById('btnGrave').onclick = () => setSideView('grave');
+document.getElementById('btnExile').onclick = () => setSideView('exile');
+// keep the old name working (renderBoard calls it) — now drives the whole side column
+function renderCommanderPanel() { renderSide(); }
+function renderSide() {
+    const me = myView();
+    const counts = { commander: zoneCards(me,'commander').length, grave: zoneCards(me,'grave').length, exile: zoneCards(me,'exile').length };
+    const setBtn = (id, label, which) => {
+        const b = document.getElementById(id);
+        b.textContent = label + ' (' + counts[which] + ')';
+        b.classList.toggle('active', sideView === which);
+    };
+    setBtn('btnCommander', 'Commander', 'commander');
+    setBtn('btnGrave', 'Graveyard', 'grave');
+    setBtn('btnExile', 'Exile', 'exile');
+    if (!sideView || !me) { sideZoneEl.style.display = 'none'; return; }
+    const cards = zoneCards(me, sideView);
+    sideZoneEl.innerHTML = '';
+    if (!cards.length) { sideZoneEl.innerHTML = '<span class="meta">— empty —</span>'; }
+    else cards.forEach(c => sideZoneEl.appendChild(cardEl(c, sideView === 'commander'))); // commander cards clickable to cast
+    sideZoneEl.style.display = 'flex';
+    sideZoneEl.style.flexWrap = 'wrap'; sideZoneEl.style.gap = '5px';
+}
+// my floating mana, shown with little colored icons by type
+function renderSideMana(pool) {
+    sideManaEl.innerHTML = '';
+    const parts = MANA_COLORS.filter(([k]) => pool && pool[k] > 0)
+        .map(([k, type, sym, col]) => `<span class="manaicon" style="background:${col}">${sym}<span class="mc">${pool[k]}</span></span>`);
+    if (pool && pool.colorless > 0) parts.push(`<span class="manaicon" style="background:#cfd3d6">◇<span class="mc">${pool.colorless}</span></span>`);
+    sideManaEl.innerHTML = parts.length ? ('<span class="meta" style="margin-right:4px">Floating:</span>' + parts.join('')) : '<span class="meta">No floating mana</span>';
 }
 
 const priceCache = {};
@@ -386,25 +442,11 @@ function fetchPrice(set, num, key) {
         })
         .catch(() => { priceCache[key] = 'price n/a'; setViewerPrice(key, 'price n/a'); });
 }
-let viewerHideTimer = null, viewerRemoveTimer = null;
-function scheduleHideViewer() {
-    clearTimeout(viewerHideTimer);
-    viewerHideTimer = setTimeout(() => {
-        viewerEl.classList.remove('show'); // start the slow fade-out
-        clearTimeout(viewerRemoveTimer);
-        viewerRemoveTimer = setTimeout(() => {
-            if (!viewerEl.classList.contains('show')) viewerEl.classList.remove('has-card');
-        }, 600);
-    }, 900); // delay before auto-close begins
-}
-// hovering the viewer itself keeps it open
-viewerEl.onmouseenter = () => { clearTimeout(viewerHideTimer); clearTimeout(viewerRemoveTimer); };
-viewerEl.onmouseleave = () => scheduleHideViewer();
+// The viewer is a permanent panel in the side column now — it never hides; it just keeps showing the
+// last card you hovered. (Kept as a no-op so existing callers don't need changing.)
+function scheduleHideViewer() {}
 function showCardViewer(card) {
     if (!viewerToggle.checked || !card) return;
-    clearTimeout(viewerHideTimer); clearTimeout(viewerRemoveTimer); // cancel pending auto-close
-    viewerEl.classList.add('has-card');
-    requestAnimationFrame(() => viewerEl.classList.add('show')); // fade in
     if (artCandidates(card).length) { setCardImage(viewerImg, card); } else { viewerImg.onerror = null; viewerImg.style.display = 'none'; }
     const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
     const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
@@ -540,8 +582,11 @@ function populateSetup() {
                 + (incomplete ? ' ⚠ incomplete' : '');
             if (incomplete) o.style.color = '#c99';
             deckSourceSel.appendChild(o);
+            // mirror each deck into the AI opponent selectors too
+            document.querySelectorAll('.aiDeckSel').forEach(sel => sel.appendChild(o.cloneNode(true)));
         });
         document.getElementById('deckSourceWrap').style.display = 'block';
+        document.getElementById('aiDecksWrap').style.display = 'block';
         // a site deck is a Commander deck; default the format to Commander 1v1 if available
         const cmd = [...formatSel.options].find(o => o.value === 'commander');
         if (cmd) deckSourceSel.onchange = () => { if (deckSourceSel.value && formatSel.value.indexOf('commander') < 0) formatSel.value = 'commander'; };
@@ -554,7 +599,9 @@ function showSetup(ready) {
 document.getElementById('startBtn').onclick = () => {
     document.getElementById('banner').style.display = 'none';
     const deckId = deckSourceSel.value;
-    send('newGame', undefined, { format: formatSel.value, deck: deckId ? '' : deckInput.value, deckId });
+    // chosen AI opponent decks (empty string = let the host auto-pick that seat)
+    const aiDeckIds = [...document.querySelectorAll('.aiDeckSel')].map(s => s.value);
+    send('newGame', undefined, { format: formatSel.value, deck: deckId ? '' : deckInput.value, deckId, aiDeckIds });
     setupEl.style.display = 'none';
     setPrompt('Starting game…');
 };
@@ -1097,8 +1144,9 @@ function renderBoard(gv) {
     meEl.appendChild(myZones);
     meEl.appendChild(zone('My hand (' + Object.keys(gv.myHand || {}).length + ')', gv.myHand, true));
 
-    // my commander lives in the collapsible left-side panel
-    renderCommanderPanel(me.commandList || []);
+    // right column: zone buttons (commander/graveyard/exile w/ counts) + my floating mana
+    renderSide();
+    renderSideMana(me.manaPool);
 
     stackZone.innerHTML = '';
     const stack = gv.stack ? Object.values(gv.stack) : [];

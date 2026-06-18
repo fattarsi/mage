@@ -710,6 +710,12 @@ public class WebGatewayServer {
 
         String deckId = msg.has("deckId") && !msg.get("deckId").isJsonNull() ? msg.get("deckId").getAsString() : "";
 
+        // optional per-seat AI opponent deck ids ("" = let the host auto-pick that seat)
+        List<String> aiDeckIds = new java.util.ArrayList<>();
+        if (msg.has("aiDeckIds") && msg.get("aiDeckIds").isJsonArray()) {
+            msg.getAsJsonArray("aiDeckIds").forEach(e -> aiDeckIds.add(e.isJsonNull() ? "" : e.getAsString()));
+        }
+
         DeckCardLists deck = null;
         if (!deckId.isEmpty() && deckSource != null) {
             deck = deckSource.fetchDeck(deckId); // load from the external site
@@ -747,7 +753,16 @@ public class WebGatewayServer {
             if (ids.isEmpty()) throw new IllegalStateException("No complete commander decks available for AI opponents.");
             aiDecks = new java.util.ArrayList<>();
             for (int i = 0; i < fmt.aiSeats; i++) {
-                aiDecks.add(deckSource.fetchDeck(ids.get(i % ids.size())));
+                String chosen = i < aiDeckIds.size() ? aiDeckIds.get(i) : "";        // user-picked deck for this seat
+                String pick = chosen.isEmpty() ? ids.get(i % ids.size()) : chosen;   // else auto-pick
+                aiDecks.add(deckSource.fetchDeck(pick));
+            }
+        } else if (deckSource != null && aiDeckIds.stream().anyMatch(s -> !s.isEmpty())) {
+            // non-commander: honor any explicitly chosen AI decks; null seats fall back to a random deck
+            aiDecks = new java.util.ArrayList<>();
+            for (int i = 0; i < fmt.aiSeats; i++) {
+                String chosen = i < aiDeckIds.size() ? aiDeckIds.get(i) : "";
+                aiDecks.add(chosen.isEmpty() ? null : deckSource.fetchDeck(chosen));
             }
         }
 
