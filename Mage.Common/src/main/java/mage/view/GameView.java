@@ -42,6 +42,7 @@ public class GameView implements Serializable {
     private final int priorityTime;
     private final int bufferTime;
     private final List<PlayerView> players = new ArrayList<>();
+    private final List<UUID> playerOrder = new ArrayList<>(); // actual turn order (seat order), not map order
     private UUID myPlayerId = null; // null for watcher
     private final CardsView myHand = new CardsView();
     private final CardsView myHelperEmblems = new CardsView();
@@ -73,6 +74,14 @@ public class GameView implements Serializable {
         Player createdForPlayer = null;
         this.priorityTime = game.getPriorityTime();
         this.bufferTime = game.getBufferTime();
+
+        // the real turn order (seat order / "left"), so clients can lay out the turn loop correctly
+        for (int i = 0; i < state.getPlayerList().size(); i++) {
+            UUID pid = state.getPlayerList().get(i);
+            if (pid != null) {
+                playerOrder.add(pid);
+            }
+        }
 
         for (Player player : state.getPlayers().values()) {
             PlayerView playerView = new PlayerView(player, state, game, createdForPlayerId, watcherUserId);
@@ -246,6 +255,10 @@ public class GameView implements Serializable {
 
     public List<PlayerView> getPlayers() {
         return players;
+    }
+
+    public List<UUID> getPlayerOrder() {
+        return playerOrder;
     }
 
     public CardsView getMyHand() {
