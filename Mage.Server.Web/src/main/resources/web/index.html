@@ -51,7 +51,7 @@
         #opponents.multi > .player.eliminated { flex: 0 0 auto; }
         .player.eliminated { opacity: .5; filter: grayscale(.7); padding: 4px 8px; }
         .player.eliminated .pname { text-decoration: line-through; }
-        .player.compact .zone .card { width: 52px; min-height: 73px; font-size: 8px; padding: 2px 2px 10px; }
+        .player.compact .zone .card { width: 52px; height: 73px; font-size: 8px; padding: 2px 2px 10px; }
         .player.compact .card .rules { display: none; }
         /* a zoomed opponent expands as an overlay above the other play areas (not confined to its column) */
         .player.zoomed { position: fixed; top: 50px; left: 10px; right: 356px; max-height: 76vh; overflow: auto;
@@ -83,8 +83,16 @@
         #board, #logBar { margin-right: var(--sidecol-w); }   /* reserve room so nothing hides under the column */
         #viewer { width: 100%; background: #1b212b; border: 1px solid #3a4658; border-radius: 9px; padding: 9px; }
         #viewerInfo .vpr { color: #8fd29a; font-size: 12px; margin-top: 4px; }
-        #sideZone { max-height: 38vh; overflow-y: auto; background: #161a20; border: 1px solid #2b313b;
-                    border-radius: 8px; padding: 6px; }
+        /* temporary lookup popup, anchored just left of the side column (may hover over the battlefield) */
+        #zonePopup { display: none; position: fixed; top: 58px; right: calc(var(--sidecol-w) + 6px); z-index: 55;
+                     width: min(46vw, 520px); max-height: 72vh; overflow: auto; background: #161a20;
+                     border: 1px solid #3a4658; border-radius: 9px; padding: 8px; box-shadow: 0 12px 40px rgba(0,0,0,.6); }
+        #zonePopup.open { display: block; }
+        #zonePopup .zphdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+                            font-size: 12px; font-weight: 600; color: #cde; }
+        #zpClose { background: #3a2e2e; font-size: 12px; padding: 2px 9px; }
+        #zpCards { display: flex; flex-wrap: wrap; gap: 5px; }
+        #zpCards .card { width: var(--bf-card-w); height: calc(var(--bf-card-w) * 1.4); } /* battlefield size */
         #sideMana { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; min-height: 18px; }
         .manaicon { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px;
                     border-radius: 50%; font-size: 11px; font-weight: 800; color: #111; border: 1px solid rgba(0,0,0,.3); }
@@ -123,10 +131,11 @@
         .zone { display: flex; flex-wrap: wrap; gap: 5px; min-height: 8px; }
         /* battlefield: type rows, with their own (smaller) card size */
         .bf { display: flex; flex-direction: column; gap: 3px; }
-        .bf .card { width: var(--bf-card-w); min-height: calc(var(--bf-card-w) * 1.4); }
+        /* fixed (not min-) height so text-heavy permanents like commanders don't grow taller than others */
+        .bf .card { width: var(--bf-card-w); height: calc(var(--bf-card-w) * 1.4); }
         /* opponents get their own card size (when not compacted into the multi-player thumbnails or zoomed) */
         #opponents > .player:not(.compact):not(.zoomed) .bf .card {
-            width: var(--opp-card-w); min-height: calc(var(--opp-card-w) * 1.4); }
+            width: var(--opp-card-w); height: calc(var(--opp-card-w) * 1.4); }
         .bf .zone-label { margin: 2px 0 1px; }
         /* settings dropdown */
         #settingsBtn { background: #3a4150; font-size: 12px; padding: 5px 12px; }
@@ -157,8 +166,8 @@
         .card .rules { color: #aab; font-size: 9px; margin-top: 2px; max-height: 40px; overflow: hidden; }
         /* attached auras/equipment: stacked under their host creature, shown as text strips */
         .permstack { display: flex; flex-direction: column; align-items: stretch; gap: 0; width: var(--bf-card-w); }
-        .permstack > .card { width: 100%; }
-        .permstack > .card.attached { min-height: 0; margin-top: -3px; border-top: 0;
+        .permstack > .card { width: 100%; height: calc(var(--bf-card-w) * 1.4); } /* host = battlefield size */
+        .permstack > .card.attached { height: auto; min-height: 0; margin-top: -3px; border-top: 0;
             border-top-left-radius: 0; border-top-right-radius: 0; background: #222a36; padding: 2px 4px; }
         .card.attached img.art { display: none; }                 /* show the text, not the art, for attachments */
         .card.attached .cn { font-size: 9px; }
@@ -305,7 +314,6 @@
 <!-- fixed right column: card viewer (top), then floating mana, zone buttons, and size sliders (bottom) -->
 <div id="sidecol">
     <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"><span class="meta">Hover a card to preview it here.</span></div></div>
-    <div id="sideZone" class="zone" style="display:none"></div>
     <div id="sideMana" class="meta">No floating mana</div>
     <div id="sideBtns">
         <button id="btnCommander" class="sidebtn">Commander</button>
@@ -318,6 +326,12 @@
         <div class="setrow"><label>Battlefield card size</label><input type="range" id="bfzoom" min="44" max="180" step="4" value="78"></div>
         <div class="setrow"><label>Opponent card size</label><input type="range" id="oppzoom" min="44" max="180" step="4" value="78"></div>
     </div>
+</div>
+
+<!-- temporary lookup popup (commander / graveyard / exile), opens to the LEFT of the side column -->
+<div id="zonePopup">
+    <div class="zphdr"><span id="zpTitle"></span><button id="zpClose" title="Close">✕</button></div>
+    <div id="zpCards" class="zone"></div>
 </div>
 
 <script>
@@ -382,9 +396,12 @@ viewerToggle.onchange = () => localStorage.setItem('viewerHover', viewerToggle.c
 if (localStorage.getItem('viewerHover') === '0') viewerToggle.checked = false;
 function scryUrl(card) { return artUrlFor(card); }
 
-// --- right-column zone buttons: Commander / Graveyard / Exile toggle a card list under the viewer ---
-const sideZoneEl = document.getElementById('sideZone');
+// --- Commander / Graveyard / Exile buttons open a temporary lookup popup left of the side column ---
 const sideManaEl = document.getElementById('sideMana');
+const zonePopupEl = document.getElementById('zonePopup');
+const zpTitleEl = document.getElementById('zpTitle');
+const zpCardsEl = document.getElementById('zpCards');
+const ZONE_TITLE = { commander: 'Commander', grave: 'Graveyard', exile: 'Exile' };
 let sideView = null; // null | 'commander' | 'grave' | 'exile'
 function myView() { return (lastGameView && (lastGameView.players||[]).find(p => p.controlled)) || null; }
 function zoneCards(me, which) {
@@ -398,7 +415,8 @@ function setSideView(which) { sideView = (sideView === which) ? null : which; re
 document.getElementById('btnCommander').onclick = () => setSideView('commander');
 document.getElementById('btnGrave').onclick = () => setSideView('grave');
 document.getElementById('btnExile').onclick = () => setSideView('exile');
-// keep the old name working (renderBoard calls it) — now drives the whole side column
+document.getElementById('zpClose').onclick = () => { sideView = null; renderSide(); };
+// keep the old name working (renderBoard calls it) — now drives the side column + lookup popup
 function renderCommanderPanel() { renderSide(); }
 function renderSide() {
     const me = myView();
@@ -411,13 +429,13 @@ function renderSide() {
     setBtn('btnCommander', 'Commander', 'commander');
     setBtn('btnGrave', 'Graveyard', 'grave');
     setBtn('btnExile', 'Exile', 'exile');
-    if (!sideView || !me) { sideZoneEl.style.display = 'none'; return; }
+    if (!sideView || !me) { zonePopupEl.classList.remove('open'); return; }
     const cards = zoneCards(me, sideView);
-    sideZoneEl.innerHTML = '';
-    if (!cards.length) { sideZoneEl.innerHTML = '<span class="meta">— empty —</span>'; }
-    else cards.forEach(c => sideZoneEl.appendChild(cardEl(c, sideView === 'commander'))); // commander cards clickable to cast
-    sideZoneEl.style.display = 'flex';
-    sideZoneEl.style.flexWrap = 'wrap'; sideZoneEl.style.gap = '5px';
+    zpTitleEl.textContent = ZONE_TITLE[sideView] + ' (' + cards.length + ')';
+    zpCardsEl.innerHTML = '';
+    if (!cards.length) zpCardsEl.innerHTML = '<span class="meta">— empty —</span>';
+    else cards.forEach(c => zpCardsEl.appendChild(cardEl(c, sideView === 'commander'))); // commander cards clickable to cast
+    zonePopupEl.classList.add('open');
 }
 // my floating mana, shown with little colored icons by type
 function renderSideMana(pool) {
@@ -500,7 +518,7 @@ let myHandIds = new Set();      // ids of cards in our hand (to dim the un-casta
 let combatMode = null;         // 'attack' | 'block' while declaring attackers/blockers (to highlight creatures)
 
 // callbacks that START a fresh decision (so stale target highlights should clear)
-const ACTIONABLE = new Set(['GAME_SELECT','GAME_PLAY_MANA','GAME_ASK','GAME_GET_AMOUNT',
+const ACTIONABLE = new Set(['GAME_SELECT','GAME_PLAY_MANA','GAME_ASK','GAME_GET_AMOUNT','GAME_GET_MULTI_AMOUNT',
     'GAME_PLAY_XMANA','GAME_CHOOSE_CHOICE','GAME_CHOOSE_ABILITY','GAME_CHOOSE_PILE']);
 
 function send(action, value, extra) {
@@ -663,7 +681,7 @@ function soundForFrame(method, data, gv) {
         (/(you).*(win)|won/i.test(m) ? SFX.win : SFX.lose)();
         return;
     }
-    if (['GAME_ASK','GAME_TARGET','GAME_GET_AMOUNT','GAME_PLAY_MANA','GAME_CHOOSE_CHOICE','GAME_CHOOSE_ABILITY','GAME_CHOOSE_PILE'].includes(method))
+    if (['GAME_ASK','GAME_TARGET','GAME_GET_AMOUNT','GAME_GET_MULTI_AMOUNT','GAME_PLAY_MANA','GAME_CHOOSE_CHOICE','GAME_CHOOSE_ABILITY','GAME_CHOOSE_PILE'].includes(method))
         SFX.needInput();
     if (!gv || !gv.players) return;
     const me = gv.players.find(p => p.controlled) || gv.players[0];
@@ -1285,6 +1303,37 @@ function handle(method, data) {
             const inp=document.createElement('input'); inp.type='number'; inp.min=min; inp.max=max; inp.value=min; promptMain.appendChild(inp);
             const ok=document.createElement('button'); ok.textContent='OK';
             ok.onclick=()=>send('playerInteger', Math.max(min, Math.min(max, parseInt(inp.value)||min))); promptMain.appendChild(ok);
+            break;
+        }
+        case 'GAME_GET_MULTI_AMOUNT': {
+            // divide an amount across several targets — e.g. assign combat damage among multiple blockers
+            const items = data.messages || [];
+            const totalMin = data.min || 0, totalMax = data.max !== undefined ? data.max : 99;
+            const opts = data.options || {};
+            promptMain.innerHTML = '';
+            const head = document.createElement('span'); head.className = 'msg';
+            head.innerHTML = '<b>' + msg(opts.header || opts.title || 'Assign amounts') + '</b> '
+                + `<i>(total must be ${totalMin === totalMax ? totalMin : totalMin + '–' + totalMax})</i> `;
+            promptMain.appendChild(head);
+            const inputs = [];
+            items.forEach((it, i) => {
+                const wrap = document.createElement('span'); wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin:0 6px';
+                const lab = document.createElement('span'); lab.className = 'meta'; lab.innerHTML = msg(it.message || ('#' + (i+1)));
+                const inp = document.createElement('input'); inp.type = 'number';
+                inp.min = it.min || 0; inp.max = it.max !== undefined ? it.max : totalMax;
+                inp.value = it.defaultValue !== undefined ? it.defaultValue : (it.min || 0);
+                inp.style.width = '52px';
+                inputs.push(inp); wrap.appendChild(lab); wrap.appendChild(inp); promptMain.appendChild(wrap);
+            });
+            const tot = document.createElement('span'); tot.className = 'meta';
+            const refresh = () => { const s = inputs.reduce((a,x)=>a+(parseInt(x.value)||0),0);
+                tot.textContent = ' = ' + s; tot.style.color = (s>=totalMin && s<=totalMax) ? '#7f7' : '#f88'; };
+            inputs.forEach(x => x.oninput = refresh); refresh(); promptMain.appendChild(tot);
+            const ok = document.createElement('button'); ok.textContent = 'Assign ▸';
+            ok.onclick = () => send('playerString', inputs.map(x => Math.max(0, parseInt(x.value)||0)).join(' '));
+            promptMain.appendChild(ok);
+            if (opts.canCancel) { const c = document.createElement('button'); c.textContent = 'Cancel'; c.className='alt';
+                c.onclick = () => send('playerBoolean', false); promptMain.appendChild(c); }
             break;
         }
         case 'GAME_CHOOSE_CHOICE': {
