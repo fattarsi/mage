@@ -202,6 +202,7 @@
         #skipbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 4px; margin: -2px 0 4px; }
         #skipbar button { background: #2e3a4a; font-size: 11px; padding: 3px 8px; border-radius: 4px; }
         #skipbar button:hover { background: #3d4d63; }
+        #skipbar button.armed { background: #7a5a20; box-shadow: 0 0 0 1px #c79a40; } /* sticky skip is running */
         /* compact action bar sitting directly under the stack */
         #prompt { background: #232a36; border: 1px solid #3a587e; border-radius: 6px;
                   padding: 5px 10px; margin: 6px 0; display: flex; flex-direction: column; gap: 3px; }
@@ -568,16 +569,52 @@ function oppCommanderEl(opp) {
 }
 
 function act(a) { send('playerAction', a); }
-// XMage-style skip shortcuts (matches the desktop F-keys)
+// Sticky skips: a skip-ahead button stays ARMED. It pauses for interrupts (something on the stack you
+// can respond to, or your own combat), and once the stack clears it auto-resumes — no need to re-press.
+// It turns itself off when its target is reached. Click it again (or Stop skipping) to cancel.
+let stickySkip = null;   // { action, turn, step }
+const skipBtns = {};     // action -> button element (for the armed highlight)
 const SKIPS = [
-    {label:'Pass (F2)',        key:'F2', fn:()=>send('playerBoolean', false), title:'Pass priority once'},
-    {label:'Next main (F5)',   key:'F5', fn:()=>act('PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE'), title:'Skip ahead to the next main phase'},
-    {label:'End of turn (F6)', key:'F6', fn:()=>act('PASS_PRIORITY_UNTIL_TURN_END_STEP'), title:'Skip ahead to this turn’s end step'},
-    {label:'Next turn (F4)',   key:'F4', fn:()=>act('PASS_PRIORITY_UNTIL_NEXT_TURN'), title:'Skip to the next turn'},
-    {label:'My next turn (F7)',key:'F7', fn:()=>act('PASS_PRIORITY_UNTIL_MY_NEXT_TURN'), title:'Skip to your next turn'},
-    // not a toggle — a one-shot that cancels any in-progress "skip ahead" so you stop and regain priority now
-    {label:'Stop skipping (F3)',key:'F3', fn:()=>act('PASS_PRIORITY_CANCEL_ALL_ACTIONS'), title:'Cancel any in-progress skip (Next main / My next turn / Run to breakpoint) and stop here'},
+    {label:'Pass (F2)', key:'F2', fn:()=>send('playerBoolean', false), title:'Pass priority once'},
+    {label:'Next main (F5)', key:'F5', action:'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE', title:'Keep skipping to the next main phase — pauses for responses, then resumes (click again to cancel)'},
+    {label:'End of turn (F6)', key:'F6', action:'PASS_PRIORITY_UNTIL_TURN_END_STEP', title:'Keep skipping to this turn’s end step'},
+    {label:'Next turn (F4)', key:'F4', action:'PASS_PRIORITY_UNTIL_NEXT_TURN', title:'Keep skipping to the next turn'},
+    {label:'My next turn (F7)', key:'F7', action:'PASS_PRIORITY_UNTIL_MY_NEXT_TURN', title:'Keep skipping to your next turn — pauses for responses, then resumes'},
+    {label:'Stop skipping (F3)', key:'F3', fn:stopSticky, title:'Cancel any armed skip / Run to breakpoint and stop here now'},
 ];
+function setSticky(action) {
+    if (stickySkip && stickySkip.action === action) { stopSticky(); return; } // click again = toggle off
+    advancing = false; updateAdvanceBtn();                                     // mutually exclusive with Run to breakpoint
+    const gv = lastGameView || {};
+    stickySkip = { action, turn: gv.turn, step: gv.step };
+    act(action); updateSkipUI();
+}
+function stopSticky() {
+    stickySkip = null; advancing = false; updateAdvanceBtn();
+    act('PASS_PRIORITY_CANCEL_ALL_ACTIONS'); updateSkipUI();
+}
+function updateSkipUI() { for (const a in skipBtns) skipBtns[a].classList.toggle('armed', !!stickySkip && stickySkip.action === a); }
+function stickyReached(gv) {
+    if (!stickySkip || !gv) return false;
+    const me = (gv.players||[]).find(p => p.controlled); const myId = me && me.playerId;
+    const myTurn = gv.activePlayerId === myId; const step = gv.step || '';
+    switch (stickySkip.action) {
+        case 'PASS_PRIORITY_UNTIL_MY_NEXT_TURN':    return myTurn && gv.turn !== stickySkip.turn;
+        case 'PASS_PRIORITY_UNTIL_NEXT_TURN':       return gv.turn !== stickySkip.turn;
+        case 'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE': return /MAIN/.test(step) && (gv.turn !== stickySkip.turn || step !== stickySkip.step);
+        case 'PASS_PRIORITY_UNTIL_TURN_END_STEP':   return step === 'END_TURN' && gv.turn === stickySkip.turn;
+    }
+    return true;
+}
+function trySticky(method, gv) {
+    if (!stickySkip || method !== 'GAME_SELECT' || !gv) return;
+    if (stickyReached(gv)) { stickySkip = null; updateSkipUI(); return; }      // arrived at the target — stop & disarm
+    const raw = String((lastData && lastData.message) || '').toLowerCase();
+    if (/select attackers|select blockers/.test(raw)) return;                  // your combat — handle it; skip stays armed
+    const stackSize = gv.stack ? Object.keys(gv.stack).length : 0;
+    if (stackSize > 0) return;                                                 // interrupt on the stack — respond; resumes when it clears
+    act(stickySkip.action);                                                    // empty stack, not the target → resume skipping
+}
 const skipbar = document.getElementById('skipbar');
 // "run to breakpoint" button (shown only when breakpoints are set), then the standard skip buttons
 const advanceBtn = document.createElement('button');
@@ -585,11 +622,16 @@ advanceBtn.id = 'advanceBtn'; advanceBtn.style.display = 'none'; advanceBtn.styl
 advanceBtn.textContent = '▶ Run to breakpoint'; advanceBtn.onclick = startAdvance;
 advanceBtn.title = 'Auto-pass priority until the next breakpoint (or a decision that needs you)';
 skipbar.appendChild(advanceBtn);
-SKIPS.forEach(s => { const b=document.createElement('button'); b.textContent=s.label; b.onclick=s.fn; if (s.title) b.title=s.title; skipbar.appendChild(b); });
+SKIPS.forEach(s => {
+    const b = document.createElement('button'); b.textContent = s.label; if (s.title) b.title = s.title;
+    b.onclick = s.action ? () => setSticky(s.action) : s.fn;
+    if (s.action) skipBtns[s.action] = b;
+    skipbar.appendChild(b);
+});
 document.addEventListener('keydown', (e) => {
     if (document.getElementById('setup').style.display !== 'none') return; // don't skip while typing a deck
     const s = SKIPS.find(x => x.key === e.key);
-    if (s) { e.preventDefault(); s.fn(); return; }
+    if (s) { e.preventDefault(); (s.action ? () => setSticky(s.action) : s.fn)(); return; }
     if (e.key === 'F9') { e.preventDefault(); act('PASS_PRIORITY_UNTIL_STACK_RESOLVED'); } // resolve stack
 });
 
@@ -648,6 +690,7 @@ const endGameBtn = document.getElementById('endGameBtn');
 function setGameActive(active) {
     resignBtn.style.display = active ? '' : 'none';
     endGameBtn.style.display = active ? '' : 'none';
+    stickySkip = null; advancing = false; updateSkipUI(); updateAdvanceBtn(); // reset skip state on game start/end
 }
 resignBtn.onclick = () => {
     if (!confirm('Resign this game?\n\nYou concede, but the AI opponents keep playing it out — you can keep watching.')) return;
@@ -834,6 +877,7 @@ ws.onmessage = (ev) => {
         if (gv) drawArrows(gv);
         lastMethod = msg.method; lastData = data;
         tryAdvance(msg.method, gv || lastGameView); // "run to breakpoint" auto-advance
+        trySticky(msg.method, gv || lastGameView);  // sticky skip auto-resume
     } catch (e) {
         showError((e && e.message || e) + ' (method ' + msg.method + ')');
     }
