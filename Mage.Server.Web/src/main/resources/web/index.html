@@ -46,6 +46,7 @@
         #phasebar .ph.cur.bp { box-shadow: inset 0 0 0 2px #e0503a; }    /* current AND breakpoint */
         #phasebar .ph.clickable { cursor: pointer; }
         #phasebar .ph.clickable:hover { background: #2b3340; color: #cde; }
+        #phasebar .ph.na { opacity: .4; }   /* engine can't pause here — not a breakpoint */
         .player { border: 1px solid #2b313b; border-radius: 8px; padding: 8px; margin-bottom: 8px; background: #1a1e24; }
         .player.me { background: #1a221c; }
         /* subtle yellow border marks whose turn it is */
@@ -919,10 +920,24 @@ const PHASE_SKIP = {
 // so you can break at ANY phase of ANY player, not only the engine's built-in stop points.
 const phaseExpanded = {};      // opponent playerId -> expanded?
 const breakpoints = new Set(); // keys: `${playerId}|${phaseKey}`
+// The engine only hands the human priority at these phases (via the matching stop toggle), so these
+// are the only phases we can actually pause at. Other phases (untap/upkeep/draw/combat damage/cleanup)
+// never give us a priority frame, so a breakpoint there could never fire — they're shown disabled.
+// Verified: the human gets a priority frame at these phases (for every player) when the matching stop
+// is on. End/upkeep/draw never yield a priority frame, so they can't be breakpoints.
+const PHASE_TO_STOP = { PRECOMBAT_MAIN:'stopMains', POSTCOMBAT_MAIN:'stopMains',
+                        DECLARE_ATTACKERS:'stopAttackers', DECLARE_BLOCKERS:'stopBlockers' };
 function bpKey(pid, key) { return pid + '|' + key; }
 function toggleBreakpoint(pid, key) {
+    if (!PHASE_TO_STOP[key]) return; // not a stoppable phase
     const k = bpKey(pid, key);
-    if (breakpoints.has(k)) breakpoints.delete(k); else breakpoints.add(k);
+    if (breakpoints.has(k)) { breakpoints.delete(k); }
+    else {
+        breakpoints.add(k);
+        // ensure the engine will actually give us priority at this phase, else we'd skip right past it
+        const cb = document.getElementById(PHASE_TO_STOP[key]);
+        if (cb && !cb.checked) { cb.checked = true; sendSkips(); }
+    }
     if (lastGameView) renderPhaseBar(lastGameView);
     updateAdvanceBtn();
 }
@@ -965,12 +980,17 @@ function renderPhaseBar(gv) {
         for (let i = from; i < PHASE_STEPS.length; i++) {
             const [key, label] = PHASE_STEPS[i];
             const isCur = isActive && key === cur;
+            const canBp = !!PHASE_TO_STOP[key];
             const isBp = breakpoints.has(bpKey(p.playerId, key));
             const d = document.createElement('span');
-            d.className = 'ph clickable' + (isCur ? ' cur' : '') + (isBp ? ' bp' : '');
+            d.className = 'ph' + (canBp ? ' clickable' : ' na') + (isCur ? ' cur' : '') + (isBp ? ' bp' : '');
             d.textContent = label;
-            d.title = (isBp ? 'Remove' : 'Set') + ' breakpoint at ' + (isMe ? 'your ' : strip(p.name) + "'s ") + label;
-            d.onclick = () => toggleBreakpoint(p.playerId, key);
+            if (canBp) {
+                d.title = (isBp ? 'Remove' : 'Set') + ' breakpoint at ' + (isMe ? 'your ' : strip(p.name) + "'s ") + label;
+                d.onclick = () => toggleBreakpoint(p.playerId, key);
+            } else {
+                d.title = "Can't pause here — the engine only stops at main phases, combat (attack/block), and end step";
+            }
             row.appendChild(d);
         }
     }
