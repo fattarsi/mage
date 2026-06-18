@@ -14,8 +14,14 @@
         #turn { font-size: 12px; color: #fc9; margin-left: auto; }
         #board { padding: 10px 14px; }
         /* phase progress bar (sticky at top while scrolling) */
-        #phasebar { display: flex; gap: 2px; flex-wrap: wrap; position: sticky; top: 0; z-index: 35;
+        #phasebar { position: sticky; top: 0; z-index: 35; overflow-x: auto; white-space: nowrap;
                     background: #14161a; margin: -10px -14px 10px; padding: 8px 14px; border-bottom: 1px solid #262d38; }
+        /* single horizontal timeline: current phase at the left, runs forward through the turn loop */
+        #phasebar .phaserow { display: flex; align-items: center; gap: 2px; width: max-content; }
+        #phasebar .pchip { font-size: 10px; font-weight: 700; color: #8aa; white-space: nowrap; padding: 0 4px 0 8px;
+                           border-left: 2px solid #2b313b; margin-left: 4px; }
+        #phasebar .pchip.me { color: #cde; }
+        #phasebar .pchip.active { color: #e6c860; }   /* whose turn it is now */
         /* collapsible zone chips (graveyard / exile / emblems) */
         .collapzone { border: 1px solid #3a4658; border-radius: 6px; padding: 4px 7px; background: #1a1e24; }
         .collap-hdr { cursor: pointer; font-size: 11px; color: #cdd; white-space: nowrap; user-select: none; }
@@ -186,6 +192,11 @@
         .card .sick { position: absolute; left: 2px; top: 2px; z-index: 3; font-size: 11px;
                       background: rgba(0,0,0,.6); border-radius: 3px; line-height: 1; padding: 1px; }
         #stack { border: 1px dashed #56607a; border-radius: 6px; padding: 6px; margin: 8px 0; }
+        #stackZone { align-items: flex-end; }
+        .stackitem { display: inline-flex; flex-direction: column; align-items: stretch; }
+        .stacktargets { font-size: 10px; color: #9cf; margin-top: 2px; max-width: var(--bf-card-w); }
+        #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; align-self: center; margin-left: 4px; }
+        #resolveStackBtn:hover { background: #3c8a54; }
         /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
         #skipbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 4px; margin: -2px 0 4px; }
         #skipbar button { background: #2e3a4a; font-size: 11px; padding: 3px 8px; border-radius: 4px; }
@@ -436,7 +447,7 @@ function renderSide() {
     zpTitleEl.textContent = ZONE_TITLE[sideView] + ' (' + cards.length + ')';
     zpCardsEl.innerHTML = '';
     if (!cards.length) zpCardsEl.innerHTML = '<span class="meta">— empty —</span>';
-    else cards.forEach(c => zpCardsEl.appendChild(cardEl(c, sideView === 'commander'))); // commander cards clickable to cast
+    else cards.forEach(c => zpCardsEl.appendChild(cardEl(c, true))); // clickable: cast commander, or target a card in gy/exile (e.g. reanimate)
     zonePopupEl.classList.add('open');
 }
 // my floating mana, shown with little colored icons by type
@@ -558,25 +569,27 @@ function oppCommanderEl(opp) {
 function act(a) { send('playerAction', a); }
 // XMage-style skip shortcuts (matches the desktop F-keys)
 const SKIPS = [
-    {label:'Pass (F2)',        key:'F2', fn:()=>send('playerBoolean', false)},
-    {label:'Next main (F5)',   key:'F5', fn:()=>act('PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE')},
-    {label:'End of turn (F6)', key:'F6', fn:()=>act('PASS_PRIORITY_UNTIL_TURN_END_STEP')},
-    {label:'Next turn (F4)',   key:'F4', fn:()=>act('PASS_PRIORITY_UNTIL_NEXT_TURN')},
-    {label:'My next turn (F7)',key:'F7', fn:()=>act('PASS_PRIORITY_UNTIL_MY_NEXT_TURN')},
-    {label:'Resolve stack (F9)',key:'F9',fn:()=>act('PASS_PRIORITY_UNTIL_STACK_RESOLVED')},
-    {label:'Cancel skips (F3)',key:'F3', fn:()=>act('PASS_PRIORITY_CANCEL_ALL_ACTIONS')},
+    {label:'Pass (F2)',        key:'F2', fn:()=>send('playerBoolean', false), title:'Pass priority once'},
+    {label:'Next main (F5)',   key:'F5', fn:()=>act('PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE'), title:'Skip ahead to the next main phase'},
+    {label:'End of turn (F6)', key:'F6', fn:()=>act('PASS_PRIORITY_UNTIL_TURN_END_STEP'), title:'Skip ahead to this turn’s end step'},
+    {label:'Next turn (F4)',   key:'F4', fn:()=>act('PASS_PRIORITY_UNTIL_NEXT_TURN'), title:'Skip to the next turn'},
+    {label:'My next turn (F7)',key:'F7', fn:()=>act('PASS_PRIORITY_UNTIL_MY_NEXT_TURN'), title:'Skip to your next turn'},
+    // not a toggle — a one-shot that cancels any in-progress "skip ahead" so you stop and regain priority now
+    {label:'Stop skipping (F3)',key:'F3', fn:()=>act('PASS_PRIORITY_CANCEL_ALL_ACTIONS'), title:'Cancel any in-progress skip (Next main / My next turn / Run to breakpoint) and stop here'},
 ];
 const skipbar = document.getElementById('skipbar');
 // "run to breakpoint" button (shown only when breakpoints are set), then the standard skip buttons
 const advanceBtn = document.createElement('button');
 advanceBtn.id = 'advanceBtn'; advanceBtn.style.display = 'none'; advanceBtn.style.background = '#7a5a20';
 advanceBtn.textContent = '▶ Run to breakpoint'; advanceBtn.onclick = startAdvance;
+advanceBtn.title = 'Auto-pass priority until the next breakpoint (or a decision that needs you)';
 skipbar.appendChild(advanceBtn);
-SKIPS.forEach(s => { const b=document.createElement('button'); b.textContent=s.label; b.onclick=s.fn; skipbar.appendChild(b); });
+SKIPS.forEach(s => { const b=document.createElement('button'); b.textContent=s.label; b.onclick=s.fn; if (s.title) b.title=s.title; skipbar.appendChild(b); });
 document.addEventListener('keydown', (e) => {
     if (document.getElementById('setup').style.display !== 'none') return; // don't skip while typing a deck
     const s = SKIPS.find(x => x.key === e.key);
-    if (s) { e.preventDefault(); s.fn(); }
+    if (s) { e.preventDefault(); s.fn(); return; }
+    if (e.key === 'F9') { e.preventDefault(); act('PASS_PRIORITY_UNTIL_STACK_RESOLVED'); } // resolve stack
 });
 
 // --- game setup (format + deck) ---
@@ -746,6 +759,19 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','
 // XMage messages embed HTML-ish markup (e.g. <font color=#ff0>...</font>); strip tags for clean display
 function msg(s){return esc(String(s||'').replace(/<[^>]+>/g,''));}
 function strip(s){return String(s||'').replace(/<[^>]+>/g,'');}  // plain text (for title attributes)
+// resolve a target id (used by stack objects) to a readable name: a player, or a card in any zone
+function resolveTargetName(gv, id) {
+    if (!gv || !id) return null;
+    for (const p of gv.players || []) {
+        if (p.playerId === id) return strip(p.name);                 // a player target
+        for (const z of [p.battlefield, p.graveyard, p.exile]) { if (z && z[id]) return strip(z[id].name); }
+        const cl = Array.isArray(p.commandList) ? p.commandList.find(c => c.id === id) : null;
+        if (cl) return strip(cl.name);
+    }
+    if (gv.myHand && gv.myHand[id]) return strip(gv.myHand[id].name);
+    if (gv.stack && gv.stack[id]) return strip(gv.stack[id].name);
+    return null;
+}
 // Ordered list of art URLs to try for a card. Tokens (collector number "0") are looked up by
 // name; normal cards by set+number, and we always fall back to a by-name token search so that
 // tokens we failed to detect (or whose set/number art 404s) still resolve instead of going blank.
@@ -907,6 +933,9 @@ function atBreakpoint(gv) {
 // Looped, per-player phase bar: starts at the active player and goes around back to you. Your turn is
 // expanded; opponents collapse to a pill you can click to expand. Click ANY phase cell to toggle a
 // breakpoint. Current phase = green, breakpoint = red. Use "▶ Run to breakpoint" to auto-pass to one.
+// Horizontal timeline of the turn loop: starts at the CURRENT phase (left) and runs forward in turn
+// order (active player's remaining phases, then each following player's full turn). As phases pass, the
+// current phase stays at the left and the bar shifts. Every phase cell is a clickable breakpoint.
 function renderPhaseBar(gv) {
     const bar = document.getElementById('phasebar');
     bar.innerHTML = '';
@@ -917,39 +946,30 @@ function renderPhaseBar(gv) {
     if (!n) return;
     let start = players.findIndex(p => p.playerId === gv.activePlayerId);
     if (start < 0) start = 0;
+    const curIdx = Math.max(0, PHASE_STEPS.findIndex(s => s[0] === cur));
+    const row = document.createElement('div'); row.className = 'phaserow';
     for (let k = 0; k < n; k++) {
-        const p = players[(start + k) % n];
+        const p = players[(start + k) % n]; // turn order, starting at the active player
         const isMe = !!p.controlled;
         const isActive = p.playerId === gv.activePlayerId;
-        const expanded = isMe || phaseExpanded[p.playerId];
-        const block = document.createElement('div'); block.className = 'pblock' + (isMe ? ' me' : '') + (isActive ? ' active' : '');
-
-        const lbl = document.createElement('div'); lbl.className = 'plabel';
-        lbl.textContent = (isMe ? '' : (expanded ? '▾ ' : '▸ ')) + (isMe ? 'You' : strip(p.name));
-        if (!isMe) { lbl.classList.add('clickable'); lbl.title = 'Show/hide phases';
-            lbl.onclick = () => { phaseExpanded[p.playerId] = !phaseExpanded[p.playerId]; if (lastGameView) renderPhaseBar(lastGameView); }; }
-        block.appendChild(lbl);
-
-        if (expanded) {
-            const phs = document.createElement('div'); phs.className = 'phs';
-            PHASE_STEPS.forEach(([key, label]) => {
-                const d = document.createElement('div');
-                const isCur = isActive && key === cur;
-                const isBp = breakpoints.has(bpKey(p.playerId, key));
-                d.className = 'ph clickable' + (isCur ? ' cur' : '') + (isBp ? ' bp' : '');
-                d.textContent = label;
-                d.title = (isBp ? 'Remove' : 'Set') + ' breakpoint at ' + (isMe ? 'your ' : strip(p.name) + "'s ") + label;
-                d.onclick = () => toggleBreakpoint(p.playerId, key);
-                phs.appendChild(d);
-            });
-            block.appendChild(phs);
-        } else {
-            const hint = document.createElement('span'); hint.className = 'pcollapsed';
-            hint.textContent = isActive ? '(' + (PHASE_STEPS.find(s => s[0] === cur) || ['', cur])[1] + ')' : '…';
-            block.appendChild(hint);
+        const chip = document.createElement('span');
+        chip.className = 'pchip' + (isMe ? ' me' : '') + (isActive ? ' active' : '');
+        chip.textContent = (isMe ? 'You' : strip(p.name)) + (p.hasLeft ? ' 💀' : '');
+        row.appendChild(chip);
+        const from = (k === 0) ? curIdx : 0; // active player's segment begins at the current phase
+        for (let i = from; i < PHASE_STEPS.length; i++) {
+            const [key, label] = PHASE_STEPS[i];
+            const isCur = isActive && key === cur;
+            const isBp = breakpoints.has(bpKey(p.playerId, key));
+            const d = document.createElement('span');
+            d.className = 'ph clickable' + (isCur ? ' cur' : '') + (isBp ? ' bp' : '');
+            d.textContent = label;
+            d.title = (isBp ? 'Remove' : 'Set') + ' breakpoint at ' + (isMe ? 'your ' : strip(p.name) + "'s ") + label;
+            d.onclick = () => toggleBreakpoint(p.playerId, key);
+            row.appendChild(d);
         }
-        bar.appendChild(block);
     }
+    bar.appendChild(row);
 }
 
 // --- "run to breakpoint": auto-pass priority until a breakpoint phase (or a decision that needs you) ---
@@ -961,14 +981,18 @@ function updateAdvanceBtn() {
 }
 function startAdvance() { advancing = !advancing; updateAdvanceBtn(); if (advancing) tryAdvance(lastMethod, lastGameView); }
 // called after each frame: if we're advancing and it's safe to pass, pass; otherwise stop at the decision/breakpoint
+const ADVANCE_STOP = new Set(['GAME_TARGET','GAME_ASK','GAME_PLAY_MANA','GAME_PLAY_XMANA','GAME_CHOOSE_CHOICE',
+    'GAME_CHOOSE_ABILITY','GAME_CHOOSE_PILE','GAME_GET_AMOUNT','GAME_GET_MULTI_AMOUNT','GAME_OVER','END_GAME_INFO']);
+function stopAdvance() { advancing = false; updateAdvanceBtn(); }
 function tryAdvance(method, gv) {
     if (!advancing) return;
-    if (method !== 'GAME_SELECT') { advancing = false; updateAdvanceBtn(); return; } // a real decision arrived
+    if (ADVANCE_STOP.has(method)) { stopAdvance(); return; }   // a decision that needs you
+    if (method !== 'GAME_SELECT') return;                      // GAME_UPDATE/INIT/etc. — keep advancing, wait for next
     if (!gv) return;
     const raw = String((lastData && lastData.message) || '').toLowerCase();
-    if (/select attackers|select blockers/.test(raw)) { advancing = false; updateAdvanceBtn(); return; } // my combat
-    if (atBreakpoint(gv)) { advancing = false; updateAdvanceBtn(); return; }                              // reached a breakpoint
-    send('playerBoolean', false); // pass priority and keep going
+    if (/select attackers|select blockers/.test(raw)) { stopAdvance(); return; }  // your combat
+    if (atBreakpoint(gv)) { stopAdvance(); return; }                              // reached a breakpoint
+    send('playerBoolean', false); // pass priority and keep going to the next frame
 }
 
 // collapsible card zone (graveyard / exile / emblems), expand state persisted per key across re-renders
@@ -1170,8 +1194,25 @@ function renderBoard(gv) {
 
     stackZone.innerHTML = '';
     const stack = gv.stack ? Object.values(gv.stack) : [];
-    if (!stack.length) stackZone.innerHTML = '<span class="meta">empty</span>';
-    else stack.forEach(c => stackZone.appendChild(cardEl(c, false)));
+    if (!stack.length) { stackZone.innerHTML = '<span class="meta">empty</span>'; }
+    else {
+        stack.forEach(c => {
+            const item = document.createElement('div'); item.className = 'stackitem';
+            item.appendChild(cardEl(c, false));
+            // show what this spell/ability is targeting (so opponents' targets are visible)
+            const names = (c.targets || []).map(id => resolveTargetName(gv, id)).filter(Boolean);
+            if (names.length) {
+                const t = document.createElement('div'); t.className = 'stacktargets';
+                t.textContent = '→ ' + names.join(', '); item.appendChild(t);
+            }
+            stackZone.appendChild(item);
+        });
+        // resolve-stack action lives here, right after the stack (only shown when the stack isn't empty)
+        const rb = document.createElement('button'); rb.id = 'resolveStackBtn'; rb.textContent = 'Resolve stack ▸';
+        rb.title = 'Pass priority until the stack fully resolves (F9)';
+        rb.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
+        stackZone.appendChild(rb);
+    }
 }
 
 // Some dialogs (library search like Terramorphic Expanse, reveal, choose-from-pile) provide a card
