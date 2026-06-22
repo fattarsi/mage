@@ -91,6 +91,9 @@
         #board, #logBar { margin-right: var(--sidecol-w); }   /* reserve room so nothing hides under the column */
         #viewer { width: 100%; background: #1b212b; border: 1px solid #3a4658; border-radius: 9px; padding: 9px; }
         #viewerInfo .vpr { color: #8fd29a; font-size: 12px; margin-top: 4px; }
+        #viewerInfo .vnote { font-size: 11.5px; margin-top: 6px; padding: 4px 6px; border-radius: 5px; line-height: 1.35; }
+        #viewerInfo .vnote.no { background: #2c1c1c; color: #f3b0a0; }
+        #viewerInfo .vnote.ok { background: #16301c; color: #b7e8bf; }
         /* temporary lookup popup, anchored just left of the side column (may hover over the battlefield) */
         #zonePopup { display: none; position: fixed; top: 58px; right: calc(var(--sidecol-w) + 6px); z-index: 55;
                      width: min(46vw, 520px); max-height: 72vh; overflow: auto; background: #161a20;
@@ -213,6 +216,8 @@
         #prompt button { padding: 4px 11px; font-size: 12px; }
         .passbtn { background: #2e6a40; }
         .passbtn:hover { background: #3c8a54; }
+        .combatmath { background: #1c2733; color: #cde; padding: 2px 7px; border-radius: 5px; font-size: 12px; white-space: nowrap; }
+        .combatmath.lethal { background: #4a1c1c; color: #ffb0a0; font-weight: 700; }
         button { background: #34507a; color: #fff; border: 0; border-radius: 5px; padding: 7px 14px;
                  font-size: 13px; cursor: pointer; }
         button:hover { background: #4767a0; }
@@ -240,6 +245,8 @@
         .overlay #startBtn { margin-top: 12px; font-size: 15px; padding: 9px 20px; }
         #newGameBtn { background: #2e6a40; font-size: 12px; padding: 5px 12px; }
         #newGameBtn:hover { background: #3c8a54; }
+        #undoBtn, #helpBtn { background: #3a4150; font-size: 12px; padding: 5px 12px; }
+        #undoBtn:hover, #helpBtn:hover { background: #4a5468; }
         #resignBtn { background: #7a5a20; font-size: 12px; padding: 5px 12px; }
         #resignBtn:hover { background: #9a7228; }
         #endGameBtn { background: #7a2e2e; font-size: 12px; padding: 5px 12px; }
@@ -251,10 +258,38 @@
     <b>XMage Web</b> — play vs AI
     <span id="status">connecting…</span>
     <button id="newGameBtn">New game</button>
+    <button id="undoBtn" title="Take back your last action (e.g. a tapped land or a half-started cast), while you still have priority">↶ Undo</button>
     <button id="resignBtn" style="display:none">Resign</button>
     <button id="endGameBtn" style="display:none">End game</button>
     <button id="settingsBtn">⚙ Settings</button>
+    <button id="helpBtn" title="Shortcuts & icon legend">? Help</button>
 </header>
+
+<div id="helpModal" class="overlay" style="display:none">
+    <div class="panel" style="max-width:540px">
+        <h2>Help — shortcuts &amp; legend <button id="helpClose" class="alt" style="float:right;font-size:12px;padding:2px 9px">✕ close</button></h2>
+        <h3 style="margin:8px 0 2px;color:#cde">Keyboard</h3>
+        <div class="hint" style="line-height:1.7">
+            <b>F2</b> pass priority · <b>F3</b> stop skipping · <b>F4</b> next turn · <b>F5</b> next main ·
+            <b>F6</b> end of turn · <b>F7</b> your next turn · <b>F9</b> resolve stack
+        </div>
+        <h3 style="margin:10px 0 2px;color:#cde">Card &amp; player icons</h3>
+        <div class="hint" style="line-height:1.8">
+            💤 summoning sickness (can’t attack/tap yet) · 👑 monarch · 💀 out of the game ·
+            green ring = playable now · gold ring = valid target · orange ring = eligible attacker/blocker
+        </div>
+        <h3 style="margin:10px 0 2px;color:#cde">Phase bar &amp; skips</h3>
+        <div class="hint" style="line-height:1.8">
+            The top bar is the turn loop (current phase green, breakpoints red). Click a main/attack/block
+            phase to set a breakpoint. Skip buttons are <i>sticky</i>: they pause for responses and resume
+            when the stack clears. <b>Run to breakpoint</b> appears once you set one.
+        </div>
+        <h3 style="margin:10px 0 2px;color:#cde">Arrows</h3>
+        <div class="hint" style="line-height:1.8">
+            red = attacker → defender · blue = blocker → attacker · purple = spell/ability → its target
+        </div>
+    </div>
+</div>
 
 <div id="settings" style="display:none">
     <div class="setrow hint" style="color:#9ab">Card sizes are in the right column ▸</div>
@@ -324,6 +359,7 @@
 <defs>
     <marker id="ahead-atk" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#e55"/></marker>
     <marker id="ahead-blk" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5af"/></marker>
+    <marker id="ahead-tgt" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#b78ce0"/></marker>
 </defs>
 </svg>
 <!-- fixed right column: card viewer (top), then floating mana, zone buttons, and size sliders (bottom) -->
@@ -385,6 +421,13 @@ zoom.oninput = () => {
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsPanel = document.getElementById('settings');
 settingsBtn.onclick = () => { settingsPanel.style.display = (settingsPanel.style.display === 'none' ? 'block' : 'none'); };
+// take-back: ask the engine to restore the last bookmark (a tapped land / half-started cast on your priority)
+document.getElementById('undoBtn').onclick = () => act('UNDO');
+// help / legend modal
+const helpModal = document.getElementById('helpModal');
+document.getElementById('helpBtn').onclick = () => { helpModal.style.display = 'flex'; };
+document.getElementById('helpClose').onclick = () => { helpModal.style.display = 'none'; };
+helpModal.onclick = (e) => { if (e.target === helpModal) helpModal.style.display = 'none'; };
 // battlefield card size (smaller than hand by default)
 const bfzoom = document.getElementById('bfzoom');
 const savedBf = localStorage.getItem('bfZoom');
@@ -478,6 +521,32 @@ function fetchPrice(set, num, key) {
 // The viewer is a permanent panel in the side column now — it never hides; it just keeps showing the
 // last card you hovered. (Kept as a no-op so existing callers don't need changing.)
 function scheduleHideViewer() {}
+// Heuristic "why can't I play this?" note for a hand card. Uses the engine's authoritative playable
+// set when we have it; otherwise explains the most likely blocker (timing or mana). Worded as a guess.
+function playabilityNote(card) {
+    const gv = lastGameView; if (!gv || !card || !card.id) return null;
+    if (!myHandIds.has(card.id)) return null;          // only annotate cards in your hand
+    if (playableIds.has(card.id)) return { ok: true, text: '✓ You can play this now.' };
+    const me = (gv.players||[]).find(p => p.controlled); if (!me) return null;
+    const myTurn = gv.activePlayerId === me.playerId;
+    const step = gv.step || '';
+    const isMain = /MAIN/.test(step);
+    const stackSize = gv.stack ? Object.keys(gv.stack).length : 0;
+    const types = card.cardTypes || [];
+    const rules = (card.rules||[]).join(' ').toLowerCase();
+    const instantSpeed = types.includes('INSTANT') || rules.includes('flash');
+    // rough available mana: untapped lands you control + floating mana (ignores rocks/dorks, so it's a hint)
+    const lands = Object.values(me.battlefield||{}).filter(p => (p.cardTypes||[]).includes('LAND') && !p.tapped).length;
+    const pool = me.manaPool || {};
+    const floating = ['white','blue','black','red','green','colorless'].reduce((s,k)=>s+(pool[k]||0),0);
+    const avail = lands + floating;
+    if (!instantSpeed && !myTurn) return { ok:false, text:"✗ Can't now — it's not your turn (this is sorcery-speed)." };
+    if (!instantSpeed && !isMain) return { ok:false, text:"✗ Can't now — sorcery-speed cards need your main phase." };
+    if (!instantSpeed && stackSize) return { ok:false, text:"✗ Can't now — the stack must be empty for sorcery-speed." };
+    if (card.manaValue && avail < card.manaValue)
+        return { ok:false, text:`✗ Likely not enough mana — needs ${card.manaValue}, you have ~${avail} (untapped lands + floating; rocks/dorks not counted).` };
+    return { ok:false, text:"✗ Can't play right now — a timing rule or effect is preventing it." };
+}
 function showCardViewer(card) {
     if (!viewerToggle.checked || !card) return;
     if (artCandidates(card).length) { setCardImage(viewerImg, card); } else { viewerImg.onerror = null; viewerImg.style.display = 'none'; }
@@ -485,10 +554,12 @@ function showCardViewer(card) {
     const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
     const pt = (card.power !== undefined && (card.cardTypes||[]).includes('CREATURE')) ? `${card.power}/${card.toughness}`
              : (card.loyalty ? 'Loyalty ' + card.loyalty : '');
+    const note = playabilityNote(card);
     viewerInfo.innerHTML = `<span class="vc">${esc(cost)}</span><span class="vn">${msg(card.name||'?')}</span>`
         + `<div class="vt">${esc(types)}</div>`
         + (pt ? `<div class="vpt">${esc(pt)}</div>` : '')
         + (card.rules && card.rules.length ? `<div class="vr">${card.rules.map(msg).join('\n')}</div>` : '')
+        + (note ? `<div class="vnote ${note.ok ? 'ok' : 'no'}">${esc(note.text)}</div>` : '')
         + `<div class="vpr"></div>`;
     // price (cached, fetched from the gateway's Scryfall proxy)
     const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
@@ -1123,6 +1194,15 @@ function drawArrows(gv) {
             for (const bid of blkIds) drawArrow(svg, elCenter(`[data-cid="${bid}"]`), atkC, 'url(#ahead-blk)', '#5af');
         }
     }
+    // spell/ability on the stack -> its target(s), so opponents' targeted spells are visible (purple)
+    const stack = (gv && gv.stack) ? Object.values(gv.stack) : [];
+    for (const s of stack) {
+        const from = elCenter(`[data-cid="${s.id}"]`);
+        for (const tid of (s.targets || [])) {
+            const to = elCenter(`[data-cid="${tid}"]`) || elCenter(`[data-pid="${tid}"]`);
+            drawArrow(svg, from, to, 'url(#ahead-tgt)', '#b78ce0');
+        }
+    }
 }
 // keep arrows aligned when the page scrolls/resizes
 let arrowRaf = null;
@@ -1303,6 +1383,23 @@ function renderPicker(method, data) {
     }
 }
 
+// Combat math: damage headed at ME right now (unblocked attackers), vs my life — with a lethal warning.
+function combatSummary(gv) {
+    if (!gv || !gv.combat || !gv.combat.length) return '';
+    const me = (gv.players||[]).find(p => p.controlled); if (!me) return '';
+    const pw = c => parseInt(c && c.power) || 0;
+    let total = 0, unblocked = 0;
+    for (const g of gv.combat) {
+        if (g.defenderId !== me.playerId) continue;          // only attacks aimed at me
+        const atk = Object.values(g.attackers || {}).reduce((s,c)=>s+pw(c), 0);
+        total += atk;
+        if (!g.blockers || !Object.keys(g.blockers).length) unblocked += atk; // nothing blocking this group
+    }
+    if (!total) return '';
+    const lethal = unblocked >= (me.life||0);
+    return ` <span class="combatmath${lethal?' lethal':''}">⚔ incoming ${unblocked}${total!==unblocked?` of ${total}`:''} `
+        + `vs your ${me.life} life${lethal?' — LETHAL if unblocked!':''}</span>`;
+}
 function setPrompt(message, buttons) {
     promptMain.innerHTML = '';
     const m = document.createElement('span'); m.className = 'msg'; m.innerHTML = message; promptMain.appendChild(m);
@@ -1337,14 +1434,14 @@ function handle(method, data) {
             if (/select attackers/i.test(raw)) {
                 setPrompt('<b>⚔ Declare attackers.</b> Click your highlighted creatures to attack '
                     + '(then pick which opponent/planeswalker). Or use <b>Attack all</b> to send everyone, '
-                    + 'then choose a target. Click Done when finished.',
+                    + 'then choose a target. Click Done when finished.' + combatSummary(lastGameView),
                     [{label:'⚔ Attack all', onClick:()=>send('playerString', 'special')}, // engine: 'special' = all-attack
                      {label:'Done attacking ▸', alt:true, onClick:()=>send('playerBoolean', false)}]);
                 break;
             }
             if (/select blockers/i.test(raw)) {
                 setPrompt('<b>🛡 Declare blockers.</b> Click your creature, then click the attacker it should block. '
-                    + 'Click Done when finished.',
+                    + 'Click Done when finished.' + combatSummary(lastGameView),
                     [{label:'Done blocking ▸', onClick:()=>send('playerBoolean', false)}]);
                 break;
             }
