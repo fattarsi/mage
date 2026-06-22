@@ -216,6 +216,9 @@
         #prompt button { padding: 4px 11px; font-size: 12px; }
         .passbtn { background: #2e6a40; }
         .passbtn:hover { background: #3c8a54; }
+        #choiceList .crow { text-align: left; background: #222a36; border: 0; border-radius: 5px; padding: 7px 10px;
+                            font-size: 13px; color: #dde; cursor: pointer; }
+        #choiceList .crow:hover, #choiceList .crow.sel { background: #34507a; color: #fff; }
         .combatmath { background: #1c2733; color: #cde; padding: 2px 7px; border-radius: 5px; font-size: 12px; white-space: nowrap; }
         .combatmath.lethal { background: #4a1c1c; color: #ffb0a0; font-weight: 700; }
         button { background: #34507a; color: #fff; border: 0; border-radius: 5px; padding: 7px 14px;
@@ -333,6 +336,17 @@
         <h2 id="pickerMsg">Choose a card</h2>
         <div id="pickerCards" class="zone" style="max-height:62vh;overflow:auto"></div>
         <div style="margin-top:10px"><button id="pickerDone">Done / none</button></div>
+    </div>
+</div>
+
+<!-- searchable list for big text choices (creature type, color, card name, ...) -->
+<div id="choiceModal" class="overlay" style="display:none">
+    <div class="panel" style="width:min(520px,94vw)">
+        <h2 id="choiceMsg">Choose</h2>
+        <input id="choiceSearch" type="search" placeholder="type to filter…" autocomplete="off"
+               style="width:100%;box-sizing:border-box;background:#11161d;color:#e7ecf2;border:1px solid #2b313b;border-radius:6px;padding:7px 10px;font-size:14px">
+        <div id="choiceList" style="max-height:54vh;overflow:auto;margin-top:8px;display:flex;flex-direction:column;gap:3px"></div>
+        <div style="margin-top:10px"><button id="choiceCancel" class="alt">Cancel</button></div>
     </div>
 </div>
 
@@ -1381,6 +1395,10 @@ function renderPicker(method, data) {
     } else if (ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO') {
         pickerEl.style.display = 'none';
     }
+    // close the searchable choice modal once we're past that choice
+    if (method !== 'GAME_CHOOSE_CHOICE' && (ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO')) {
+        document.getElementById('choiceModal').style.display = 'none';
+    }
 }
 
 // Combat math: damage headed at ME right now (unblocked attackers), vs my life — with a lethal warning.
@@ -1400,6 +1418,38 @@ function combatSummary(gv) {
     return ` <span class="combatmath${lethal?' lethal':''}">⚔ incoming ${unblocked}${total!==unblocked?` of ${total}`:''} `
         + `vs your ${me.life} life${lethal?' — LETHAL if unblocked!':''}</span>`;
 }
+// searchable modal for big text choices (creature type, card name, ...). items: [valueToSend, label][]
+const choiceModalEl = document.getElementById('choiceModal');
+const choiceMsgEl = document.getElementById('choiceMsg');
+const choiceSearchEl = document.getElementById('choiceSearch');
+const choiceListEl = document.getElementById('choiceList');
+let choiceItems = [];
+function renderChoiceList() {
+    const q = choiceSearchEl.value.trim().toLowerCase();
+    choiceListEl.innerHTML = '';
+    const matches = choiceItems.filter(([,label]) => label.toLowerCase().includes(q)).slice(0, 400);
+    for (const [val, label] of matches) {
+        const b = document.createElement('button'); b.className = 'crow'; b.textContent = label;
+        b.onclick = () => { choiceModalEl.style.display = 'none'; send('playerString', val); };
+        choiceListEl.appendChild(b);
+    }
+    if (!matches.length) { const e = document.createElement('div'); e.className = 'meta'; e.textContent = 'no match'; choiceListEl.appendChild(e); }
+}
+function openChoiceModal(message, items, cancelable) {
+    choiceItems = items;
+    choiceMsgEl.textContent = message;
+    choiceSearchEl.value = '';
+    document.getElementById('choiceCancel').style.display = cancelable ? '' : 'none';
+    renderChoiceList();
+    choiceModalEl.style.display = 'flex';
+    setTimeout(() => choiceSearchEl.focus(), 30);
+}
+choiceSearchEl.oninput = renderChoiceList;
+choiceSearchEl.onkeydown = (e) => { // Enter picks the only/first match
+    if (e.key === 'Enter') { const b = choiceListEl.querySelector('.crow'); if (b) b.click(); }
+};
+document.getElementById('choiceCancel').onclick = () => { choiceModalEl.style.display = 'none'; send('playerBoolean', false); };
+
 function setPrompt(message, buttons) {
     promptMain.innerHTML = '';
     const m = document.createElement('span'); m.className = 'msg'; m.innerHTML = message; promptMain.appendChild(m);
@@ -1547,15 +1597,20 @@ function handle(method, data) {
         }
         case 'GAME_CHOOSE_CHOICE': {
             const ch = data.choice || {};
-            const btns = [];
-            if (ch.keyChoice && ch.keyChoices) {
-                for (const k in ch.keyChoices) btns.push({label: strip(ch.keyChoices[k]), onClick:()=>send('playerString', k)});
+            // [value-to-send, label] pairs. NOTE: the server's isKeyChoice() is a getter (not a serialized
+            // field), so there's no ch.keyChoice flag — detect key-choices by a non-empty keyChoices map.
+            let items;
+            const kc = ch.keyChoices && Object.keys(ch.keyChoices).length ? ch.keyChoices : null;
+            if (kc) items = Object.keys(kc).map(k => [k, strip(kc[k])]);            // send the key
+            else { const o = ch.choices || []; items = (Array.isArray(o)?o:Object.values(o)).map(v => [v, strip(v)]); } // send the value
+            // many options (e.g. creature type, ~280) or search-enabled -> searchable modal; few -> inline buttons
+            if (items.length > 12 || ch.searchEnabled) {
+                openChoiceModal(strip(ch.message || data.message || 'Choose'), items, !ch.required);
             } else {
-                const opts = ch.choices || [];
-                (Array.isArray(opts)?opts:Object.values(opts)).forEach(o => btns.push({label:strip(o), onClick:()=>send('playerString', o)}));
+                const btns = items.map(([val,label]) => ({label, onClick:()=>send('playerString', val)}));
+                if (!ch.required) btns.push({label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)});
+                setPrompt(msg(ch.message || data.message || 'Choose'), btns);
             }
-            if (!ch.required) btns.push({label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)});
-            setPrompt(msg(ch.message || data.message || 'Choose'), btns);
             break;
         }
         case 'GAME_CHOOSE_ABILITY': {
