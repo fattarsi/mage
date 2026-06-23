@@ -197,6 +197,8 @@
                       background: rgba(0,0,0,.6); border-radius: 3px; line-height: 1; padding: 1px; }
         #stack { border: 1px dashed #56607a; border-radius: 6px; padding: 6px; margin: 8px 0; }
         #stackZone { align-items: flex-end; }
+        #stackLastLog { margin-top: 5px; padding-top: 4px; border-top: 1px solid #2b313b; font-size: 11px;
+                        color: #8a9; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .stackitem { display: inline-flex; flex-direction: column; align-items: stretch; }
         .stacktargets { font-size: 10px; color: #9cf; margin-top: 2px; max-width: var(--bf-card-w); }
         #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; align-self: center; margin-left: 4px; }
@@ -354,7 +356,7 @@
 <div id="board">
     <div id="phasebar"></div>
     <div id="opponents"></div>
-    <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div></div>
+    <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div><div id="stackLastLog" title="most recent game-log entry"></div></div>
     <div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span></div>
     <div id="skipbar"></div>
     <div id="me" class="player me"></div>
@@ -859,6 +861,8 @@ function logc(cls, s) {
     s = String(s).replace(/<[^>]+>/g, ''); // strip XMage's embedded <font> markup
     const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = s;
     logEl.appendChild(d);
+    // mirror the latest gameplay line under the stack (skip our own sent/echo lines)
+    if (cls !== 'sent' && cls !== 'recv') { const ll = document.getElementById('stackLastLog'); if (ll) ll.textContent = s; }
     if (logSearch && logSearch.value.trim()) { filterLogLine(d); updateLogCount(); } // honor active search
     logEl.scrollTop = logEl.scrollHeight;
     while (logEl.childNodes.length > 500) logEl.removeChild(logEl.firstChild);
@@ -1336,6 +1340,7 @@ function renderBoard(gv) {
             const oz = document.createElement('div'); oz.className = 'oppzones';
             oz.appendChild(collapsibleZone('Graveyard', opp.graveyard, 'gy-' + opp.playerId));
             oz.appendChild(collapsibleZone('Exile', opp.exile, 'ex-' + opp.playerId));
+            if (opp.topCard) oz.appendChild(zone('Top of library', { [opp.topCard.id]: opp.topCard }, false)); // revealed (e.g. their Oracle)
             panel.appendChild(oz);
         }
         opponentsEl.appendChild(panel);
@@ -1351,6 +1356,8 @@ function renderBoard(gv) {
     if (gv.myHelperEmblems && Object.keys(gv.myHelperEmblems).length)
         myZones.appendChild(collapsibleZone('Emblems', gv.myHelperEmblems, 'my-emblems'));
     meEl.appendChild(myZones);
+    // revealed top card of your library (Future Sight, Oracle of Mul Daya, etc.) — hover to read, click to play if able
+    if (me.topCard) meEl.appendChild(zone('Top of library', { [me.topCard.id]: me.topCard }, true));
     meEl.appendChild(zone('My hand (' + Object.keys(gv.myHand || {}).length + ')', gv.myHand, true));
 
     // right column: zone buttons (commander/graveyard/exile w/ counts) + my floating mana
