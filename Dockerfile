@@ -16,6 +16,9 @@ WORKDIR /src
 COPY . .
 # -am builds the modules Mage.Server.Web needs (engine, sets, server, plugins).
 RUN mvn -B -ntp -pl Mage.Server.Web -am install -DskipTests
+# Pre-cache the exec plugin into ~/.m2 so the runtime's offline `mvn -o exec:java` can find it
+# (the install above never invokes exec:, so it would otherwise be missing -> offline failure).
+RUN mvn -B -ntp org.codehaus.mojo:exec-maven-plugin:3.1.0:help >/dev/null
 
 # ---- runtime stage: run the built reactor offline via the exec plugin ----
 # We keep Maven here because the gateway is launched through exec:java against the
