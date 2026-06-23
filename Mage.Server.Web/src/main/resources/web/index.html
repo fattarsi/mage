@@ -604,10 +604,12 @@ if (!clientId) {
     clientId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + '-' + Math.random().toString(16).slice(2));
     localStorage.setItem('xmageClientId', clientId);
 }
-const ws = new WebSocket(`ws://${location.host}/ws/spectate?cid=${encodeURIComponent(clientId)}`);
+// match the page's scheme: wss:// when served over https (e.g. behind a reverse proxy), else ws://
+const wsScheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
+const ws = new WebSocket(`${wsScheme}${location.host}/ws/spectate?cid=${encodeURIComponent(clientId)}`);
 ws.onopen = () => statusEl.textContent = 'connected';
-ws.onclose = () => statusEl.textContent = 'disconnected';
-ws.onerror = () => statusEl.textContent = 'error';
+ws.onclose = () => statusEl.textContent = 'disconnected — reload to reconnect';
+ws.onerror = () => statusEl.textContent = 'connection error (check the URL / reverse-proxy WebSocket support)';
 
 let lastGameView = null;
 let lastMethod = null, lastData = null;
