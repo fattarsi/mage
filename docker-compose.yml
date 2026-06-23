@@ -6,6 +6,7 @@ services:
   xmage-web:
     build: .
     image: xmage-web
+    restart: unless-stopped              # come back after crashes / host reboots
     ports:
       # host port is configurable (container always listens on 8080 internally)
       - "${XMAGE_WEB_PORT:-8080}:8080"
@@ -13,10 +14,32 @@ services:
       # Optional: point at your own "Deck Manager" REST API to load saved decks
       # and enable Commander games. Leave empty to use pasted/random decks only.
       XMAGE_WEB_DECK_SOURCE_URL: "${XMAGE_WEB_DECK_SOURCE_URL:-}"
+      # JVM heap for the gateway (one process serves all concurrent games). Raise for heavier use.
+      MAVEN_OPTS: "${XMAGE_JVM_OPTS:--Xmx3g}"
+    labels:
+      - "autoheal=true"                  # let the autoheal watchdog restart us if we go unhealthy
+    healthcheck:
+      # a hung JVM still holds the port open, so check an actual HTTP response, not just the socket
+      test: ["CMD", "curl", "-fsS", "--max-time", "5", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 120s                 # first boot loads the full card pool — don't health-fail during startup
     # Persist the downloaded card art / price caches across restarts (optional).
     volumes:
       - xmage-image-cache:/app/image-cache
       - xmage-cardinfo-cache:/app/cardinfo-cache
+
+  # Watchdog: restarts any container labelled autoheal=true once Docker marks it unhealthy
+  # (covers the "stops responding" hangs, which restart:unless-stopped alone won't catch).
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: "30"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   xmage-image-cache:
