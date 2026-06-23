@@ -1,12 +1,14 @@
 # XMage Web Gateway — one-command run.
-#   docker compose up --build      # build (first time is slow) and start
-#   then open http://localhost:8080/
+#   docker compose up --build                       # build (first time is slow) and start
+#   XMAGE_WEB_PORT=8845 docker compose up --build    # publish on a different host port
+#   then open http://localhost:<port>/   (default 8080)
 services:
   xmage-web:
     build: .
     image: xmage-web
     ports:
-      - "8080:8080"
+      # host port is configurable (container always listens on 8080 internally)
+      - "${XMAGE_WEB_PORT:-8080}:8080"
     environment:
       # Optional: point at your own "Deck Manager" REST API to load saved decks
       # and enable Commander games. Leave empty to use pasted/random decks only.
