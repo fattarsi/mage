@@ -30,6 +30,12 @@ public final class WebServerMain {
         logger.info("booting headless XMage server…");
         Main.HeadlessBoot boot = Main.bootHeadless();
 
+        // Swap the "mad" AI for our threat-aware nudge (additive; no engine edits). config.xml registered
+        // the stock class during boot — this overwrites that mapping for the slot the gateway seats.
+        mage.server.game.PlayerFactory.instance.addPlayerType(
+                "Computer - mad", mage.server.web.ai.ThreatAwareComputerPlayer.class);
+        logger.info("AI: 'Computer - mad' seats now use ThreatAwareComputerPlayer");
+
         WebGatewayServer gateway = new WebGatewayServer(boot.managerFactory, boot.mageServer);
 
         // PLAY mode: each browser that connects gets its own Human-vs-AI game.
