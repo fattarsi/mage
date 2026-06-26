@@ -809,7 +809,10 @@ public class WebGatewayServer {
                 + (validator != null ? validator.getName() : deckType) + ":\n");
         if (resolved < requested) {
             sb.append("• ").append(requested - resolved)
-                    .append(" card(s) couldn't be found in XMage's database (set/printing mismatch from the import).\n");
+                    .append(" card(s) couldn't be found in XMage's database (set/printing mismatch from the import):\n");
+            for (String line : describeUnresolvedCards(list)) {
+                sb.append("    – ").append(line).append("\n");
+            }
         }
         if (validator != null) {
             int shown = 0;
@@ -822,6 +825,41 @@ public class WebGatewayServer {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * Identify which specific cards from the import didn't resolve. XMage looks each card up by its
+     * exact set+number ({@code CardRepository.findCard(set, number)}); if that printing isn't in the
+     * database the card is silently dropped (this is what makes a 100-card deck land at 99). We re-run
+     * the same lookup per entry to name the offenders, and check by name whether the card exists under a
+     * different printing — so the message can say "re-import / pick another printing" vs "not implemented".
+     */
+    private java.util.List<String> describeUnresolvedCards(DeckCardLists list) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        java.util.List<mage.cards.decks.DeckCardInfo> all = new java.util.ArrayList<>();
+        all.addAll(list.getCards());
+        all.addAll(list.getSideboard());
+        for (mage.cards.decks.DeckCardInfo info : all) {
+            mage.cards.repository.CardInfo exact =
+                    mage.cards.repository.CardRepository.instance.findCard(info.getSetCode(), info.getCardNumber());
+            if (exact != null) {
+                continue; // this printing resolved fine
+            }
+            String where = info.getSetCode() + " #" + info.getCardNumber();
+            mage.cards.repository.CardInfo byName =
+                    mage.cards.repository.CardRepository.instance.findCard(info.getCardName());
+            if (byName != null) {
+                out.add(info.getCardName() + " (" + where + " not in DB; available as "
+                        + byName.getSetCode() + " — re-import or pick another printing)");
+            } else {
+                out.add(info.getCardName() + " (" + where + " — card not implemented in XMage)");
+            }
+            if (out.size() >= 12) {
+                out.add("…");
+                break;
+            }
+        }
+        return out;
     }
 
     private void onClose(WsContext ctx) {
