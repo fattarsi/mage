@@ -233,8 +233,15 @@
         #log .sent { color: #9cf; } #log .recv { color: #7a8; } #log .err { color: #f88; font-weight: 700; }
         .card.playable { box-shadow: 0 0 0 3px #5d7; }
         .card.playable::after { content: '▶ play'; position: absolute; left: 4px; bottom: 2px; font-size: 8px; color: #6e9; }
-        #banner { display:none; padding: 8px 14px; background: #5a2a2a; color: #fdd; font-size: 13px;
-                  white-space: pre-line; }
+        /* fixed at top and above overlays (z>60) so errors are never hidden behind a modal */
+        #banner { display:none; position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+                  padding: 8px 14px; background: #5a2a2a; color: #fdd; font-size: 13px;
+                  white-space: pre-line; max-height: 40vh; overflow: auto;
+                  box-shadow: 0 2px 12px rgba(0,0,0,.5); }
+        /* inline error inside the setup modal (deck-incompatibility messages, etc.) */
+        #setupError { background: #5a2a2a; color: #fdd; border: 1px solid #8a4444; border-radius: 6px;
+                      padding: 8px 12px; margin-bottom: 10px; font-size: 13px; white-space: pre-line;
+                      max-height: 30vh; overflow: auto; }
         input[type=number] { width: 70px; padding: 5px; }
         .over { color: #fe7; font-size: 16px; font-weight: 700; }
         .overlay { position: fixed; inset: 0; background: rgba(8,10,13,.82); display: flex;
@@ -314,6 +321,7 @@
 <div id="setup" class="overlay" style="display:none">
     <div class="panel">
         <h2>New game vs AI</h2>
+        <div id="setupError" style="display:none"></div>
         <label for="formatSel">Format</label>
         <select id="formatSel"></select>
         <div id="deckSourceWrap" style="display:none">
@@ -763,6 +771,7 @@ function showSetup(ready) {
 }
 document.getElementById('startBtn').onclick = () => {
     document.getElementById('banner').style.display = 'none';
+    document.getElementById('setupError').style.display = 'none';
     const deckId = deckSourceSel.value;
     // chosen AI opponent decks (empty string = let the host auto-pick that seat)
     const aiDeckIds = [...document.querySelectorAll('.aiDeckSel')].map(s => s.value);
@@ -1481,9 +1490,14 @@ function handle(method, data) {
             setGameActive(false); log(esc(data.message || 'Game ended.'));
             setPrompt('Game ended. Click “New game” to start another.'); showSetup(); break;
         case 'GATEWAY_INFO': log(esc(data.message)); break;
-        case 'GATEWAY_ERROR':
-            showBanner(data.message || 'error'); setPrompt('<span class="over">Couldn\'t start — see the banner above.</span>');
-            showSetup(); break;
+        case 'GATEWAY_ERROR': {
+            const msg = data.message || 'error';
+            showSetup();
+            const se = document.getElementById('setupError');
+            se.textContent = msg; se.style.display = 'block';
+            logc('err', msg);
+            setPrompt('<span class="over">Couldn\'t start — see the message in the dialog.</span>');
+            break; }
         case 'START_GAME': case 'GAME_INIT':
             setupEl.style.display = 'none'; log('Game started'); setGameActive(true);
             setPrompt('Game started — waiting for the first decision…'); break;
