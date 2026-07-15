@@ -1397,8 +1397,23 @@ function renderBoard(gv) {
             + (active ? ` <span class="active">● active</span>` : '') + `</div>`;
     }
 
-    // opponents: compact + hover-to-zoom when there's more than one (3-4 player games)
-    const opponents = gv.players.filter(p => p !== me);
+    // opponents: compact + hover-to-zoom when there's more than one (3-4 player games).
+    // Lay them out in true turn order starting from the seat right after me (gv.playerOrder), NOT the
+    // arbitrary players[] map order, so the active-turn highlight sweeps CLOCKWISE around the table:
+    // me (bottom) -> top-left -> across the top -> top-right -> back to me.
+    const turnOrder = (gv.playerOrder && gv.playerOrder.length) ? gv.playerOrder : gv.players.map(p => p.playerId);
+    const playerById = {}; gv.players.forEach(p => playerById[p.playerId] = p);
+    const meOrderIdx = turnOrder.indexOf(me.playerId);
+    let opponents;
+    if (meOrderIdx < 0) {
+        opponents = gv.players.filter(p => p !== me);
+    } else {
+        opponents = [];
+        for (let k = 1; k < turnOrder.length; k++) {
+            const p = playerById[turnOrder[(meOrderIdx + k) % turnOrder.length]];
+            if (p && p !== me) opponents.push(p);
+        }
+    }
     opponentsEl.innerHTML = '';
     opponentsEl.className = opponents.length > 1 ? 'multi' : '';
     for (const opp of opponents) {
