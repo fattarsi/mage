@@ -136,6 +136,10 @@
         .phead { display: flex; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 6px; }
         .pname { font-weight: 700; }
         .life { color: #f88; font-weight: 700; }
+        /* player-level counters shown next to life (poison, energy, experience, …) */
+        .pcounter { color: #9cf; font-weight: 700; margin-left: 6px; font-size: 12px; }
+        .poison { color: #9d6; font-weight: 700; margin-left: 6px; font-size: 12px; }
+        .poison.lethal { color: #f66; }
         .meta { color: #9aa; font-size: 12px; }
         .active { color: #7f7; }
         .zone-label { font-size: 11px; color: #789; margin: 4px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
@@ -201,7 +205,7 @@
                         color: #8a9; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .stackitem { display: inline-flex; flex-direction: column; align-items: stretch; }
         .stacktargets { font-size: 10px; color: #9cf; margin-top: 2px; max-width: var(--bf-card-w); }
-        #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; align-self: center; margin-left: 4px; }
+        #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; align-self: center; margin-right: 6px; }
         #resolveStackBtn:hover { background: #3c8a54; }
         /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
         #skipbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 4px; margin: -2px 0 4px; }
@@ -616,10 +620,34 @@ if (!clientId) {
 }
 // match the page's scheme: wss:// when served over https (e.g. behind a reverse proxy), else ws://
 const wsScheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
-const ws = new WebSocket(`${wsScheme}${location.host}/ws/spectate?cid=${encodeURIComponent(clientId)}`);
-ws.onopen = () => statusEl.textContent = 'connected';
-ws.onclose = () => statusEl.textContent = 'disconnected — reload to reconnect';
-ws.onerror = () => statusEl.textContent = 'connection error (check the URL / reverse-proxy WebSocket support)';
+const wsUrl = `${wsScheme}${location.host}/ws/spectate?cid=${encodeURIComponent(clientId)}`;
+
+// Auto-reconnecting socket. WebSockets drop for benign reasons (network blips, a reverse-proxy idle
+// timeout, laptop sleep). The server keeps our game alive for a grace period and, on reconnect with the
+// same cid, resyncs the board and re-sends the pending prompt — so a drop should be transparent instead
+// of a dead page. We reconnect with backoff and buffer any outgoing action to flush once we're back.
+let ws = null;
+let reconnectTimer = null, reconnectDelay = 500;
+const sendBuffer = [];   // actions attempted while the socket was down; flushed on reconnect
+function flushSendBuffer() {
+    while (sendBuffer.length && ws && ws.readyState === WebSocket.OPEN) {
+        const raw = sendBuffer.shift();
+        try { ws.send(raw); logc('sent', '↻ (buffered) ' + raw); } catch (e) { sendBuffer.unshift(raw); break; }
+    }
+}
+function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 5000); // 0.5s → 1s → 2s → 4s → 5s cap
+}
+function connect() {
+    ws = new WebSocket(wsUrl);
+    ws.onopen = () => { statusEl.textContent = 'connected'; reconnectDelay = 500; hideBanner(); flushSendBuffer(); };
+    ws.onmessage = onSocketMessage;
+    ws.onclose = () => { statusEl.textContent = 'reconnecting…'; scheduleReconnect(); };
+    ws.onerror = () => { statusEl.textContent = 'connection error — retrying…'; }; // onclose fires next and drives the retry
+}
+connect();
 
 let lastGameView = null;
 let lastMethod = null, lastData = null;
@@ -636,8 +664,17 @@ const ACTIONABLE = new Set(['GAME_SELECT','GAME_PLAY_MANA','GAME_ASK','GAME_GET_
 function send(action, value, extra) {
     const m = Object.assign({ action }, extra || {});
     if (value !== undefined && value !== null) m.value = value;
-    if (ws.readyState !== WebSocket.OPEN) { showError('socket not open (state ' + ws.readyState + ')'); return; }
-    ws.send(JSON.stringify(m));
+    const raw = JSON.stringify(m);
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        // socket is down (blip / proxy timeout): queue the action, show a soft status, and reconnect.
+        // On reconnect the server resyncs and re-sends the current prompt, and we flush this buffer.
+        sendBuffer.push(raw);
+        statusEl.textContent = 'reconnecting…';
+        scheduleReconnect();
+        logc('recv', '⏳ queued while offline: ' + action);
+        return;
+    }
+    ws.send(raw);
     logc('sent', '→ ' + action + (value !== undefined ? ' ' + value : ''));
 }
 // players are valid targets/choices too (e.g. "select a starting player", "target player")
@@ -950,7 +987,7 @@ function untappedLandIds(gv) {
         .map(([id]) => id);
 }
 
-ws.onmessage = (ev) => {
+function onSocketMessage(ev) {
     let msg;
     try { msg = JSON.parse(ev.data); } catch (e) { showError('bad JSON frame'); return; }
     const data = msg.data || {};
@@ -981,7 +1018,7 @@ ws.onmessage = (ev) => {
     } catch (e) {
         showError((e && e.message || e) + ' (method ' + msg.method + ')');
     }
-};
+}
 
 function computePlayable(gv) {
     playableIds = new Set();
@@ -1311,6 +1348,20 @@ function renderBoard(gv) {
     turnInfoEl.innerHTML = `T${gv.turn} · ${esc(gv.step||gv.phase||'')} · ` + passBtn
         + (myTurn ? '<span style="color:#7f7">YOUR TURN</span>' : '<span style="color:#fa8">opp turn</span>');
 
+    // player-level counters (poison is lethal at 10; also energy/experience/etc.). PlayerView only
+    // includes counters the player actually has, so nothing shows at 0.
+    function playerCountersHtml(counters) {
+        if (!Array.isArray(counters)) return '';
+        return counters.map(c => {
+            if (!c || !c.count) return '';
+            if (/poison/i.test(c.name)) {
+                const lethal = c.count >= 10;
+                return `<span class="poison${lethal ? ' lethal' : ''}" title="poison counters${lethal ? ' — 10 = you lose!' : ''}">☠ ${c.count}</span>`;
+            }
+            return `<span class="pcounter" title="${esc(c.name)} counters">${esc(c.name)} ${c.count}</span>`;
+        }).join('');
+    }
+
     function pheadHtml(p, active, isOpp) {
         const tgt = validTargets.has(p.playerId) ? ' targetable' : '';
         const zoomBtn = (isOpp && !p.hasLeft)
@@ -1321,7 +1372,8 @@ function renderBoard(gv) {
             + (p.hasLeft ? `<span class="out" title="out of the game">💀</span> ` : '')
             + (p.monarch ? `<span class="crown" title="Monarch">👑</span> ` : '')
             + `<span class="pname">${esc(p.name)}</span> `
-            + `<span class="life">♥ ${p.life}</span> `
+            + `<span class="life">♥ ${p.life}</span>`
+            + playerCountersHtml(p.counters) + ' '
             + `<span class="meta">hand ${p.handCount} · lib ${p.libraryCount} · gy ${Object.keys(p.graveyard||{}).length}</span>`
             + manaPoolHtml(p.manaPool)
             + (active ? ` <span class="active">● active</span>` : '') + `</div>`;
@@ -1388,11 +1440,12 @@ function renderBoard(gv) {
             }
             stackZone.appendChild(item);
         });
-        // resolve-stack action lives here, right after the stack (only shown when the stack isn't empty)
-        const rb = document.createElement('button'); rb.id = 'resolveStackBtn'; rb.textContent = 'Resolve stack ▸';
+        // resolve-stack action on the LEFT with a left-pointing arrow, so it reads as pushing the stack
+        // through to resolution (only shown when the stack isn't empty)
+        const rb = document.createElement('button'); rb.id = 'resolveStackBtn'; rb.textContent = '◂ Resolve stack';
         rb.title = 'Pass priority until the stack fully resolves (F9)';
         rb.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
-        stackZone.appendChild(rb);
+        stackZone.insertBefore(rb, stackZone.firstChild);
     }
 }
 
@@ -1482,7 +1535,7 @@ function handle(method, data) {
     const message = msg(data.message);
     switch (method) {
         case 'GATEWAY_HELLO': setPrompt('Connected.'); break;
-        case 'GATEWAY_READY': showSetup(data); sendSkips(); setPrompt('Pick a format (and optionally a deck) then click Start game.'); break;
+        case 'GATEWAY_READY': sendBuffer.length = 0; showSetup(data); sendSkips(); setPrompt('Pick a format (and optionally a deck) then click Start game.'); break;
         case 'GATEWAY_RECONNECTED':
             setupEl.style.display = 'none'; hideBanner(); setGameActive(true);
             log('Reconnected to your game'); setPrompt('Reconnected — resuming…'); break;
