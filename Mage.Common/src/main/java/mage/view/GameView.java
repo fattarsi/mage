@@ -5,6 +5,7 @@ import com.google.gson.GsonBuilder;
 import mage.MageObject;
 import mage.abilities.costs.Cost;
 import mage.cards.Card;
+import mage.constants.CommanderCardType;
 import mage.constants.PhaseStep;
 import mage.constants.TurnPhase;
 import mage.constants.Zone;
@@ -25,6 +26,7 @@ import mage.game.stack.StackObject;
 import mage.players.PlayableObjectsList;
 import mage.players.Player;
 import mage.util.CardUtil;
+import mage.watchers.common.CommanderInfoWatcher;
 import org.apache.log4j.Logger;
 
 import java.io.Serializable;
@@ -43,6 +45,9 @@ public class GameView implements Serializable {
     private final int bufferTime;
     private final List<PlayerView> players = new ArrayList<>();
     private final List<UUID> playerOrder = new ArrayList<>(); // actual turn order (seat order), not map order
+    // commander combat damage taken, per player: damagedPlayerId -> (commander name -> total damage).
+    // Lethal at 21 from a single commander (rule 903.14a). Empty for non-commander games.
+    private final Map<UUID, Map<String, Integer>> commanderDamage = new HashMap<>();
     private UUID myPlayerId = null; // null for watcher
     private final CardsView myHand = new CardsView();
     private final CardsView myHelperEmblems = new CardsView();
@@ -80,6 +85,26 @@ public class GameView implements Serializable {
             UUID pid = state.getPlayerList().get(i);
             if (pid != null) {
                 playerOrder.add(pid);
+            }
+        }
+
+        // commander damage: walk each player's commander(s) and read its damage watcher. Keyed by the
+        // damaged player so the UI can show, per seat, how much it's taken from each commander (21 = dead).
+        for (Player player : state.getPlayers().values()) {
+            for (UUID commanderId : game.getCommandersIds(player, CommanderCardType.COMMANDER_OR_OATHBREAKER, false)) {
+                CommanderInfoWatcher watcher = state.getWatcher(CommanderInfoWatcher.class, commanderId);
+                if (watcher == null) {
+                    continue;
+                }
+                Card commanderCard = game.getCard(commanderId);
+                String commanderName = commanderCard != null ? commanderCard.getName() : "Commander";
+                for (Map.Entry<UUID, Integer> e : watcher.getDamageToPlayer().entrySet()) {
+                    if (e.getValue() == null || e.getValue() <= 0) {
+                        continue;
+                    }
+                    commanderDamage.computeIfAbsent(e.getKey(), k -> new HashMap<>())
+                            .merge(commanderName, e.getValue(), Integer::max);
+                }
             }
         }
 
@@ -259,6 +284,10 @@ public class GameView implements Serializable {
 
     public List<UUID> getPlayerOrder() {
         return playerOrder;
+    }
+
+    public Map<UUID, Map<String, Integer>> getCommanderDamage() {
+        return commanderDamage;
     }
 
     public CardsView getMyHand() {
