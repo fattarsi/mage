@@ -140,6 +140,10 @@
         .pcounter { color: #9cf; font-weight: 700; margin-left: 6px; font-size: 12px; }
         .poison { color: #9d6; font-weight: 700; margin-left: 6px; font-size: 12px; }
         .poison.lethal { color: #f66; }
+        /* commander combat damage taken (21 from one commander = you lose) */
+        .cmddmg { color: #d9a; font-weight: 700; margin-left: 6px; font-size: 12px; }
+        .cmddmg.warn { color: #fb7; }
+        .cmddmg.lethal { color: #f66; }
         .meta { color: #9aa; font-size: 12px; }
         .active { color: #7f7; }
         .zone-label { font-size: 11px; color: #789; margin: 4px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
@@ -205,7 +209,7 @@
                         color: #8a9; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .stackitem { display: inline-flex; flex-direction: column; align-items: stretch; }
         .stacktargets { font-size: 10px; color: #9cf; margin-top: 2px; max-width: var(--bf-card-w); }
-        #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; align-self: center; margin-right: 6px; }
+        #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; align-self: center; margin-left: 6px; }
         #resolveStackBtn:hover { background: #3c8a54; }
         /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
         #skipbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 4px; margin: -2px 0 4px; }
@@ -1362,6 +1366,19 @@ function renderBoard(gv) {
         }).join('');
     }
 
+    // commander combat damage this player has taken, per commander (⚔ N; lethal at 21, rule 903.14a)
+    function commanderDamageHtml(playerId) {
+        const cd = gv.commanderDamage && gv.commanderDamage[playerId];
+        if (!cd) return '';
+        return Object.keys(cd).map(name => {
+            const dmg = cd[name];
+            if (!dmg) return '';
+            const lethal = dmg >= 21, warn = dmg >= 16 && !lethal;
+            const cls = 'cmddmg' + (lethal ? ' lethal' : (warn ? ' warn' : ''));
+            return `<span class="${cls}" title="commander damage from ${esc(name)}${lethal ? ' — 21 = you lose!' : ''}">⚔ ${dmg}</span>`;
+        }).join('');
+    }
+
     function pheadHtml(p, active, isOpp) {
         const tgt = validTargets.has(p.playerId) ? ' targetable' : '';
         const zoomBtn = (isOpp && !p.hasLeft)
@@ -1373,7 +1390,8 @@ function renderBoard(gv) {
             + (p.monarch ? `<span class="crown" title="Monarch">👑</span> ` : '')
             + `<span class="pname">${esc(p.name)}</span> `
             + `<span class="life">♥ ${p.life}</span>`
-            + playerCountersHtml(p.counters) + ' '
+            + playerCountersHtml(p.counters)
+            + commanderDamageHtml(p.playerId) + ' '
             + `<span class="meta">hand ${p.handCount} · lib ${p.libraryCount} · gy ${Object.keys(p.graveyard||{}).length}</span>`
             + manaPoolHtml(p.manaPool)
             + (active ? ` <span class="active">● active</span>` : '') + `</div>`;
@@ -1440,12 +1458,12 @@ function renderBoard(gv) {
             }
             stackZone.appendChild(item);
         });
-        // resolve-stack action on the LEFT with a left-pointing arrow, so it reads as pushing the stack
-        // through to resolution (only shown when the stack isn't empty)
+        // resolve-stack action to the right of the stack, with a left-pointing arrow so it reads as
+        // pushing the stack through to resolution (only shown when the stack isn't empty)
         const rb = document.createElement('button'); rb.id = 'resolveStackBtn'; rb.textContent = '◂ Resolve stack';
         rb.title = 'Pass priority until the stack fully resolves (F9)';
         rb.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
-        stackZone.insertBefore(rb, stackZone.firstChild);
+        stackZone.appendChild(rb);
     }
 }
 

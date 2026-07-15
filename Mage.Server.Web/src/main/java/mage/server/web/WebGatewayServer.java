@@ -728,6 +728,18 @@ public class WebGatewayServer {
             }
         }
 
+        // Repair unresolvable printings: the card is implemented, but the exact set+number from the
+        // import isn't in XMage's DB (promos, showcase numbers like "175s", newer sets). XMage resolves
+        // cards by exact set+number and silently drops mismatches, leaving a legal deck short a card.
+        // Swap to an available printing of the same card so the deck loads (gameplay is identical).
+        if (deck != null) {
+            List<String> fixed = resolveToAvailablePrintings(deck);
+            if (!fixed.isEmpty()) {
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_INFO", null,
+                        Map.of("message", "Adjusted card printings so the deck loads: " + String.join("; ", fixed))));
+            }
+        }
+
         // Commander games need a real Commander deck for every seat — give the AIs decks from the source.
         List<DeckCardLists> aiDecks = null;
         boolean isCommander = fmt.deckType.toLowerCase().contains("commander");
@@ -763,6 +775,16 @@ public class WebGatewayServer {
             for (int i = 0; i < fmt.aiSeats; i++) {
                 String chosen = i < aiDeckIds.size() ? aiDeckIds.get(i) : "";
                 aiDecks.add(chosen.isEmpty() ? null : deckSource.fetchDeck(chosen));
+            }
+        }
+
+        // AI decks come from the same source and hit the same printing mismatches — repair them too, so
+        // an otherwise-legal AI commander deck isn't rejected as incomplete (which would drop the seat).
+        if (aiDecks != null) {
+            for (DeckCardLists aiDeck : aiDecks) {
+                if (aiDeck != null) {
+                    resolveToAvailablePrintings(aiDeck);
+                }
             }
         }
 
@@ -860,6 +882,41 @@ public class WebGatewayServer {
             }
         }
         return out;
+    }
+
+    /**
+     * Swap deck entries whose exact printing (set + collector number) isn't in XMage's database to an
+     * available printing of the SAME card, found by name. This is why an implemented card can still
+     * "not be detected": XMage looks the card up by exact set+number, so a deck exported with a printing
+     * XMage doesn't carry silently drops it. Gameplay is identical across printings, so substituting a
+     * valid one lets the deck load. Entries with no known printing at all (typo / un-implemented) are
+     * left as-is for {@link #describeDeckProblems} to report. Returns "Name (oldSet #n → newSet #n)"
+     * notes for each substitution.
+     */
+    private List<String> resolveToAvailablePrintings(DeckCardLists list) {
+        List<String> notes = new java.util.ArrayList<>();
+        if (list == null) {
+            return notes;
+        }
+        for (List<mage.cards.decks.DeckCardInfo> section
+                : java.util.Arrays.asList(list.getCards(), list.getSideboard())) {
+            for (int i = 0; i < section.size(); i++) {
+                mage.cards.decks.DeckCardInfo info = section.get(i);
+                if (mage.cards.repository.CardRepository.instance.findCard(info.getSetCode(), info.getCardNumber()) != null) {
+                    continue; // exact printing resolves — leave it
+                }
+                mage.cards.repository.CardInfo byName =
+                        mage.cards.repository.CardRepository.instance.findCard(info.getCardName());
+                if (byName == null) {
+                    continue; // genuinely unknown/un-implemented — let the problem reporter name it
+                }
+                notes.add(info.getCardName() + " (" + info.getSetCode() + " #" + info.getCardNumber()
+                        + " → " + byName.getSetCode() + " #" + byName.getCardNumber() + ")");
+                section.set(i, new mage.cards.decks.DeckCardInfo(
+                        info.getCardName(), byName.getCardNumber(), byName.getSetCode(), info.getAmount()));
+            }
+        }
+        return notes;
     }
 
     private void onClose(WsContext ctx) {
