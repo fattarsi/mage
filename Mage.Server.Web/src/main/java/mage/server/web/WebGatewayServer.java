@@ -225,8 +225,14 @@ public class WebGatewayServer {
 
     public void start(int port) {
         app = Javalin.create(config -> {
-            // serve the minimal browser client from classpath:/web
-            config.staticFiles.add("/web", Location.CLASSPATH);
+            // serve the minimal browser client from classpath:/web. Force revalidation ("no-cache" =
+            // the browser may cache but must re-check with the server via ETag before using) so a redeploy
+            // is picked up immediately instead of a stale index.html/JS lingering until a hard refresh.
+            config.staticFiles.add(staticFiles -> {
+                staticFiles.directory = "/web";
+                staticFiles.location = Location.CLASSPATH;
+                staticFiles.headers = Map.of("Cache-Control", "no-cache");
+            });
         });
 
         app.ws("/ws/spectate", ws -> {
