@@ -265,8 +265,11 @@
         .overlay #startBtn { margin-top: 12px; font-size: 15px; padding: 9px 20px; }
         #newGameBtn { background: #2e6a40; font-size: 12px; padding: 5px 12px; }
         #newGameBtn:hover { background: #3c8a54; }
-        #undoBtn, #helpBtn, #rollbackBtn { background: #3a4150; font-size: 12px; padding: 5px 12px; }
-        #undoBtn:hover, #helpBtn:hover, #rollbackBtn:hover { background: #4a5468; }
+        #undoBtn, #helpBtn { background: #3a4150; font-size: 12px; padding: 5px 12px; }
+        #undoBtn:hover, #helpBtn:hover { background: #4a5468; }
+        /* the bigger take-back gets its own colour so it's easy to find */
+        #rollbackBtn { background: #6a4a1e; font-size: 12px; padding: 5px 12px; }
+        #rollbackBtn:hover { background: #8a6428; }
         #resignBtn { background: #7a5a20; font-size: 12px; padding: 5px 12px; }
         #resignBtn:hover { background: #9a7228; }
         #endGameBtn { background: #7a2e2e; font-size: 12px; padding: 5px 12px; }
@@ -278,8 +281,8 @@
     <b>XMage Web</b> — play vs AI
     <span id="status">connecting…</span>
     <button id="newGameBtn">New game</button>
-    <button id="undoBtn" title="Take back your last action (e.g. a tapped land or a half-started cast), while you still have priority">↶ Undo</button>
-    <button id="rollbackBtn" style="display:none" title="Undo the whole turn — roll the game back to the start of your current turn (vs AI)">⟲ Start of turn</button>
+    <button id="undoBtn" title="Small take-back: undo just your last click this step (e.g. an accidental tapped land or a half-started spell) — only while you still hold priority. For a bigger undo, use 'Start of turn'.">↶ Undo click</button>
+    <button id="rollbackBtn" style="display:none" title="Roll the whole turn back to its start — undoes everything that happened this turn (yours and the AI's). Use this on your turn.">⟲ Start of turn</button>
     <button id="resignBtn" style="display:none">Resign</button>
     <button id="endGameBtn" style="display:none">End game</button>
     <button id="settingsBtn">⚙ Settings</button>
@@ -1557,16 +1560,28 @@ const pickerEl = document.getElementById('picker');
 const pickerMsgEl = document.getElementById('pickerMsg');
 const pickerCardsEl = document.getElementById('pickerCards');
 document.getElementById('pickerDone').onclick = () => { pickerEl.style.display = 'none'; send('playerBoolean', false); };
+// Are all these choices permanents/cards already visible and clickable on the main board (battlefield
+// or my hand)? If so we should NOT pop a full-screen modal over them — it would hide the highlighted
+// targets. The board highlights + prompt handle it instead.
+function cardsReachableOnBoard(cards, gv) {
+    if (!gv || !cards.length) return false;
+    const ids = new Set();
+    (gv.players || []).forEach(p => Object.keys(p.battlefield || {}).forEach(id => ids.add(id)));
+    Object.keys(gv.myHand || {}).forEach(id => ids.add(id));
+    return cards.every(c => c && c.id && ids.has(c.id));
+}
 function renderPicker(method, data) {
     const cards = data.cardsView1 ? Object.values(data.cardsView1) : [];
     const isDialog = method === 'GAME_TARGET' || method === 'GAME_SELECT' || method === 'GAME_CHOOSE_PILE';
-    if (isDialog && cards.length) {
+    // For on-board targeting, keep the board visible (don't cover the lit-up targets with the modal).
+    const onBoard = method === 'GAME_TARGET' && cards.length && cardsReachableOnBoard(cards, lastGameView);
+    if (isDialog && cards.length && !onBoard) {
         pickerMsgEl.textContent = String(data.message || 'Choose a card').replace(/<[^>]+>/g, '');
         pickerCardsEl.innerHTML = '';
         cards.forEach(c => pickerCardsEl.appendChild(cardEl(c, true))); // click -> playerUUID(id)
         pickerEl.style.display = 'flex';
-    } else if (ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO') {
-        pickerEl.style.display = 'none';
+    } else if (onBoard || ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO') {
+        pickerEl.style.display = 'none'; // targeting on the board, or moved past this choice
     }
     // close the searchable choice modal once we're past that choice
     if (method !== 'GAME_CHOOSE_CHOICE' && (ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO')) {

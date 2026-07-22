@@ -39,6 +39,28 @@ public class ThreatAwareComputerPlayer extends ComputerPlayer7 {
     }
 
     @Override
+    public boolean priority(Game game) {
+        // Perf: on a busy stack (many triggers/spells resolving one at a time, e.g. lots of landfall),
+        // the stock AI runs a full minimax simulation every time it regains priority — even when it has
+        // nothing it could legally do in response. When there are no playable instant-speed actions, that
+        // simulation always just passes anyway, so short-circuit and pass immediately. This is
+        // behavior-preserving (same decision, no wasted "thinking") and only kicks in while a stack is
+        // resolving, so it doesn't touch the AI's proactive turn play. Never fires during the AI's own
+        // internal simulations.
+        if (!game.isSimulation() && !game.getStack().isEmpty()) {
+            try {
+                if (getPlayable(game, true).isEmpty()) {
+                    pass(game);
+                    return false;
+                }
+            } catch (Exception e) {
+                logger.debug("fast-pass check failed; falling back to full AI", e);
+            }
+        }
+        return super.priority(game);
+    }
+
+    @Override
     public void declareAttacker(UUID attackerId, UUID defenderId, Game game, boolean allowUndo) {
         // Only steer the REAL declaration; leave the AI's internal simulation untouched so its
         // which-creatures-attack judgment stays intact.
