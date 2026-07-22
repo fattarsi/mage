@@ -265,8 +265,8 @@
         .overlay #startBtn { margin-top: 12px; font-size: 15px; padding: 9px 20px; }
         #newGameBtn { background: #2e6a40; font-size: 12px; padding: 5px 12px; }
         #newGameBtn:hover { background: #3c8a54; }
-        #undoBtn, #helpBtn { background: #3a4150; font-size: 12px; padding: 5px 12px; }
-        #undoBtn:hover, #helpBtn:hover { background: #4a5468; }
+        #undoBtn, #helpBtn, #rollbackBtn { background: #3a4150; font-size: 12px; padding: 5px 12px; }
+        #undoBtn:hover, #helpBtn:hover, #rollbackBtn:hover { background: #4a5468; }
         #resignBtn { background: #7a5a20; font-size: 12px; padding: 5px 12px; }
         #resignBtn:hover { background: #9a7228; }
         #endGameBtn { background: #7a2e2e; font-size: 12px; padding: 5px 12px; }
@@ -279,6 +279,7 @@
     <span id="status">connecting…</span>
     <button id="newGameBtn">New game</button>
     <button id="undoBtn" title="Take back your last action (e.g. a tapped land or a half-started cast), while you still have priority">↶ Undo</button>
+    <button id="rollbackBtn" style="display:none" title="Undo the whole turn — roll the game back to the start of your current turn (vs AI)">⟲ Start of turn</button>
     <button id="resignBtn" style="display:none">Resign</button>
     <button id="endGameBtn" style="display:none">End game</button>
     <button id="settingsBtn">⚙ Settings</button>
@@ -455,6 +456,14 @@ const settingsPanel = document.getElementById('settings');
 settingsBtn.onclick = () => { settingsPanel.style.display = (settingsPanel.style.display === 'none' ? 'block' : 'none'); };
 // take-back: ask the engine to restore the last bookmark (a tapped land / half-started cast on your priority)
 document.getElementById('undoBtn').onclick = () => act('UNDO');
+// bigger take-back: roll the whole game back to the start of your current turn (ROLLBACK_TURNS, 0 = this turn).
+// Best used on your own priority. Undoes this turn's plays (yours and the AI's since your turn began).
+document.getElementById('rollbackBtn').onclick = () => {
+    if (!confirm('Roll the game back to the START of your current turn?\n\n'
+        + 'This undoes everything that happened this turn. Works best on your own turn while you have priority.')) return;
+    send('playerAction', 'ROLLBACK_TURNS', { amount: 0 });
+    log('Requested rollback to the start of the turn…');
+};
 // help / legend modal
 const helpModal = document.getElementById('helpModal');
 document.getElementById('helpBtn').onclick = () => { helpModal.style.display = 'flex'; };
@@ -644,9 +653,19 @@ function scheduleReconnect() {
     reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 5000); // 0.5s → 1s → 2s → 4s → 5s cap
 }
+// Heartbeat: send a tiny frame every 20s so the connection (and any reverse proxy in front of it) sees
+// bidirectional traffic and won't idle-close it mid-game. A dropped socket loses in-flight actions, and
+// the resync that follows can leave the board looking like it "reverted" — this prevents most of that.
+let heartbeatTimer = null;
+function startHeartbeat() {
+    if (heartbeatTimer) return;
+    heartbeatTimer = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) { try { ws.send(JSON.stringify({ action: 'ping' })); } catch (e) {} }
+    }, 20000);
+}
 function connect() {
     ws = new WebSocket(wsUrl);
-    ws.onopen = () => { statusEl.textContent = 'connected'; reconnectDelay = 500; hideBanner(); flushSendBuffer(); };
+    ws.onopen = () => { statusEl.textContent = 'connected'; reconnectDelay = 500; hideBanner(); flushSendBuffer(); startHeartbeat(); };
     ws.onmessage = onSocketMessage;
     ws.onclose = () => { statusEl.textContent = 'reconnecting…'; scheduleReconnect(); };
     ws.onerror = () => { statusEl.textContent = 'connection error — retrying…'; }; // onclose fires next and drives the retry
@@ -829,6 +848,7 @@ const endGameBtn = document.getElementById('endGameBtn');
 function setGameActive(active) {
     resignBtn.style.display = active ? '' : 'none';
     endGameBtn.style.display = active ? '' : 'none';
+    document.getElementById('rollbackBtn').style.display = active ? '' : 'none';
     stickySkip = null; advancing = false; updateSkipUI(); updateAdvanceBtn(); // reset skip state on game start/end
 }
 resignBtn.onclick = () => {
@@ -991,6 +1011,50 @@ function untappedLandIds(gv) {
         .map(([id]) => id);
 }
 
+// Detect the board jumping backwards. gv.gameCycle up-counts with every game state change; if a frame
+// arrives with a lower cycle than we've already shown, we likely missed frames during a socket blip and
+// the server resynced an earlier authoritative state (the "game reverted" symptom). Ask for a fresh
+// snapshot to reconcile. Reset per game (cycle restarts at 0).
+let lastCycle = -1, lastResyncAt = 0;
+function resetCycle() { lastCycle = -1; }
+function guardStaleFrame(gv) {
+    const c = (typeof gv.gameCycle === 'number') ? gv.gameCycle : null;
+    if (c === null) return;
+    if (lastCycle >= 0 && c < lastCycle) {
+        logc('err', `board moved backward (cycle ${lastCycle} → ${c}) — reconciling with the server`);
+        const now = (window.performance ? performance.now() : Date.now());
+        if (now - lastResyncAt > 3000) { lastResyncAt = now; send('resync'); } // rate-limit; self-heals
+    }
+    lastCycle = c;
+}
+
+// While auto-skipping (e.g. "My next turn"), stop and surface it if something happens to MY stuff on an
+// opponent's turn — a creature removed, or life lost — so a fast removal spell doesn't fly by unseen.
+function watchMyLosses(prev, gv) {
+    if (!(stickySkip || advancing)) return;                 // only while a skip is armed
+    if (!prev || !gv) return;
+    const cm = (gv.players || []).find(p => p.controlled);
+    const pm = (prev.players || []).find(p => p.controlled);
+    if (!pm || !cm || !cm.playerId) return;
+    if (gv.activePlayerId === cm.playerId) return;           // ignore my own turn (my own plays)
+    const before = pm.battlefield || {}, after = cm.battlefield || {};
+    const lost = Object.keys(before).filter(id => !after[id]);
+    const lifeDrop = (typeof pm.life === 'number' && typeof cm.life === 'number') ? (pm.life - cm.life) : 0;
+    if (!lost.length && lifeDrop <= 0) return;
+    const why = [];
+    if (lost.length) why.push(lost.map(id => (before[id] && before[id].name) || 'a permanent').join(', ')
+        + (lost.length > 1 ? ' left the battlefield' : ' left the battlefield'));
+    if (lifeDrop > 0) why.push('you lost ' + lifeDrop + ' life');
+    stopSkippingWithNotice('⏸ Skipping paused — ' + why.join('; ') + '. Review the board/log, then resume.');
+}
+let skipNoticeTimer = null;
+function stopSkippingWithNotice(text) {
+    stickySkip = null; advancing = false; updateSkipUI(); updateAdvanceBtn();
+    showBanner(text);
+    if (skipNoticeTimer) clearTimeout(skipNoticeTimer);
+    skipNoticeTimer = setTimeout(hideBanner, 8000); // informational — clear itself after a bit
+}
+
 function onSocketMessage(ev) {
     let msg;
     try { msg = JSON.parse(ev.data); } catch (e) { showError('bad JSON frame'); return; }
@@ -1006,7 +1070,12 @@ function onSocketMessage(ev) {
         else if (msg.method === 'GAME_SELECT' && /select blockers/i.test(rawMsg)) combatMode = 'block';
         else if (ACTIONABLE.has(msg.method)) combatMode = null;
         const gv = data.gameView || (data.players ? data : null);
-        if (gv) { lastGameView = gv; computePlayable(gv); renderBoard(gv); }
+        if (gv) {
+            const prev = lastGameView;
+            guardStaleFrame(gv);       // detect + self-heal a backwards board (the "revert" symptom)
+            watchMyLosses(prev, gv);   // pause skipping if my stuff was removed on an opponent's turn
+            lastGameView = gv; computePlayable(gv); renderBoard(gv);
+        }
         // Some decision frames (e.g. the London mulligan "put a card on the bottom" target, or any
         // "choose a target" that picks from hand/battlefield) carry NO gameView but DO update the set
         // of valid targets. Re-render the last board so those targets get highlighted/clickable —
@@ -1585,7 +1654,7 @@ function handle(method, data) {
             setPrompt('<span class="over">Couldn\'t start — see the message in the dialog.</span>');
             break; }
         case 'START_GAME': case 'GAME_INIT':
-            setupEl.style.display = 'none'; log('Game started'); setGameActive(true);
+            setupEl.style.display = 'none'; log('Game started'); setGameActive(true); resetCycle();
             setPrompt('Game started — waiting for the first decision…'); break;
 
         case 'GAME_SELECT': { // priority: play a card / declare attackers or blockers / pass
