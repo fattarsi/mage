@@ -600,6 +600,31 @@ public class WebGatewayServer {
             return;
         }
 
+        // Lightweight heartbeat from the browser: keeps the WS (and any reverse proxy in front of it)
+        // from idle-closing the connection between plays. No game state touched.
+        if ("ping".equals(action)) {
+            try {
+                server.ping(sessionId, "");
+            } catch (Exception ignore) {
+                // a stale session just fails the ping; the reconnect path handles recovery
+            }
+            return;
+        }
+
+        // Client asks for a fresh authoritative snapshot (e.g. after it detected the board went
+        // backwards). Re-send the current game state; harmless if nothing actually changed.
+        if ("resync".equals(action)) {
+            UUID gid = (ps != null) ? ps.gameId : wsToGameId.get(ctx.getSessionId());
+            if (gid != null) {
+                try {
+                    server.gameJoin(gid, sessionId);
+                } catch (Exception e) {
+                    logger.warn("web gateway: resync failed", e);
+                }
+            }
+            return;
+        }
+
         // Control action: (re)start a game with a chosen format and optional pasted deck.
         if ("newGame".equals(action)) {
             try {
@@ -676,9 +701,14 @@ public class WebGatewayServer {
                     server.sendPlayerManaType(gameId, UUID.fromString(msg.get("playerId").getAsString()),
                             sessionId, ManaType.valueOf(msg.get("value").getAsString()));
                     break;
-                case "playerAction": // skip/pass-to-phase shortcuts (XMage F-keys)
-                    server.sendPlayerAction(PlayerAction.valueOf(msg.get("value").getAsString()), gameId, sessionId, null);
+                case "playerAction": { // skip/pass-to-phase shortcuts (XMage F-keys) + rollback
+                    PlayerAction pa = PlayerAction.valueOf(msg.get("value").getAsString());
+                    // some actions carry an integer payload (e.g. ROLLBACK_TURNS = how many turns back;
+                    // 0 = start of the current turn). Everything else passes null.
+                    Object data = msg.has("amount") ? (Object) Integer.valueOf(msg.get("amount").getAsInt()) : null;
+                    server.sendPlayerAction(pa, gameId, sessionId, data);
                     break;
+                }
                 default:
                     logger.warn("web gateway: unknown inbound action: " + action);
             }
