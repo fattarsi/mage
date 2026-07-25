@@ -131,6 +131,9 @@
         #viewerInfo .vn { font-weight: 700; color: #e7ecf2; }
         #viewerInfo .vt { color: #9ab; font-size: 11.5px; margin: 3px 0; }
         #viewerInfo .vpt { color: #fe9; font-weight: 700; margin: 2px 0; }
+        /* the specific triggered/activated ability that's on the stack, above the card's own text */
+        #viewerInfo .vability { margin: 6px 0; padding: 5px 7px; border-radius: 5px; background: #22304a;
+                                color: #cfe0ff; font-size: 11.5px; line-height: 1.35; white-space: pre-line; }
         #viewerInfo .vr { color: #cdd; font-size: 11.5px; margin-top: 5px; white-space: pre-line;
                           border-top: 1px solid #2c3340; padding-top: 5px; }
         .phead { display: flex; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 6px; }
@@ -252,7 +255,8 @@
                       max-height: 30vh; overflow: auto; }
         input[type=number] { width: 70px; padding: 5px; }
         .over { color: #fe7; font-size: 16px; font-weight: 700; }
-        .overlay { position: fixed; inset: 0; background: rgba(8,10,13,.82); display: flex;
+        /* stop the dark backdrop at the preview column's edge so the hovered card/ability stays readable */
+        .overlay { position: fixed; top: 0; left: 0; bottom: 0; right: var(--sidecol-w); background: rgba(8,10,13,.82); display: flex;
                    align-items: center; justify-content: center; z-index: 50; }
         .overlay .panel { width: min(560px, 92vw); background: #1c2230; border: 1px solid #38445a;
                           border-radius: 10px; padding: 18px 20px; }
@@ -593,22 +597,31 @@ function playabilityNote(card) {
 }
 function showCardViewer(card) {
     if (!viewerToggle.checked || !card) return;
-    if (artCandidates(card).length) { setCardImage(viewerImg, card); } else { viewerImg.onerror = null; viewerImg.style.display = 'none'; }
-    const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
-    const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
-    const pt = (card.power !== undefined && (card.cardTypes||[]).includes('CREATURE')) ? `${card.power}/${card.toughness}`
-             : (card.loyalty ? 'Loyalty ' + card.loyalty : '');
+    // A stack ability (triggered/activated) isn't a printed card — it carries its source card as
+    // `sourceCard`. Show the SOURCE card's art + name/cost/types (so you get a real card preview), and
+    // surface the specific ability that's on the stack (card.rules) in a highlighted box above the
+    // card's own text.
+    const src = card.sourceCard || null;
+    const artCard = (src && artCandidates(src).length) ? src : card;   // draw the source card's art
+    const info = src || card;                                          // real name/cost/types from source
+    const abilityText = src ? (card.rules || []) : [];                 // the triggered/activated ability
+    if (artCandidates(artCard).length) { setCardImage(viewerImg, artCard); } else { viewerImg.onerror = null; viewerImg.style.display = 'none'; }
+    const cost = info.manaCostStr || (Array.isArray(info.manaCost) ? info.manaCost.join('') : '') || '';
+    const types = [].concat(info.superTypes||[], info.cardTypes||[], info.subTypes||[]).join(' ');
+    const pt = (info.power !== undefined && (info.cardTypes||[]).includes('CREATURE')) ? `${info.power}/${info.toughness}`
+             : (info.loyalty ? 'Loyalty ' + info.loyalty : '');
     const note = playabilityNote(card);
-    viewerInfo.innerHTML = `<span class="vc">${esc(cost)}</span><span class="vn">${msg(card.name||'?')}</span>`
+    viewerInfo.innerHTML = `<span class="vc">${esc(cost)}</span><span class="vn">${msg(info.name||'?')}</span>`
         + `<div class="vt">${esc(types)}</div>`
         + (pt ? `<div class="vpt">${esc(pt)}</div>` : '')
-        + (card.rules && card.rules.length ? `<div class="vr">${card.rules.map(msg).join('\n')}</div>` : '')
+        + (abilityText.length ? `<div class="vability">⚡ On the stack: ${abilityText.map(msg).join('\n')}</div>` : '')
+        + (info.rules && info.rules.length ? `<div class="vr">${info.rules.map(msg).join('\n')}</div>` : '')
         + (note ? `<div class="vnote ${note.ok ? 'ok' : 'no'}">${esc(note.text)}</div>` : '')
         + `<div class="vpr"></div>`;
-    // price (cached, fetched from the gateway's Scryfall proxy)
-    const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
-    const set = card.expansionSetCode ? String(card.expansionSetCode).toLowerCase() : null;
-    if (set && rawNum && !card.faceDown) {
+    // price (cached, fetched from the gateway's Scryfall proxy) — use the drawn card's printing
+    const rawNum = artCard.cardNumber || (artCard.imageNumber ? String(artCard.imageNumber) : null);
+    const set = artCard.expansionSetCode ? String(artCard.expansionSetCode).toLowerCase() : null;
+    if (set && rawNum && !artCard.faceDown) {
         const key = set + '/' + rawNum;
         viewerEl.dataset.key = key;
         if (priceCache[key] !== undefined) setViewerPrice(key, priceCache[key]);
