@@ -1879,6 +1879,7 @@ const Nav = (function () {
     let focusEl = null;     // focused element
     let lastKey = null;     // stable key of the focused element, to keep focus across re-renders
     let active = false;     // controller mode engaged (shows ring + HUD)
+    let lastInput = 'key';  // 'key' | 'pad' — drives whether the HUD shows key names or button glyphs
 
     const GROUP_ORDER = ['hand', 'mybf', 'stack', 'opp', 'actions'];
     const GROUP_NAME = { hand: 'Your hand', mybf: 'Your battlefield', stack: 'Stack', opp: 'Opponents', actions: 'Actions' };
@@ -1967,6 +1968,18 @@ const Nav = (function () {
     }
 
     function chip(key, label, primary) { return `<span class="hk${primary ? ' primary' : ''}"><span class="key">${key}</span>${esc(label)}</span>`; }
+    // label for each action's control, switching between keyboard keys and controller glyphs
+    function k(action) {
+        const pad = lastInput === 'pad';
+        switch (action) {
+            case 'confirm': return pad ? 'Ⓐ' : 'Enter';
+            case 'pass':    return pad ? 'Ⓧ' : 'Space';
+            case 'resolve': return pad ? 'Ⓨ' : 'R';
+            case 'back':    return pad ? 'Ⓑ' : 'Esc';
+            case 'group':   return pad ? 'LB/RB' : 'Tab';
+        }
+        return '';
+    }
     function renderHUD() {
         const hud = document.getElementById('hud');
         if (!active) { hud.classList.remove('on'); return; }
@@ -1979,13 +1992,13 @@ const Nav = (function () {
             else if (f.classList.contains('eligible')) label = combatMode === 'attack' ? 'Attack with' : 'Block with';
             else if (f.classList.contains('phead')) label = 'Player';
             else if (f.tagName === 'BUTTON' || f.classList.contains('crow')) label = (f.textContent || 'Activate').trim().slice(0, 20);
-            chips.push(chip('Enter', label, true));
+            chips.push(chip(k('confirm'), label, true));
         }
-        if (priorityActive) chips.push(chip('Space', 'Pass'));
+        if (priorityActive) chips.push(chip(k('pass'), 'Pass'));
         const n = lastGameView && lastGameView.stack ? Object.keys(lastGameView.stack).length : 0;
-        if (n) chips.push(chip('R', 'Resolve stack'));
-        chips.push(chip('Esc', 'Back'));
-        chips.push(chip('Tab', 'Next area'));
+        if (n) chips.push(chip(k('resolve'), 'Resolve stack'));
+        chips.push(chip(k('back'), 'Back'));
+        chips.push(chip(k('group'), 'Next area'));
         const grp = f ? (GROUP_NAME[groupOf(f)] || '') : '';
         hud.innerHTML = chips.join('') + (grp ? `<span class="grp">Area: <b>${grp}</b></span>` : '');
     }
@@ -2006,6 +2019,8 @@ const Nav = (function () {
         const t = e.target;
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
         if (shown('setup')) return;
+        const handled = ['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Tab','Enter',' ','Escape','r','R'].includes(e.key);
+        if (handled) lastInput = 'key';
         switch (e.key) {
             case 'ArrowUp': move('up'); e.preventDefault(); break;
             case 'ArrowDown': move('down'); e.preventDefault(); break;
@@ -2020,6 +2035,53 @@ const Nav = (function () {
     });
     // using the mouse hides the focus ring so the two input styles don't fight; next arrow re-arms it
     document.addEventListener('mousedown', () => { if (active) deactivate(); });
+
+    // ---- gamepad: feeds the SAME intents as the keyboard (standard Xbox-style mapping) ----
+    // A=confirm  B=back  X=pass  Y=resolve   LB/RB=jump area   D-pad/left-stick=move   Back=help
+    const pad = { down: {}, nextRepeat: {}, held: {} };
+    function btn(gp, i) { return gp.buttons[i] && gp.buttons[i].pressed; }
+    function edge(gp, i) { const now = btn(gp, i); const was = pad.down[i]; pad.down[i] = now; return now && !was; }
+    let padLoopRunning = false;
+    function pollPads() {
+        const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+        let gp = null;
+        for (const g of gps) { if (g && g.connected && g.mapping === 'standard') { gp = g; break; } }
+        if (!gp) for (const g of gps) { if (g && g.connected) { gp = g; break; } } // fall back to any pad
+        if (gp) {
+            const ax = gp.axes || [];
+            const anyBtn = gp.buttons.some(b => b && b.pressed);
+            const anyStick = Math.abs(ax[0] || 0) > 0.5 || Math.abs(ax[1] || 0) > 0.5;
+            if (anyBtn || anyStick) { lastInput = 'pad'; ensureActive(); if (!focusEl) { items = collect(); autoFocus(); } }
+            const now = performance.now();
+            const dirs = [
+                ['up', btn(gp, 12) || (ax[1] || 0) < -0.5],
+                ['down', btn(gp, 13) || (ax[1] || 0) > 0.5],
+                ['left', btn(gp, 14) || (ax[0] || 0) < -0.5],
+                ['right', btn(gp, 15) || (ax[0] || 0) > 0.5],
+            ];
+            for (const [d, on] of dirs) {
+                if (on) {
+                    if (now >= (pad.nextRepeat[d] || 0)) { move(d); pad.nextRepeat[d] = now + (pad.held[d] ? 140 : 380); pad.held[d] = true; }
+                } else { pad.nextRepeat[d] = 0; pad.held[d] = false; }
+            }
+            if (edge(gp, 0)) confirmFocus();               // A
+            if (edge(gp, 1)) cancelAction();               // B
+            if (edge(gp, 2)) passAction();                 // X
+            if (edge(gp, 3)) resolveAction();              // Y
+            if (edge(gp, 4)) jumpGroup(-1);                // LB
+            if (edge(gp, 5)) jumpGroup(1);                 // RB
+            if (edge(gp, 8)) { const h = document.getElementById('helpBtn'); if (h) h.click(); } // Back = help
+            // keep other edges tracked so they don't misfire later
+            [6, 7, 9, 10, 11].forEach(i => edge(gp, i));
+        }
+        requestAnimationFrame(pollPads);
+    }
+    window.addEventListener('gamepadconnected', () => {
+        lastInput = 'pad'; ensureActive(); items = collect(); if (!focusEl) autoFocus(); renderHUD();
+        showBanner('🎮 Controller connected — D-pad move · Ⓐ confirm · Ⓑ back · Ⓧ pass · Ⓨ resolve · LB/RB switch area');
+        setTimeout(hideBanner, 4000);
+        if (!padLoopRunning) { padLoopRunning = true; requestAnimationFrame(pollPads); }
+    });
 
     // refresh must never break board rendering
     return { refresh: function () { try { refresh(); } catch (e) { /* nav is best-effort */ } } };
