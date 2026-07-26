@@ -186,6 +186,9 @@
                     position: relative; z-index: 6; border-radius: 6px; }
         .card.navfocus { transform: translateY(-7px) scale(1.06); transition: transform .09s ease; }
         .card.tapped.navfocus { transform: rotate(8deg) translateY(-7px) scale(1.06); }
+        /* brief flash to confirm a controller-triggered button (like a mouse click) */
+        @keyframes navflash { 0% { box-shadow: 0 0 0 3px #7cf; filter: brightness(1.7); } 100% { box-shadow: none; filter: none; } }
+        .navflash { animation: navflash .3s ease-out; }
         #hud { display: none; margin-top: 6px; padding-top: 6px; border-top: 1px solid #2b3340;
                align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: #bcd; width: 100%; }
         #hud.on { display: flex; }
@@ -557,6 +560,7 @@ function renderSide() {
     if (!cards.length) zpCardsEl.innerHTML = '<span class="meta">— empty —</span>';
     else cards.forEach(c => zpCardsEl.appendChild(cardEl(c, true))); // clickable: cast commander, or target a card in gy/exile (e.g. reanimate)
     zonePopupEl.classList.add('open');
+    Nav.refresh(); // index the side-zone cards so the controller can move into them
 }
 // my floating mana, shown with little colored icons by type
 function renderSideMana(pool) {
@@ -1679,6 +1683,7 @@ function setPrompt(message, buttons) {
         btn.textContent = b.label; if (b.alt) btn.className = 'alt';
         btn.onclick = b.onClick; promptMain.appendChild(btn);
     });
+    Nav.refresh(); // re-index so new prompt buttons (mulligan keep/skip, targeting Done, …) are reachable
 }
 
 function handle(method, data) {
@@ -1884,6 +1889,7 @@ const Nav = (function () {
     const GROUP_ORDER = ['hand', 'mybf', 'stack', 'opp', 'actions'];
     const GROUP_NAME = { hand: 'Your hand', mybf: 'Your battlefield', stack: 'Stack', opp: 'Opponents', actions: 'Actions' };
     function groupOf(el) {
+        if (el.closest('#zonePopup')) return 'command';
         if (el.closest('#stackZone')) return 'stack';
         if (el.closest('#opponents')) return 'opp';
         if (el.closest('#prompt') || el.closest('#skipbar') || el.closest('header')) return 'actions';
@@ -1892,13 +1898,17 @@ const Nav = (function () {
         return 'other';
     }
     function shown(id) { const e = document.getElementById(id); return e && getComputedStyle(e).display !== 'none'; }
+    function popupOpen() { const e = document.getElementById('zonePopup'); return e && e.classList.contains('open'); }
     function vis(el) { const r = el.getBoundingClientRect(); return r.width > 1 && r.height > 1; }
     function collect() {
         let els;
         if (shown('choiceModal')) els = [...document.querySelectorAll('#choiceModal .crow, #choiceModal button')];
         else if (shown('picker')) els = [...document.querySelectorAll('#picker .card, #picker button')];
         else if (shown('setup')) els = []; // let the setup form use normal typing/focus
-        else els = [...document.querySelectorAll('#board .card, #board .phead, #board button, header button')];
+        else {
+            els = [...document.querySelectorAll('#board .card, #board .phead, #board button, header button')];
+            if (popupOpen()) els.push(...document.querySelectorAll('#zpCards .card, #zpClose')); // side zone open
+        }
         return els.filter(vis);
     }
     function keyOf(el) {
@@ -1964,7 +1974,64 @@ const Nav = (function () {
     function cancelAction() {
         if (shown('choiceModal')) { const b = document.getElementById('choiceCancel'); if (b) b.click(); return; }
         if (shown('picker')) { const b = document.getElementById('pickerDone'); if (b) b.click(); return; }
+        if (sideView) { sideView = null; renderSide(); focusRegion({ kind: 'mybf' }); return; } // B backs out of commander/gy/exile
         if (priorityActive || validTargets.size) send('playerBoolean', false); // "done / cancel"
+    }
+    function flashEl(el) { if (!el) return; el.classList.remove('navflash'); void el.offsetWidth; el.classList.add('navflash'); }
+    function armSkip(action) { setSticky(action); flashEl(skipBtns[action]); } // like clicking the F4/F7 skip button
+
+    // ---- region ring: LB/RB step around the "table": my battlefield -> my command zone -> each opponent
+    // (in clockwise seat order) -> wrap. Gives a sense of turn order and reaches the command zone. ----
+    function regions() {
+        const gv = lastGameView; if (!gv || !gv.players) return [];
+        const me = gv.players.find(p => p.controlled); if (!me) return [];
+        const ring = [{ kind: 'mybf' }];
+        if (zoneCards(me, 'commander').length) ring.push({ kind: 'command' });
+        const order = (gv.playerOrder && gv.playerOrder.length) ? gv.playerOrder : gv.players.map(p => p.playerId);
+        const mi = order.indexOf(me.playerId);
+        for (let kk = 1; kk < order.length; kk++) {
+            const pid = order[(mi + kk) % order.length];
+            if (pid && pid !== me.playerId) ring.push({ kind: 'opp', pid });
+        }
+        return ring;
+    }
+    function oppPidOf(el) {
+        const panel = el.closest('#opponents .player');
+        const head = panel && panel.querySelector('.phead[data-pid]');
+        return (el.dataset && el.dataset.pid) || (head && head.dataset.pid) || null;
+    }
+    function currentRegion(ring) {
+        const f = focusEl; if (!f) return -1;
+        if (f.closest('#zonePopup') || sideView) return ring.findIndex(r => r.kind === 'command');
+        if (f.closest('#opponents')) { const pid = oppPidOf(f); return ring.findIndex(r => r.kind === 'opp' && r.pid === pid); }
+        if (f.closest('#me')) return ring.findIndex(r => r.kind === 'mybf');
+        return -1;
+    }
+    function focusRegion(r) {
+        if (!r) return;
+        if (r.kind === 'mybf') {
+            if (sideView) { sideView = null; renderSide(); }
+            items = collect();
+            const el = document.querySelector('#me .bf .card') || document.querySelector('#me .phead') || document.querySelector('#me .card');
+            if (el) setFocus(el, true);
+        } else if (r.kind === 'command') {
+            sideView = 'commander'; renderSide(); // renderSide -> Nav.refresh indexes the cards
+            const el = document.querySelector('#zpCards .card') || document.getElementById('zpClose');
+            if (el) setFocus(el, true);
+        } else if (r.kind === 'opp') {
+            if (sideView) { sideView = null; renderSide(); }
+            items = collect();
+            const head = document.querySelector(`#opponents .phead[data-pid="${r.pid}"]`);
+            const panel = head && head.closest('.player');
+            const el = (panel && panel.querySelector('.card')) || head || document.querySelector('#opponents .card');
+            if (el) setFocus(el, true);
+        }
+    }
+    function stepRegion(delta) {
+        ensureActive();
+        const ring = regions(); if (!ring.length) return;
+        let cur = currentRegion(ring); if (cur < 0) cur = 0;
+        focusRegion(ring[(cur + delta + ring.length) % ring.length]);
     }
 
     function chip(key, label, primary) { return `<span class="hk${primary ? ' primary' : ''}"><span class="key">${key}</span>${esc(label)}</span>`; }
@@ -1998,7 +2065,11 @@ const Nav = (function () {
         const n = lastGameView && lastGameView.stack ? Object.keys(lastGameView.stack).length : 0;
         if (n) chips.push(chip(k('resolve'), 'Resolve stack'));
         chips.push(chip(k('back'), 'Back'));
-        chips.push(chip(k('group'), 'Next area'));
+        chips.push(chip(k('group'), lastInput === 'pad' ? 'Player / zone' : 'Next area'));
+        if (lastInput === 'pad' && lastGameView && lastGameView.activePlayerId) {
+            const me = (lastGameView.players || []).find(p => p.controlled);
+            if (me && lastGameView.activePlayerId !== me.playerId) chips.push(chip('LT+Ⓧ', 'Skip turn'));
+        }
         const grp = f ? (GROUP_NAME[groupOf(f)] || '') : '';
         hud.innerHTML = chips.join('') + (grp ? `<span class="grp">Area: <b>${grp}</b></span>` : '');
     }
@@ -2066,20 +2137,28 @@ const Nav = (function () {
             }
             if (edge(gp, 0)) confirmFocus();               // A
             if (edge(gp, 1)) cancelAction();               // B
-            if (edge(gp, 2)) passAction();                 // X
+            if (edge(gp, 2)) {                             // X (+ trigger modifiers)
+                if (btn(gp, 6) && btn(gp, 7)) armSkip('PASS_PRIORITY_UNTIL_MY_NEXT_TURN'); // LT+RT+X
+                else if (btn(gp, 6)) armSkip('PASS_PRIORITY_UNTIL_NEXT_TURN');             // LT+X
+                else passAction();                                                        // X
+            }
             if (edge(gp, 3)) resolveAction();              // Y
-            if (edge(gp, 4)) jumpGroup(-1);                // LB
-            if (edge(gp, 5)) jumpGroup(1);                 // RB
+            if (edge(gp, 4)) stepRegion(-1);               // LB = prev region (my board / command / player)
+            if (edge(gp, 5)) stepRegion(1);                // RB = next region
             if (edge(gp, 8)) { const h = document.getElementById('helpBtn'); if (h) h.click(); } // Back = help
+            if (edge(gp, 9)) {                             // Start = jump to the top bar (New game, Undo, …)
+                ensureActive(); items = collect();
+                const hb = items.find(it => it.closest('header')); if (hb) setFocus(hb, true);
+            }
             // keep other edges tracked so they don't misfire later
-            [6, 7, 9, 10, 11].forEach(i => edge(gp, i));
+            [6, 7, 10, 11].forEach(i => edge(gp, i));
         }
         requestAnimationFrame(pollPads);
     }
     window.addEventListener('gamepadconnected', () => {
         lastInput = 'pad'; ensureActive(); items = collect(); if (!focusEl) autoFocus(); renderHUD();
-        showBanner('🎮 Controller connected — D-pad move · Ⓐ confirm · Ⓑ back · Ⓧ pass · Ⓨ resolve · LB/RB switch area');
-        setTimeout(hideBanner, 4000);
+        showBanner('🎮 Controller — D-pad move · Ⓐ confirm · Ⓑ back · Ⓧ pass · Ⓨ resolve · LB/RB player/zone · LT+Ⓧ next turn · LT+RT+Ⓧ your turn · Start top bar');
+        setTimeout(hideBanner, 5000);
         if (!padLoopRunning) { padLoopRunning = true; requestAnimationFrame(pollPads); }
     });
 
