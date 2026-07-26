@@ -180,6 +180,21 @@
         .card.dim { opacity: .4; }
         .card.eligible { box-shadow: 0 0 0 3px #ef7d4a; cursor: pointer; } /* combat: eligible attacker/blocker */
         .card.tapped { transform: rotate(8deg); opacity: .8; }
+        /* ---- keyboard/controller navigation ---- */
+        .navfocus { outline: 3px solid #7cf !important; outline-offset: 2px;
+                    box-shadow: 0 0 0 4px rgba(124,204,255,.35), 0 8px 22px rgba(0,0,0,.55) !important;
+                    position: relative; z-index: 6; border-radius: 6px; }
+        .card.navfocus { transform: translateY(-7px) scale(1.06); transition: transform .09s ease; }
+        .card.tapped.navfocus { transform: rotate(8deg) translateY(-7px) scale(1.06); }
+        #hud { display: none; margin-top: 6px; padding-top: 6px; border-top: 1px solid #2b3340;
+               align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: #bcd; width: 100%; }
+        #hud.on { display: flex; }
+        #hud .hk { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+        #hud .key { background: #2b3a52; border: 1px solid #4a6488; border-radius: 5px; padding: 1px 7px;
+                    font-weight: 700; color: #dff; font-size: 12px; min-width: 18px; text-align: center; }
+        #hud .hk.primary .key { background: #2e6a40; border-color: #3c8a54; }
+        #hud .grp { margin-left: auto; color: #89a; }
+        #hud .grp b { color: #cde; }
         .phead.clickable { cursor: pointer; padding: 3px 6px; border-radius: 5px; }
         .phead.clickable:hover { background: #2b3340; }
         .phead.targetable { box-shadow: 0 0 0 3px #fd5; border-radius: 5px; }
@@ -381,7 +396,7 @@
     <div id="phasebar"></div>
     <div id="opponents"></div>
     <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div><div id="stackLastLog" title="most recent game-log entry"></div></div>
-    <div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span></div>
+    <div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span><div id="hud"></div></div>
     <div id="skipbar"></div>
     <div id="me" class="player me"></div>
 </div>
@@ -1172,6 +1187,9 @@ function cardEl(card, clickable) {
     d.onmouseenter = () => showCardViewer(card);
     d.onmouseleave = () => scheduleHideViewer();
     if (clickable) d.onclick = () => send('playerUUID', card.id);
+    d._card = card;          // for keyboard/controller focus preview
+    d._nav = true;           // mark as a navigable item
+    if (clickable || playableIds.has(card.id) || isTarget || eligible) d._navAct = true; // has a confirm action
     return d;
 }
 
@@ -1565,6 +1583,7 @@ function renderBoard(gv) {
         rb.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
         stackZone.appendChild(rb);
     }
+    Nav.refresh(); // re-index focusable items after every board render
 }
 
 // Some dialogs (library search like Terramorphic Expanse, reveal, choose-from-pile) provide a card
@@ -1600,6 +1619,7 @@ function renderPicker(method, data) {
     if (method !== 'GAME_CHOOSE_CHOICE' && (ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO')) {
         document.getElementById('choiceModal').style.display = 'none';
     }
+    Nav.refresh(); // re-index after a modal opens/closes so keyboard focus follows
 }
 
 // Combat math: damage headed at ME right now (unblocked attackers), vs my life — with a lethal warning.
@@ -1848,6 +1868,162 @@ function handle(method, data) {
         }
     }
 }
+
+// ======================= Keyboard / controller navigation (Phase 1) =======================
+// A single "focus cursor" moves spatially between cards, players and action buttons; a HUD shows the
+// context actions with their keys. Keyboard-first, designed so a gamepad can feed the same intents later.
+//   Arrows = move focus   Tab/Shift-Tab = jump between areas   Enter = confirm the focused thing
+//   Space = pass priority   R = resolve stack   Esc = back / cancel
+const Nav = (function () {
+    let items = [];         // current focusable elements
+    let focusEl = null;     // focused element
+    let lastKey = null;     // stable key of the focused element, to keep focus across re-renders
+    let active = false;     // controller mode engaged (shows ring + HUD)
+
+    const GROUP_ORDER = ['hand', 'mybf', 'stack', 'opp', 'actions'];
+    const GROUP_NAME = { hand: 'Your hand', mybf: 'Your battlefield', stack: 'Stack', opp: 'Opponents', actions: 'Actions' };
+    function groupOf(el) {
+        if (el.closest('#stackZone')) return 'stack';
+        if (el.closest('#opponents')) return 'opp';
+        if (el.closest('#prompt') || el.closest('#skipbar') || el.closest('header')) return 'actions';
+        if (el.closest('#picker') || el.closest('#choiceModal')) return 'actions';
+        if (el.closest('#me')) return el.closest('.bf') ? 'mybf' : 'hand';
+        return 'other';
+    }
+    function shown(id) { const e = document.getElementById(id); return e && getComputedStyle(e).display !== 'none'; }
+    function vis(el) { const r = el.getBoundingClientRect(); return r.width > 1 && r.height > 1; }
+    function collect() {
+        let els;
+        if (shown('choiceModal')) els = [...document.querySelectorAll('#choiceModal .crow, #choiceModal button')];
+        else if (shown('picker')) els = [...document.querySelectorAll('#picker .card, #picker button')];
+        else if (shown('setup')) els = []; // let the setup form use normal typing/focus
+        else els = [...document.querySelectorAll('#board .card, #board .phead, #board button, header button')];
+        return els.filter(vis);
+    }
+    function keyOf(el) {
+        if (el.dataset && el.dataset.cid) return 'c:' + el.dataset.cid;
+        if (el.dataset && el.dataset.pid) return 'p:' + el.dataset.pid;
+        if (el.id) return 'i:' + el.id;
+        return 't:' + (el.textContent || '').trim().slice(0, 28);
+    }
+    function centerOf(el) { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+
+    function ensureActive() { if (!active) { active = true; document.body.classList.add('navmode'); } }
+    function deactivate() { active = false; document.body.classList.remove('navmode'); if (focusEl) focusEl.classList.remove('navfocus'); renderHUD(); }
+
+    function setFocus(el, preview) {
+        if (focusEl && focusEl !== el) focusEl.classList.remove('navfocus');
+        focusEl = el || null;
+        if (!focusEl) { renderHUD(); return; }
+        focusEl.classList.add('navfocus');
+        lastKey = keyOf(focusEl);
+        try { focusEl.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
+        if (preview && focusEl._card) showCardViewer(focusEl._card);
+        renderHUD();
+    }
+    function autoFocus() {
+        const pick = items.find(it => it._navAct || it.classList.contains('targetable') || it.classList.contains('playable') || it.classList.contains('eligible'))
+            || items.find(it => it.closest('#prompt') || it.closest('#picker') || it.closest('#choiceModal'))
+            || items.find(it => it.closest('#me'))   // when idle, start in my own area, not an opponent's
+            || items[0];
+        if (pick) setFocus(pick, true);
+    }
+    function move(dir) {
+        ensureActive(); items = collect();
+        if (!items.length) return;
+        if (!focusEl || !items.includes(focusEl)) { autoFocus(); return; }
+        const c = centerOf(focusEl); let best = null, bestScore = Infinity;
+        for (const el of items) {
+            if (el === focusEl) continue;
+            const t = centerOf(el), dx = t.x - c.x, dy = t.y - c.y;
+            let along, perp;
+            if (dir === 'left') { along = -dx; perp = Math.abs(dy); }
+            else if (dir === 'right') { along = dx; perp = Math.abs(dy); }
+            else if (dir === 'up') { along = -dy; perp = Math.abs(dx); }
+            else { along = dy; perp = Math.abs(dx); }
+            if (along <= 1) continue;               // must be in the pressed direction
+            const score = along + perp * 2.5;       // prefer aligned, then nearest
+            if (score < bestScore) { bestScore = score; best = el; }
+        }
+        if (best) setFocus(best, true);
+    }
+    function jumpGroup(delta) {
+        ensureActive(); items = collect();
+        const present = GROUP_ORDER.filter(g => items.some(it => groupOf(it) === g));
+        if (!present.length) return;
+        const curG = focusEl ? groupOf(focusEl) : present[0];
+        let idx = present.indexOf(curG); if (idx < 0) idx = 0;
+        const ng = present[(idx + delta + present.length) % present.length];
+        const inG = items.filter(it => groupOf(it) === ng);
+        if (inG.length) setFocus(inG[0], true);
+    }
+    function confirmFocus() { if (focusEl) focusEl.click(); }
+    function passAction() { if (priorityActive) send('playerBoolean', false); }
+    function resolveAction() { const n = lastGameView && lastGameView.stack ? Object.keys(lastGameView.stack).length : 0; if (n) act('PASS_PRIORITY_UNTIL_STACK_RESOLVED'); }
+    function cancelAction() {
+        if (shown('choiceModal')) { const b = document.getElementById('choiceCancel'); if (b) b.click(); return; }
+        if (shown('picker')) { const b = document.getElementById('pickerDone'); if (b) b.click(); return; }
+        if (priorityActive || validTargets.size) send('playerBoolean', false); // "done / cancel"
+    }
+
+    function chip(key, label, primary) { return `<span class="hk${primary ? ' primary' : ''}"><span class="key">${key}</span>${esc(label)}</span>`; }
+    function renderHUD() {
+        const hud = document.getElementById('hud');
+        if (!active) { hud.classList.remove('on'); return; }
+        hud.classList.add('on');
+        const f = focusEl, chips = [];
+        if (f && (f._navAct || f.tagName === 'BUTTON' || f.classList.contains('crow') || f.classList.contains('targetable'))) {
+            let label = 'Select';
+            if (f.classList.contains('playable')) label = 'Cast / play';
+            else if (f.classList.contains('targetable')) label = 'Choose target';
+            else if (f.classList.contains('eligible')) label = combatMode === 'attack' ? 'Attack with' : 'Block with';
+            else if (f.classList.contains('phead')) label = 'Player';
+            else if (f.tagName === 'BUTTON' || f.classList.contains('crow')) label = (f.textContent || 'Activate').trim().slice(0, 20);
+            chips.push(chip('Enter', label, true));
+        }
+        if (priorityActive) chips.push(chip('Space', 'Pass'));
+        const n = lastGameView && lastGameView.stack ? Object.keys(lastGameView.stack).length : 0;
+        if (n) chips.push(chip('R', 'Resolve stack'));
+        chips.push(chip('Esc', 'Back'));
+        chips.push(chip('Tab', 'Next area'));
+        const grp = f ? (GROUP_NAME[groupOf(f)] || '') : '';
+        hud.innerHTML = chips.join('') + (grp ? `<span class="grp">Area: <b>${grp}</b></span>` : '');
+    }
+
+    function refresh() {
+        items = collect();
+        let restored = lastKey ? items.find(it => keyOf(it) === lastKey) : null;
+        if (active) {
+            if (restored) { focusEl = restored; restored.classList.add('navfocus'); }
+            else if (!focusEl || !items.includes(focusEl)) autoFocus();
+            renderHUD();
+        } else {
+            focusEl = restored || null;
+        }
+    }
+
+    document.addEventListener('keydown', (e) => {
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        if (shown('setup')) return;
+        switch (e.key) {
+            case 'ArrowUp': move('up'); e.preventDefault(); break;
+            case 'ArrowDown': move('down'); e.preventDefault(); break;
+            case 'ArrowLeft': move('left'); e.preventDefault(); break;
+            case 'ArrowRight': move('right'); e.preventDefault(); break;
+            case 'Tab': jumpGroup(e.shiftKey ? -1 : 1); e.preventDefault(); break;
+            case 'Enter': if (active) { confirmFocus(); e.preventDefault(); } break;
+            case ' ': if (active) { passAction(); e.preventDefault(); } break;
+            case 'Escape': cancelAction(); break;
+            case 'r': case 'R': if (active) { resolveAction(); } break;
+        }
+    });
+    // using the mouse hides the focus ring so the two input styles don't fight; next arrow re-arms it
+    document.addEventListener('mousedown', () => { if (active) deactivate(); });
+
+    // refresh must never break board rendering
+    return { refresh: function () { try { refresh(); } catch (e) { /* nav is best-effort */ } } };
+})();
 </script>
 </body>
 </html>
