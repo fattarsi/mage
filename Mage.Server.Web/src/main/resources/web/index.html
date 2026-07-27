@@ -2120,6 +2120,9 @@ const Nav = (function () {
         if (!gp) for (const g of gps) { if (g && g.connected) { gp = g; break; } } // fall back to any pad
         if (gp) {
             const ax = gp.axes || [];
+            // right stick (axis 3) scrolls the page; doesn't move focus, so it's usable any time
+            const rY = ax[3] || 0;
+            if (Math.abs(rY) > 0.18) window.scrollBy(0, rY * 24);
             const anyBtn = gp.buttons.some(b => b && b.pressed);
             const anyStick = Math.abs(ax[0] || 0) > 0.5 || Math.abs(ax[1] || 0) > 0.5;
             if (anyBtn || anyStick) { lastInput = 'pad'; ensureActive(); if (!focusEl) { items = collect(); autoFocus(); } }
