@@ -147,6 +147,9 @@
         .cmddmg { color: #d9a; font-weight: 700; margin-left: 6px; font-size: 12px; }
         .cmddmg.warn { color: #fb7; }
         .cmddmg.lethal { color: #f66; }
+        /* life a player has lost this turn (Rakdos etc.) */
+        .lifelost { color: #f6a; font-weight: 700; margin-left: 6px; font-size: 12px; }
+        #turninfo .opplost { color: #f6a; font-weight: 700; }
         .meta { color: #9aa; font-size: 12px; }
         .active { color: #7f7; }
         .zone-label { font-size: 11px; color: #789; margin: 4px 0 2px; text-transform: uppercase; letter-spacing: .04em; }
@@ -225,6 +228,11 @@
         .card .sick { position: absolute; left: 2px; top: 2px; z-index: 3; font-size: 11px;
                       background: rgba(0,0,0,.6); border-radius: 3px; line-height: 1; padding: 1px; }
         #stack { border: 1px dashed #56607a; border-radius: 6px; padding: 6px; margin: 8px 0; }
+        /* revealed cards (e.g. reveal top of library) — appears only when something is revealed */
+        #reveals { display: none; border: 1px solid #6a5a2a; background: #201d12; border-radius: 6px; padding: 6px; margin: 8px 0; }
+        #reveals.on { display: block; }
+        #reveals .rvgroup { margin-bottom: 4px; }
+        #reveals .rvname { font-size: 11px; color: #e7c86a; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 3px; }
         #stackZone { align-items: flex-end; }
         #stackLastLog { margin-top: 5px; padding-top: 4px; border-top: 1px solid #2b313b; font-size: 11px;
                         color: #8a9; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -399,6 +407,7 @@
     <div id="phasebar"></div>
     <div id="opponents"></div>
     <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div><div id="stackLastLog" title="most recent game-log entry"></div></div>
+    <div id="reveals"></div>
     <div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span><div id="hud"></div></div>
     <div id="skipbar"></div>
     <div id="me" class="player me"></div>
@@ -996,9 +1005,13 @@ function applyLogFilter() {
     if (first) first.scrollIntoView({ block: 'center' });
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// XMage hint text prefixes markers like ICON_REQUIRE/ICON_GOOD (the desktop client swaps them for
+// icons). Replace them with glyphs so they don't show as raw placeholder text.
+const HINT_ICONS = {ICON_DUNGEON_ROOM_CURRENT:'📍 ',ICON_DUNGEON_ROOM_NEXT:'▶ ',ICON_GOOD:'🟢 ',ICON_BAD:'🔴 ',ICON_RESTRICT:'⛔ ',ICON_REQUIRE:'❗ '};
+function deIcon(s){return String(s||'').replace(/ICON_DUNGEON_ROOM_CURRENT|ICON_DUNGEON_ROOM_NEXT|ICON_GOOD|ICON_BAD|ICON_RESTRICT|ICON_REQUIRE/g,m=>HINT_ICONS[m]||'');}
 // XMage messages embed HTML-ish markup (e.g. <font color=#ff0>...</font>); strip tags for clean display
-function msg(s){return esc(String(s||'').replace(/<[^>]+>/g,''));}
-function strip(s){return String(s||'').replace(/<[^>]+>/g,'');}  // plain text (for title attributes)
+function msg(s){return esc(deIcon(s).replace(/<[^>]+>/g,''));}
+function strip(s){return deIcon(s).replace(/<[^>]+>/g,'');}  // plain text (for title attributes)
 // resolve a target id (used by stack objects) to a readable name: a player, or a card in any zone
 function resolveTargetName(gv, id) {
     if (!gv || !id) return null;
@@ -1456,8 +1469,12 @@ function renderBoard(gv) {
     const passBtn = showPass
         ? `<button type="button" class="passbtn" onclick="passResolve()">${stackSize ? 'pass (resolve) ▸' : 'pass ▸'}</button> · `
         : '';
+    // total life all opponents have lost this turn (Rakdos, Lord of Riots cost reduction, etc.)
+    const oppLost = (gv.players || []).filter(p => p !== me)
+        .reduce((s, p) => s + ((gv.lifeLostThisTurn && gv.lifeLostThisTurn[p.playerId]) || 0), 0);
     turnInfoEl.innerHTML = `T${gv.turn} · ${esc(gv.step||gv.phase||'')} · ` + passBtn
-        + (myTurn ? '<span style="color:#7f7">YOUR TURN</span>' : '<span style="color:#fa8">opp turn</span>');
+        + (myTurn ? '<span style="color:#7f7">YOUR TURN</span>' : '<span style="color:#fa8">opp turn</span>')
+        + (oppLost ? ` · <span class="opplost" title="total life your opponents have lost this turn">💔 opponents lost ${oppLost}</span>` : '');
 
     // player-level counters (poison is lethal at 10; also energy/experience/etc.). PlayerView only
     // includes counters the player actually has, so nothing shows at 0.
@@ -1486,6 +1503,13 @@ function renderBoard(gv) {
         }).join('');
     }
 
+    // life this player has lost so far THIS turn (resets each turn; e.g. Rakdos cost reduction)
+    function lifeLostHtml(playerId) {
+        const n = gv.lifeLostThisTurn && gv.lifeLostThisTurn[playerId];
+        if (!n) return '';
+        return `<span class="lifelost" title="life lost this turn">💔 ${n}</span>`;
+    }
+
     function pheadHtml(p, active, isOpp) {
         const tgt = validTargets.has(p.playerId) ? ' targetable' : '';
         const zoomBtn = (isOpp && !p.hasLeft)
@@ -1498,7 +1522,8 @@ function renderBoard(gv) {
             + `<span class="pname">${esc(p.name)}</span> `
             + `<span class="life">♥ ${p.life}</span>`
             + playerCountersHtml(p.counters)
-            + commanderDamageHtml(p.playerId) + ' '
+            + commanderDamageHtml(p.playerId)
+            + lifeLostHtml(p.playerId) + ' '
             + `<span class="meta">hand ${p.handCount} · lib ${p.libraryCount} · gy ${Object.keys(p.graveyard||{}).length}</span>`
             + manaPoolHtml(p.manaPool)
             + (active ? ` <span class="active">● active</span>` : '') + `</div>`;
@@ -1587,7 +1612,29 @@ function renderBoard(gv) {
         rb.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
         stackZone.appendChild(rb);
     }
+    renderReveals(gv);
     Nav.refresh(); // re-index focusable items after every board render
+}
+
+// Cards currently revealed to everyone (reveal top of library, etc.) or that I'm looking at (scry).
+// This data rides along in the GameView; we just render it so the reveal is actually visible.
+function renderReveals(gv) {
+    const box = document.getElementById('reveals');
+    const groups = [].concat(gv.revealed || [], gv.lookedAt || []);
+    box.innerHTML = '';
+    let any = false;
+    for (const g of groups) {
+        const cards = g.cards ? Object.values(g.cards) : [];
+        if (!cards.length) continue;
+        any = true;
+        const wrap = document.createElement('div'); wrap.className = 'rvgroup';
+        const lbl = document.createElement('div'); lbl.className = 'rvname';
+        lbl.textContent = strip(g.name || 'Revealed'); wrap.appendChild(lbl);
+        const z = document.createElement('div'); z.className = 'zone';
+        cards.forEach(c => z.appendChild(cardEl(c, false)));
+        wrap.appendChild(z); box.appendChild(wrap);
+    }
+    box.classList.toggle('on', any);
 }
 
 // Some dialogs (library search like Terramorphic Expanse, reveal, choose-from-pile) provide a card

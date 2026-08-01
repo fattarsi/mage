@@ -27,6 +27,7 @@ import mage.players.PlayableObjectsList;
 import mage.players.Player;
 import mage.util.CardUtil;
 import mage.watchers.common.CommanderInfoWatcher;
+import mage.watchers.common.PlayerLostLifeWatcher;
 import org.apache.log4j.Logger;
 
 import java.io.Serializable;
@@ -48,6 +49,9 @@ public class GameView implements Serializable {
     // commander combat damage taken, per player: damagedPlayerId -> (commander name -> total damage).
     // Lethal at 21 from a single commander (rule 903.14a). Empty for non-commander games.
     private final Map<UUID, Map<String, Integer>> commanderDamage = new HashMap<>();
+    // life each player has lost THIS turn (resets each turn). Drives e.g. Rakdos, Lord of Riots
+    // ("...for each 1 life your opponents have lost this turn"). Core watcher, always present.
+    private final Map<UUID, Integer> lifeLostThisTurn = new HashMap<>();
     private UUID myPlayerId = null; // null for watcher
     private final CardsView myHand = new CardsView();
     private final CardsView myHelperEmblems = new CardsView();
@@ -104,6 +108,17 @@ public class GameView implements Serializable {
                     }
                     commanderDamage.computeIfAbsent(e.getKey(), k -> new HashMap<>())
                             .merge(commanderName, e.getValue(), Integer::max);
+                }
+            }
+        }
+
+        // life lost this turn, per player (for Rakdos-style "opponents' life lost this turn" tracking)
+        PlayerLostLifeWatcher lostLifeWatcher = state.getWatcher(PlayerLostLifeWatcher.class);
+        if (lostLifeWatcher != null) {
+            for (Player player : state.getPlayers().values()) {
+                int lost = lostLifeWatcher.getLifeLost(player.getId());
+                if (lost > 0) {
+                    lifeLostThisTurn.put(player.getId(), lost);
                 }
             }
         }
@@ -288,6 +303,10 @@ public class GameView implements Serializable {
 
     public Map<UUID, Map<String, Integer>> getCommanderDamage() {
         return commanderDamage;
+    }
+
+    public Map<UUID, Integer> getLifeLostThisTurn() {
+        return lifeLostThisTurn;
     }
 
     public CardsView getMyHand() {
