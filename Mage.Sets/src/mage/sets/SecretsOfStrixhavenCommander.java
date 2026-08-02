@@ -12,7 +12,9 @@ import java.util.List;
  */
 public final class SecretsOfStrixhavenCommander extends ExpansionSet {
 
-    private static final List<String> unfinished = Arrays.asList("Defacing Duskmage", "Dirgur Focusmage", "Eccentric Pestfinder", "Eiganjo Dynastorian", "Inspired Skypainter", "Lorehold Archivist", "Naktamun Lorespinner", "Stensian Sanguinist", "Striding Shotcaller", "Yavimaya Bloomsage");
+    // web-gateway fork: "Stensian Sanguinist" force-enabled (removed from unfinished) so it can be played;
+    // upstream flags it pending verification of the new "prepare" mechanic. Re-apply after each rebase.
+    private static final List<String> unfinished = Arrays.asList("Defacing Duskmage", "Dirgur Focusmage", "Eccentric Pestfinder", "Eiganjo Dynastorian", "Inspired Skypainter", "Lorehold Archivist", "Naktamun Lorespinner", "Striding Shotcaller", "Yavimaya Bloomsage");
     private static final SecretsOfStrixhavenCommander instance = new SecretsOfStrixhavenCommander();
 
     public static SecretsOfStrixhavenCommander getInstance() {

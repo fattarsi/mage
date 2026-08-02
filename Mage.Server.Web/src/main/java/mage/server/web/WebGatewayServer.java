@@ -858,9 +858,19 @@ public class WebGatewayServer {
         }
         int resolved = deck.getCards().size() + deck.getSideboard().size();
 
-        DeckValidator validator = DeckValidatorFactory.instance.createDeckValidator(deckType);
+        // createDeckValidator throws (NPE) if the deck type has no registered validator — don't let that
+        // crash the pre-check; degrade to "just report unresolved cards".
+        DeckValidator validator = null;
+        try {
+            validator = DeckValidatorFactory.instance.createDeckValidator(deckType);
+        } catch (Exception ignore) {
+            // no validator for this deck type — fall through and only report unresolved cards
+        }
         if (validator != null && validator.validate(deck)) {
             return null; // legal
+        }
+        if (validator == null && resolved >= requested) {
+            return null; // nothing we can check and every card resolved — let the server accept it
         }
 
         StringBuilder sb = new StringBuilder("Deck '" + list.getName() + "' isn't legal for "
@@ -892,6 +902,26 @@ public class WebGatewayServer {
      * the same lookup per entry to name the offenders, and check by name whether the card exists under a
      * different printing — so the message can say "re-import / pick another printing" vs "not implemented".
      */
+    /**
+     * Look a card up by name, tolerating combined double-faced / adventure names ("Front // Back"):
+     * XMage indexes such cards under the FRONT face only, so a deck that lists the joined name won't
+     * resolve by name. Fall back to the front face (then the back) so those cards are found.
+     */
+    private mage.cards.repository.CardInfo findCardByName(String name) {
+        if (name == null) {
+            return null;
+        }
+        mage.cards.repository.CardInfo ci = mage.cards.repository.CardRepository.instance.findCard(name);
+        if (ci == null && name.contains(" // ")) {
+            String[] faces = name.split(" // ", 2);
+            ci = mage.cards.repository.CardRepository.instance.findCard(faces[0].trim());
+            if (ci == null && faces.length > 1) {
+                ci = mage.cards.repository.CardRepository.instance.findCard(faces[1].trim());
+            }
+        }
+        return ci;
+    }
+
     private java.util.List<String> describeUnresolvedCards(DeckCardLists list) {
         java.util.List<String> out = new java.util.ArrayList<>();
         java.util.List<mage.cards.decks.DeckCardInfo> all = new java.util.ArrayList<>();
@@ -904,8 +934,7 @@ public class WebGatewayServer {
                 continue; // this printing resolved fine
             }
             String where = info.getSetCode() + " #" + info.getCardNumber();
-            mage.cards.repository.CardInfo byName =
-                    mage.cards.repository.CardRepository.instance.findCard(info.getCardName());
+            mage.cards.repository.CardInfo byName = findCardByName(info.getCardName());
             if (byName != null) {
                 out.add(info.getCardName() + " (" + where + " not in DB; available as "
                         + byName.getSetCode() + " — re-import or pick another printing)");
@@ -941,8 +970,7 @@ public class WebGatewayServer {
                 if (mage.cards.repository.CardRepository.instance.findCard(info.getSetCode(), info.getCardNumber()) != null) {
                     continue; // exact printing resolves — leave it
                 }
-                mage.cards.repository.CardInfo byName =
-                        mage.cards.repository.CardRepository.instance.findCard(info.getCardName());
+                mage.cards.repository.CardInfo byName = findCardByName(info.getCardName());
                 if (byName == null) {
                     continue; // genuinely unknown/un-implemented — let the problem reporter name it
                 }
