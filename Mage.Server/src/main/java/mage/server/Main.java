@@ -358,19 +358,19 @@ public final class Main {
         UserStatsRepository.instance.updateUserStats();
 
         for (GamePlugin plugin : config.getGameTypes()) {
-            GameFactory.instance.addGameType(plugin.getName(), loadGameType(plugin), loadPlugin(plugin));
+            GameFactory.instance.addGameType(plugin.getName(), PluginUtil.loadGameType(plugin), PluginUtil.loadPlugin(plugin, plugin.getClassName()));
         }
         for (GamePlugin plugin : config.getTournamentTypes()) {
-            TournamentFactory.instance.addTournamentType(plugin.getName(), loadTournamentType(plugin), loadPlugin(plugin));
+            TournamentFactory.instance.addTournamentType(plugin.getName(), PluginUtil.loadTournamentType(plugin), PluginUtil.loadPlugin(plugin, plugin.getClassName()));
         }
         for (Plugin plugin : config.getPlayerTypes()) {
-            PlayerFactory.instance.addPlayerType(plugin.getName(), loadPlugin(plugin));
+            PlayerFactory.instance.addPlayerType(plugin.getName(), PluginUtil.loadPlugin(plugin, plugin.getClassName()));
         }
         for (Plugin plugin : config.getDraftCubes()) {
-            CubeFactory.instance.addDraftCube(plugin.getName(), loadPlugin(plugin));
+            CubeFactory.instance.addDraftCube(plugin.getName(), PluginUtil.loadPlugin(plugin, plugin.getClassName()));
         }
         for (Plugin plugin : config.getDeckTypes()) {
-            DeckValidatorFactory.instance.addDeckType(plugin.getName(), loadPlugin(plugin));
+            DeckValidatorFactory.instance.addDeckType(plugin.getName(), PluginUtil.loadPlugin(plugin, plugin.getClassName()));
         }
 
         ManagerFactory managerFactory = new MainManagerFactory(config);
