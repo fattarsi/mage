@@ -11,7 +11,10 @@
 # (many minutes, a few GB of RAM). Subsequent builds reuse Docker layer cache.
 
 # ---- build stage: compile the gateway and everything it depends on ----
-FROM maven:3.9-eclipse-temurin-17 AS build
+# Pin the exact Maven version (not the floating :3.9 tag) so the build is reproducible and doesn't
+# depend on whatever :3.9 image the host's BuildKit happens to have cached — a stale/mismatched base
+# was breaking the server build after an upstream bump to maven-compiler-plugin 3.15.0.
+FROM maven:3.9.16-eclipse-temurin-17 AS build
 WORKDIR /src
 COPY . .
 # -am builds the modules Mage.Server.Web needs (engine, sets, server, plugins).
@@ -23,7 +26,7 @@ RUN mvn -B -ntp org.codehaus.mojo:exec-maven-plugin:3.1.0:help >/dev/null
 # ---- runtime stage: run the built reactor offline via the exec plugin ----
 # We keep Maven here because the gateway is launched through exec:java against the
 # reactor classpath; the populated ~/.m2 from the build lets it run fully offline.
-FROM maven:3.9-eclipse-temurin-17
+FROM maven:3.9.16-eclipse-temurin-17
 WORKDIR /app
 COPY --from=build /src /app
 COPY --from=build /root/.m2 /root/.m2
