@@ -52,9 +52,11 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <!-- the "MAD" simulation AI that actually plays (casts, attacks); base ComputerPlayer just passes -->
+            <!-- the "MAD" simulation AI that actually plays (casts, attacks); base ComputerPlayer just passes.
+                 Upstream renamed this module mage-player-ai-ma -> mage-player-ai-mad; the package (mage.player.ai)
+                 and classes (ComputerPlayer7) are unchanged. -->
             <groupId>org.mage</groupId>
-            <artifactId>mage-player-ai-ma</artifactId>
+            <artifactId>mage-player-ai-mad</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
