@@ -357,20 +357,49 @@ public final class Main {
         CardScanner.scan();
         UserStatsRepository.instance.updateUserStats();
 
+        // Load plugin classes straight from the runtime classpath. The stock PluginUtil.loadPlugin refuses
+        // (returns null) when the plugin JAR isn't present on disk and it's not a "developer build" — but
+        // the in-process gateway runs from the reactor classpath with no plugin/ jars, so every game/player/
+        // deck type would fail to register (createMatch then returns null -> "this.match is null" NPE).
+        // Class.forName against the app classloader finds everything we need.
         for (GamePlugin plugin : config.getGameTypes()) {
-            GameFactory.instance.addGameType(plugin.getName(), PluginUtil.loadGameType(plugin), PluginUtil.loadPlugin(plugin, plugin.getClassName()));
+            try {
+                GameFactory.instance.addGameType(plugin.getName(),
+                        (mage.game.match.MatchType) Class.forName(plugin.getTypeName()).getDeclaredConstructor().newInstance(),
+                        Class.forName(plugin.getClassName()));
+            } catch (Exception e) {
+                logger.error("Headless boot: failed to load game type " + plugin.getName(), e);
+            }
         }
         for (GamePlugin plugin : config.getTournamentTypes()) {
-            TournamentFactory.instance.addTournamentType(plugin.getName(), PluginUtil.loadTournamentType(plugin), PluginUtil.loadPlugin(plugin, plugin.getClassName()));
+            try {
+                TournamentFactory.instance.addTournamentType(plugin.getName(),
+                        (mage.game.tournament.TournamentType) Class.forName(plugin.getTypeName()).getDeclaredConstructor().newInstance(),
+                        Class.forName(plugin.getClassName()));
+            } catch (Exception e) {
+                logger.error("Headless boot: failed to load tournament type " + plugin.getName(), e);
+            }
         }
         for (Plugin plugin : config.getPlayerTypes()) {
-            PlayerFactory.instance.addPlayerType(plugin.getName(), PluginUtil.loadPlugin(plugin, plugin.getClassName()));
+            try {
+                PlayerFactory.instance.addPlayerType(plugin.getName(), Class.forName(plugin.getClassName()));
+            } catch (Exception e) {
+                logger.error("Headless boot: failed to load player type " + plugin.getName(), e);
+            }
         }
         for (Plugin plugin : config.getDraftCubes()) {
-            CubeFactory.instance.addDraftCube(plugin.getName(), PluginUtil.loadPlugin(plugin, plugin.getClassName()));
+            try {
+                CubeFactory.instance.addDraftCube(plugin.getName(), Class.forName(plugin.getClassName()));
+            } catch (Exception e) {
+                logger.error("Headless boot: failed to load draft cube " + plugin.getName(), e);
+            }
         }
         for (Plugin plugin : config.getDeckTypes()) {
-            DeckValidatorFactory.instance.addDeckType(plugin.getName(), PluginUtil.loadPlugin(plugin, plugin.getClassName()));
+            try {
+                DeckValidatorFactory.instance.addDeckType(plugin.getName(), Class.forName(plugin.getClassName()));
+            } catch (Exception e) {
+                logger.error("Headless boot: failed to load deck type " + plugin.getName(), e);
+            }
         }
 
         ManagerFactory managerFactory = new MainManagerFactory(config);
