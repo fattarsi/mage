@@ -349,6 +349,7 @@
     <div class="setrow hint" style="color:#9ab">Card sizes are in the right column ▸</div>
     <div class="setrow"><label><input type="checkbox" id="viewerToggle" checked> Update viewer on hover</label></div>
     <div class="setrow"><label><input type="checkbox" id="soundToggle"> Sound effects</label></div>
+    <div class="setrow"><label><input type="checkbox" id="animToggle" checked> Animations (attack swing &amp; destroy)</label></div>
     <div class="setrow" style="border-top:1px solid #2c3340; padding-top:8px; margin-top:8px;">
         <b style="color:#cde">When skipping (e.g. “My next turn”), stop if…</b>
     </div>
@@ -1122,7 +1123,10 @@ function onSocketMessage(ev) {
             const prev = lastGameView;
             guardStaleFrame(gv);       // detect + self-heal a backwards board (the "revert" symptom)
             watchMyLosses(prev, gv);   // pause skipping if my stuff was removed on an opponent's turn
+            const leaving = captureLeaving(prev, gv); // snapshot cards about to leave (before re-render)
             lastGameView = gv; computePlayable(gv); renderBoard(gv);
+            playDissolve(leaving);     // burn away the ghosts of destroyed/bounced permanents
+            playAttacks(gv);           // swing attackers toward their defender
         }
         // Some decision frames (e.g. the London mulligan "put a card on the bottom" target, or any
         // "choose a target" that picks from hand/battlefield) carry NO gameView but DO update the set
@@ -1394,6 +1398,101 @@ function drawArrows(gv) {
         }
     }
 }
+// ============================ card animations (prototype) ============================
+// Purely presentational: the engine resolves instantly and sends new state; we diff the old vs new
+// board to detect what happened and play a short animation, then settle on the authoritative state.
+//   - destroy / leaves-battlefield: a burn/dissolve of a ghost clone left where the card was
+//   - attack declared: the attacker "swings" toward its defender and returns
+// Toggle in Settings ("Animations"); default on.
+const animToggle = document.getElementById('animToggle');
+let animEnabled = localStorage.getItem('anim') !== '0';
+animToggle.checked = animEnabled;
+animToggle.onchange = () => { animEnabled = animToggle.checked; localStorage.setItem('anim', animEnabled ? '1' : '0'); };
+
+function centerOfRect(r) { return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }
+function battlefieldIds(view) {
+    const ids = new Set();
+    ((view && view.players) || []).forEach(p => Object.keys(p.battlefield || {}).forEach(id => ids.add(id)));
+    return ids;
+}
+// BEFORE re-render: snapshot (clone + screen position) of permanents that are about to leave the board
+function captureLeaving(prev, gv) {
+    if (!animEnabled || !prev || !gv) return [];
+    const before = battlefieldIds(prev), after = battlefieldIds(gv);
+    const gone = [...before].filter(id => !after.has(id));
+    if (!gone.length || gone.length > 10) return []; // skip mass resets (new game / reconnect)
+    const caps = [];
+    for (const id of gone) {
+        const el = document.querySelector(`.card[data-cid="${id}"]`);
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width < 2) continue;
+        caps.push({ rect: r, clone: el.cloneNode(true) });
+    }
+    return caps;
+}
+// AFTER re-render: burn the ghost clones away where the cards used to be
+function playDissolve(caps) {
+    if (!caps || !caps.length) return;
+    for (const { rect, clone } of caps) {
+        clone.className = 'card';
+        clone.style.cssText += `;position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;`
+            + `height:${rect.height}px;margin:0;z-index:80;pointer-events:none;transform-origin:center;`;
+        document.body.appendChild(clone);
+        clone.animate([
+            { opacity: 1, filter: 'brightness(1)', transform: 'scale(1) rotate(0deg)' },
+            { opacity: .9, filter: 'brightness(1.9) sepia(.6) hue-rotate(-15deg)', offset: .35 },
+            { opacity: 0, filter: 'brightness(2.6) sepia(1) hue-rotate(-25deg)', transform: 'scale(.5) rotate(11deg) translateY(-10px)' }
+        ], { duration: 700, easing: 'ease-in' }).onfinish = () => clone.remove();
+        spawnEmbers(rect);
+    }
+}
+function spawnEmbers(rect) {
+    for (let i = 0; i < 7; i++) {
+        const e = document.createElement('div');
+        const size = 3 + Math.random() * 4;
+        e.style.cssText = `position:fixed;left:${rect.left + rect.width * (.25 + Math.random() * .5)}px;`
+            + `top:${rect.top + rect.height * .62}px;width:${size}px;height:${size}px;border-radius:50%;`
+            + `background:radial-gradient(circle,#ffe08a,#e8631f);box-shadow:0 0 6px #f80;z-index:81;pointer-events:none;`;
+        document.body.appendChild(e);
+        const dx = (Math.random() - .5) * 46, dy = -32 - Math.random() * 54;
+        e.animate([{ transform: 'translate(0,0)', opacity: 1 }, { transform: `translate(${dx}px,${dy}px)`, opacity: 0 }],
+            { duration: 620 + Math.random() * 320, easing: 'ease-out' }).onfinish = () => e.remove();
+    }
+}
+// attackers "swing" toward their defender when combat is declared (once per new attacker set)
+let lastCombatSig = '';
+function playAttacks(gv) {
+    if (!animEnabled) return;
+    const groups = (gv && gv.combat) || [];
+    const atkIds = [];
+    groups.forEach(g => Object.keys(g.attackers || {}).forEach(id => atkIds.push(id)));
+    const sig = atkIds.sort().join(',');
+    if (!sig || sig === lastCombatSig) { lastCombatSig = sig; return; }
+    lastCombatSig = sig;
+    for (const g of groups) {
+        const defEl = document.querySelector(`[data-cid="${g.defenderId}"]`) || document.querySelector(`[data-pid="${g.defenderId}"]`);
+        if (!defEl) continue;
+        const defC = centerOfRect(defEl.getBoundingClientRect());
+        for (const aid of Object.keys(g.attackers || {})) {
+            const el = document.querySelector(`.card[data-cid="${aid}"]`);
+            if (!el) continue;
+            const ac = centerOfRect(el.getBoundingClientRect());
+            let dx = defC.x - ac.x, dy = defC.y - ac.y;
+            const dist = Math.hypot(dx, dy) || 1;
+            const reach = Math.min(dist * 0.45, 150);
+            dx = dx / dist * reach; dy = dy / dist * reach;
+            el.style.zIndex = '20';
+            el.animate([
+                { transform: 'translate(0,0)' },
+                { transform: `translate(${-dx * .12}px,${-dy * .12}px)`, offset: .18 }, // anticipation
+                { transform: `translate(${dx}px,${dy}px)`, offset: .5 },                 // lunge
+                { transform: 'translate(0,0)' }                                          // return
+            ], { duration: 640, easing: 'ease-in-out' }).onfinish = () => { el.style.zIndex = ''; };
+        }
+    }
+}
+
 // keep arrows aligned when the page scrolls/resizes
 let arrowRaf = null;
 function scheduleArrows() { if (arrowRaf) return; arrowRaf = requestAnimationFrame(() => { arrowRaf = null; if (lastGameView) drawArrows(lastGameView); }); }
