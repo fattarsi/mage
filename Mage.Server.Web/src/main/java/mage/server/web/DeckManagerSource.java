@@ -14,6 +14,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -114,6 +115,126 @@ public class DeckManagerSource implements DeckSource {
         logger.info("web gateway: loaded deck '" + list.getName() + "' (" + total + " cards, "
                 + list.getSideboard().size() + " commander(s))");
         return list;
+    }
+
+    // ------------------------------- deck variants -------------------------------
+
+    @Override
+    public List<Map<String, Object>> listVariants(String deckId) throws Exception {
+        JsonObject root = getJson("/api/decks/" + deckId + "/variants/").getAsJsonObject();
+        JsonArray arr = root.has("variants") ? root.getAsJsonArray("variants") : new JsonArray();
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (JsonElement e : arr) {
+            JsonObject vr = e.getAsJsonObject();
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", vr.get("id").getAsString());
+            m.put("name", vr.get("name").getAsString());
+            m.put("description", optString(vr, "description"));
+            m.put("is_default", vr.has("is_default") && vr.get("is_default").getAsBoolean());
+            m.put("is_active", vr.has("is_active") && vr.get("is_active").getAsBoolean());
+            m.put("card_count", vr.has("card_count") ? vr.get("card_count").getAsInt() : 0);
+            out.add(m);
+        }
+        return out;
+    }
+
+    /**
+     * The variant's commander/partner NAMES. Primary: the card whose oracle_id == commander_id/partner_id.
+     * Fallback (some decks store a non-oracle commander_id, e.g. deck 209): the deck's own declared
+     * commander/partner names when they appear among the variant's cards. Either element may be null.
+     */
+    private String[] variantCommanderNames(JsonObject v, String deckId) {
+        Map<String, String> byOracle = new HashMap<>();
+        Set<String> names = new HashSet<>();
+        for (JsonElement ce : v.getAsJsonArray("cards")) {
+            JsonObject c = ce.getAsJsonObject();
+            String nm = c.get("name").getAsString();
+            byOracle.put(optString(c, "oracle_id"), nm);
+            names.add(nm);
+        }
+        String cmdId = optString(v, "commander_id"), parId = optString(v, "partner_id");
+        String cmd = (cmdId != null) ? byOracle.get(cmdId) : null;
+        String par = (parId != null) ? byOracle.get(parId) : null;
+        boolean needFallback = (cmd == null && cmdId != null && !cmdId.isEmpty())
+                || (par == null && parId != null && !parId.isEmpty());
+        if (needFallback) {
+            try {
+                JsonObject d = getJson("/api/decks/" + deckId + "/").getAsJsonObject();
+                String dc = commanderName(d, "commander"), dp = commanderName(d, "partner");
+                if (cmd == null && dc != null && names.contains(dc)) cmd = dc;
+                if (par == null && dp != null && names.contains(dp)) par = dp;
+            } catch (Exception ignore) {
+                // best-effort — a variant with an unresolved commander just won't be pre-placed
+            }
+        }
+        return new String[]{cmd, par};
+    }
+
+    @Override
+    public DeckCardLists fetchVariant(String deckId, String variantId) throws Exception {
+        JsonObject v = getJson("/api/decks/" + deckId + "/variants/" + variantId + "/").getAsJsonObject();
+        DeckCardLists list = new DeckCardLists();
+        list.setName(v.has("name") ? v.get("name").getAsString() : ("variant-" + variantId));
+
+        String[] cmd = variantCommanderNames(v, deckId);
+        Set<String> commanders = new HashSet<>();
+        if (cmd[0] != null) commanders.add(cmd[0]);
+        if (cmd[1] != null) commanders.add(cmd[1]);
+
+        Set<String> placed = new HashSet<>();
+        int total = 0;
+        // variant cards are name+oracle_id+qty (no printing) — resolveToAvailablePrintings resolves by name
+        for (JsonElement ce : v.getAsJsonArray("cards")) {
+            JsonObject c = ce.getAsJsonObject();
+            String name = c.get("name").getAsString();
+            int qty = c.has("qty") ? c.get("qty").getAsInt() : 1;
+            if (commanders.contains(name) && !placed.contains(name)) {
+                list.getSideboard().add(new DeckCardInfo(name, "", "", 1)); // commander -> command zone
+                placed.add(name);
+                if (qty > 1) list.getCards().add(new DeckCardInfo(name, "", "", qty - 1));
+            } else {
+                list.getCards().add(new DeckCardInfo(name, "", "", qty));
+            }
+            total += qty;
+        }
+        logger.info("web gateway: loaded variant '" + list.getName() + "' of deck " + deckId + " ("
+                + total + " cards, " + list.getSideboard().size() + " commander(s))");
+        return list;
+    }
+
+    @Override
+    public Map<String, Object> variantView(String deckId, String variantId) throws Exception {
+        JsonObject v = getJson("/api/decks/" + deckId + "/variants/" + variantId + "/").getAsJsonObject();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("id", variantId);
+        out.put("name", v.has("name") ? v.get("name").getAsString() : ("variant-" + variantId));
+        out.put("description", optString(v, "description"));
+        List<Map<String, Object>> cards = new ArrayList<>();
+        for (JsonElement ce : v.getAsJsonArray("cards")) {
+            JsonObject c = ce.getAsJsonObject();
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("name", c.get("name").getAsString());
+            m.put("oracle_id", optString(c, "oracle_id"));
+            m.put("qty", c.has("qty") ? c.get("qty").getAsInt() : 1);
+            cards.add(m);
+        }
+        out.put("cards", cards);
+        List<Map<String, Object>> missing = new ArrayList<>();
+        if (v.has("missing") && v.get("missing").isJsonArray()) {
+            for (JsonElement me : v.getAsJsonArray("missing")) {
+                JsonObject mo = me.getAsJsonObject();
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("name", mo.has("name") ? mo.get("name").getAsString() : "?");
+                m.put("qty", mo.has("qty") ? mo.get("qty").getAsInt() : 1);
+                m.put("reason", optString(mo, "reason"));
+                missing.add(m);
+            }
+        }
+        out.put("missing", missing);
+        String[] cmd = variantCommanderNames(v, deckId);
+        out.put("commander", cmd[0]);
+        out.put("partner", cmd[1]);
+        return out;
     }
 
     private static String commanderName(JsonObject deck, String field) {

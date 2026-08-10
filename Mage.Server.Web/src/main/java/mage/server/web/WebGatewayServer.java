@@ -625,6 +625,40 @@ public class WebGatewayServer {
             return;
         }
 
+        // Variant browsing (read-only): list a deck's variants, or view one variant's card list.
+        if ("deckVariants".equals(action)) {
+            String deckId = msg.has("deckId") ? msg.get("deckId").getAsString() : null;
+            try {
+                java.util.List<Map<String, Object>> variants =
+                        (deckSource != null && deckId != null) ? deckSource.listVariants(deckId) : java.util.Collections.emptyList();
+                Map<String, Object> payload = new java.util.HashMap<>();
+                payload.put("deckId", deckId);
+                payload.put("variants", variants);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_VARIANTS", null, payload));
+            } catch (Exception e) {
+                logger.warn("web gateway: deckVariants failed for " + deckId, e);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_VARIANTS", null,
+                        Map.of("deckId", String.valueOf(deckId), "variants", java.util.Collections.emptyList())));
+            }
+            return;
+        }
+        if ("viewVariant".equals(action)) {
+            String deckId = msg.has("deckId") ? msg.get("deckId").getAsString() : null;
+            String variantId = msg.has("variantId") ? msg.get("variantId").getAsString() : null;
+            try {
+                Map<String, Object> view = (deckSource != null && deckId != null && variantId != null)
+                        ? deckSource.variantView(deckId, variantId) : java.util.Collections.emptyMap();
+                Map<String, Object> payload = new java.util.HashMap<>(view);
+                payload.put("deckId", deckId);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_VARIANT_LIST", null, payload));
+            } catch (Exception e) {
+                logger.warn("web gateway: viewVariant failed for " + deckId + "/" + variantId, e);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
+                        Map.of("message", "Couldn't load variant: " + e.getMessage())));
+            }
+            return;
+        }
+
         // Control action: (re)start a game with a chosen format and optional pasted deck.
         if ("newGame".equals(action)) {
             try {
@@ -745,6 +779,8 @@ public class WebGatewayServer {
         endSessionGame(ctx, ps);
 
         String deckId = msg.has("deckId") && !msg.get("deckId").isJsonNull() ? msg.get("deckId").getAsString() : "";
+        // optional deck variant — play a specific configuration instead of the active one
+        String variantId = msg.has("variantId") && !msg.get("variantId").isJsonNull() ? msg.get("variantId").getAsString() : "";
 
         // optional per-seat AI opponent deck ids ("" = let the host auto-pick that seat)
         List<String> aiDeckIds = new java.util.ArrayList<>();
@@ -754,7 +790,9 @@ public class WebGatewayServer {
 
         DeckCardLists deck = null;
         if (!deckId.isEmpty() && deckSource != null) {
-            deck = deckSource.fetchDeck(deckId); // load from the external site
+            deck = variantId.isEmpty()
+                    ? deckSource.fetchDeck(deckId)                  // active variant (default)
+                    : deckSource.fetchVariant(deckId, variantId);  // a chosen variant
         } else if (!deckText.trim().isEmpty()) {
             StringBuilder errs = new StringBuilder();
             deck = DeckFactory.parseDeckList(deckText, errs);
@@ -928,12 +966,12 @@ public class WebGatewayServer {
         all.addAll(list.getCards());
         all.addAll(list.getSideboard());
         for (mage.cards.decks.DeckCardInfo info : all) {
-            mage.cards.repository.CardInfo exact =
-                    mage.cards.repository.CardRepository.instance.findCard(info.getSetCode(), info.getCardNumber());
-            if (exact != null) {
+            String set = info.getSetCode(), num = info.getCardNumber();
+            boolean hasExact = set != null && !set.isEmpty() && num != null && !num.isEmpty();
+            if (hasExact && mage.cards.repository.CardRepository.instance.findCard(set, num) != null) {
                 continue; // this printing resolved fine
             }
-            String where = info.getSetCode() + " #" + info.getCardNumber();
+            String where = hasExact ? (set + " #" + num) : "by name";
             mage.cards.repository.CardInfo byName = findCardByName(info.getCardName());
             if (byName != null) {
                 out.add(info.getCardName() + " (" + where + " not in DB; available as "
@@ -967,15 +1005,19 @@ public class WebGatewayServer {
                 : java.util.Arrays.asList(list.getCards(), list.getSideboard())) {
             for (int i = 0; i < section.size(); i++) {
                 mage.cards.decks.DeckCardInfo info = section.get(i);
-                if (mage.cards.repository.CardRepository.instance.findCard(info.getSetCode(), info.getCardNumber()) != null) {
+                String set = info.getSetCode(), num = info.getCardNumber();
+                boolean hasExact = set != null && !set.isEmpty() && num != null && !num.isEmpty();
+                if (hasExact && mage.cards.repository.CardRepository.instance.findCard(set, num) != null) {
                     continue; // exact printing resolves — leave it
                 }
                 mage.cards.repository.CardInfo byName = findCardByName(info.getCardName());
                 if (byName == null) {
                     continue; // genuinely unknown/un-implemented — let the problem reporter name it
                 }
-                notes.add(info.getCardName() + " (" + info.getSetCode() + " #" + info.getCardNumber()
-                        + " → " + byName.getSetCode() + " #" + byName.getCardNumber() + ")");
+                if (hasExact) { // a real printing swap worth reporting; name-only (variant) entries resolve silently
+                    notes.add(info.getCardName() + " (" + set + " #" + num
+                            + " → " + byName.getSetCode() + " #" + byName.getCardNumber() + ")");
+                }
                 section.set(i, new mage.cards.decks.DeckCardInfo(
                         info.getCardName(), byName.getCardNumber(), byName.getSetCode(), info.getAmount()));
             }

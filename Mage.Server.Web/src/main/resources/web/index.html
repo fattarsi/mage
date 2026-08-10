@@ -292,6 +292,15 @@
         .overlay textarea { width: 100%; height: 180px; background: #11151b; color: #dde; border: 1px solid #38445a;
                             border-radius: 6px; padding: 8px; font-family: ui-monospace, monospace; font-size: 12px; }
         .overlay .hint { font-size: 11px; color: #89a; margin-top: 8px; }
+        #variantWrap { margin-top: 8px; }
+        #variantList { max-height: 40vh; overflow: auto; margin-top: 8px; padding: 8px 10px; background: #11151b;
+                       border: 1px solid #38445a; border-radius: 6px; font-size: 12.5px; line-height: 1.5; }
+        #variantList .vhead { color: #cfe; font-weight: 700; margin-bottom: 4px; }
+        #variantList .vcmd { color: #e7c86a; }
+        #variantList .vrow { color: #cdd; }
+        #variantList .vqty { color: #8ab; display: inline-block; min-width: 24px; }
+        #variantList .vmiss-hd { color: #f3b0a0; font-weight: 700; margin-top: 8px; }
+        #variantList .vmiss { color: #d99; font-size: 11.5px; }
         .overlay #startBtn { margin-top: 12px; font-size: 15px; padding: 9px 20px; }
         #newGameBtn { background: #2e6a40; font-size: 12px; padding: 5px 12px; }
         #newGameBtn:hover { background: #3c8a54; }
@@ -370,6 +379,14 @@
         <div id="deckSourceWrap" style="display:none">
             <label for="deckSourceSel">Load a deck from <span id="deckSourceLabel">your site</span></label>
             <select id="deckSourceSel"><option value="">— none (use pasted or random) —</option></select>
+        </div>
+        <div id="variantWrap" style="display:none">
+            <label for="variantSel">Variant <span id="variantHint" class="hint" style="display:inline"></span></label>
+            <div style="display:flex; gap:6px; align-items:center;">
+                <select id="variantSel" style="flex:1 1 auto"></select>
+                <button id="viewVariantBtn" type="button" class="alt" style="flex:0 0 auto">View list</button>
+            </div>
+            <div id="variantList" style="display:none"></div>
         </div>
         <div id="aiDecksWrap" style="display:none">
             <label>AI opponent decks (optional — leave as auto to let the host pick)</label>
@@ -865,10 +882,74 @@ function populateSetup() {
         });
         document.getElementById('deckSourceWrap').style.display = 'block';
         document.getElementById('aiDecksWrap').style.display = 'block';
-        // a site deck is a Commander deck; default the format to Commander 1v1 if available
-        const cmd = [...formatSel.options].find(o => o.value === 'commander');
-        if (cmd) deckSourceSel.onchange = () => { if (deckSourceSel.value && formatSel.value.indexOf('commander') < 0) formatSel.value = 'commander'; };
+        deckSourceSel.onchange = onDeckChange;
     }
+}
+// ---- deck variants (view alternate configurations of a deck) ----
+const variantWrap = document.getElementById('variantWrap');
+const variantSel = document.getElementById('variantSel');
+const variantList = document.getElementById('variantList');
+let variantsByDeck = {}; // deckId -> [variants]
+function onDeckChange() {
+    // a site deck is a Commander deck; default the format to Commander if not already
+    if (deckSourceSel.value && formatSel.value.indexOf('commander') < 0) {
+        if ([...formatSel.options].some(o => o.value === 'commander3')) formatSel.value = 'commander3';
+        else if ([...formatSel.options].some(o => o.value === 'commander')) formatSel.value = 'commander';
+    }
+    variantWrap.style.display = 'none'; variantList.style.display = 'none'; variantSel.innerHTML = '';
+    if (deckSourceSel.value) send('deckVariants', undefined, { deckId: deckSourceSel.value }); // -> GATEWAY_VARIANTS
+}
+function renderVariants(deckId, variants) {
+    if (deckSourceSel.value !== String(deckId)) return; // deck changed while loading
+    variantsByDeck[deckId] = variants || [];
+    variantSel.innerHTML = '';
+    if (!variants || !variants.length) { variantWrap.style.display = 'none'; return; }
+    variants.forEach(v => {
+        const o = document.createElement('option'); o.value = v.id;
+        o.textContent = v.name + (v.is_active ? ' ● active' : '') + (v.is_default ? ' ★ default' : '')
+            + (v.card_count ? ' (' + v.card_count + ')' : '');
+        variantSel.appendChild(o);
+    });
+    // default the picker to the active variant (that's what plays unless you choose otherwise)
+    const active = variants.find(v => v.is_active) || variants.find(v => v.is_default) || variants[0];
+    variantSel.value = active.id;
+    document.getElementById('variantHint').textContent = variants.length > 1
+        ? '— ' + variants.length + ' configurations; the chosen one is what you\'ll play'
+        : '';
+    variantWrap.style.display = 'block';
+}
+variantSel.onchange = () => { if (variantList.style.display !== 'none') requestVariantView(); }; // refresh open list
+document.getElementById('viewVariantBtn').onclick = () => {
+    if (variantList.style.display === 'none') { requestVariantView(); }
+    else { variantList.style.display = 'none'; }
+};
+function requestVariantView() {
+    variantList.style.display = 'block';
+    variantList.innerHTML = '<span class="meta">loading…</span>';
+    send('viewVariant', undefined, { deckId: deckSourceSel.value, variantId: variantSel.value }); // -> GATEWAY_VARIANT_LIST
+}
+function renderVariantList(v) {
+    if (!v || String(v.deckId) !== deckSourceSel.value) return;
+    const cmds = new Set([v.commander, v.partner].filter(Boolean));
+    const cards = (v.cards || []).slice().sort((a, b) => {
+        const ca = cmds.has(a.name), cb = cmds.has(b.name);
+        if (ca !== cb) return ca ? -1 : 1;       // commanders first
+        return a.name.localeCompare(b.name);
+    });
+    const total = cards.reduce((s, c) => s + (c.qty || 1), 0);
+    let html = `<div class="vhead">${esc(v.name || 'Variant')} — ${total} cards`
+        + (v.commander ? ` · commander: ${esc(v.commander)}${v.partner ? ' + ' + esc(v.partner) : ''}` : '') + `</div>`;
+    html += cards.map(c => {
+        const isCmd = cmds.has(c.name);
+        return `<div class="vrow${isCmd ? ' vcmd' : ''}"><span class="vqty">${c.qty || 1}×</span>`
+            + `${esc(c.name)}${isCmd ? ' 👑' : ''}</div>`;
+    }).join('');
+    const miss = v.missing || [];
+    if (miss.length) {
+        html += `<div class="vmiss-hd">⚠ Missing from your collection (${miss.length})</div>`
+            + miss.map(m => `<div class="vmiss">${m.qty || 1}× ${esc(m.name)}${m.reason ? ' — ' + esc(m.reason.replace(/_/g, ' ')) : ''}</div>`).join('');
+    }
+    variantList.innerHTML = html;
 }
 function showSetup(ready) {
     if (ready) { readyData = ready; populateSetup(); }
@@ -880,7 +961,9 @@ document.getElementById('startBtn').onclick = () => {
     const deckId = deckSourceSel.value;
     // chosen AI opponent decks (empty string = let the host auto-pick that seat)
     const aiDeckIds = [...document.querySelectorAll('.aiDeckSel')].map(s => s.value);
-    send('newGame', undefined, { format: formatSel.value, deck: deckId ? '' : deckInput.value, deckId, aiDeckIds });
+    // play the chosen variant when a site deck + variant selector are in play (else the active variant)
+    const variantId = (deckId && variantWrap.style.display !== 'none') ? variantSel.value : '';
+    send('newGame', undefined, { format: formatSel.value, deck: deckId ? '' : deckInput.value, deckId, variantId, aiDeckIds });
     setupEl.style.display = 'none';
     setPrompt('Starting game…');
 };
@@ -1844,6 +1927,8 @@ function handle(method, data) {
             setGameActive(false); log(esc(data.message || 'Game ended.'));
             setPrompt('Game ended. Click “New game” to start another.'); showSetup(); break;
         case 'GATEWAY_INFO': log(esc(data.message)); break;
+        case 'GATEWAY_VARIANTS': renderVariants(data.deckId, data.variants); break;
+        case 'GATEWAY_VARIANT_LIST': renderVariantList(data); break;
         case 'GATEWAY_ERROR': {
             const msg = data.message || 'error';
             showSetup();
