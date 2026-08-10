@@ -237,6 +237,44 @@ public class DeckManagerSource implements DeckSource {
         return out;
     }
 
+    @Override
+    public Map<String, String> artKeysByName(String deckId, String variantId) throws Exception {
+        Map<String, String> out = new HashMap<>();
+        if (variantId == null || variantId.isEmpty()) {
+            // active deck list: cards carry a full oracle_card with set_code/collector_number (+ id)
+            JsonObject d = getJson("/api/decks/" + deckId + "/").getAsJsonObject();
+            for (JsonElement ce : d.getAsJsonArray("cards")) {
+                JsonObject c = ce.getAsJsonObject();
+                String name = c.get("name").getAsString();
+                String set = null, num = null, oid = null;
+                if (c.has("oracle_card") && c.get("oracle_card").isJsonObject()) {
+                    JsonObject oc = c.getAsJsonObject("oracle_card");
+                    set = optString(oc, "set_code");
+                    num = optString(oc, "collector_number");
+                    oid = optString(oc, "id");
+                }
+                String tok = (set != null && !set.isEmpty() && num != null && !num.isEmpty())
+                        ? set.toLowerCase() + "|" + num
+                        : (oid != null ? "oracle:" + oid : null);
+                if (tok != null) out.putIfAbsent(name, tok);
+            }
+        } else {
+            // a variant: cards are name+oracle_id+qty only — match art by oracle id via /card-image
+            JsonObject v = getJson("/api/decks/" + deckId + "/variants/" + variantId + "/").getAsJsonObject();
+            for (JsonElement ce : v.getAsJsonArray("cards")) {
+                JsonObject c = ce.getAsJsonObject();
+                String oid = optString(c, "oracle_id");
+                if (oid != null) out.putIfAbsent(c.get("name").getAsString(), "oracle:" + oid);
+            }
+        }
+        return out;
+    }
+
+    @Override
+    public String cardImageUrl(String oracleId) {
+        return baseUrl + "/card-image/" + oracleId + "/";
+    }
+
     private static String commanderName(JsonObject deck, String field) {
         if (deck.has(field) && deck.get(field).isJsonObject()) {
             JsonObject c = deck.getAsJsonObject(field);

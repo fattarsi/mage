@@ -1123,9 +1123,13 @@ function artCandidates(card) {
     // XMage may have loaded a different printing; fall back to it (then a token search) if this 404s.
     const planned = (!tokenish && card.name) ? plannerPrintings[card.name] : null;
     if (planned) {
-        const bar = planned.indexOf('|');
-        const ps = planned.slice(0, bar), pn = planned.slice(bar + 1);
-        if (ps && pn) out.push(`/img/${encodeURIComponent(ps)}/${encodeURIComponent(pn)}`);
+        if (planned.startsWith('oracle:')) {
+            out.push(`/imgoracle/${encodeURIComponent(planned.slice(7))}`); // planner's own art (variants)
+        } else {
+            const bar = planned.indexOf('|');
+            const ps = planned.slice(0, bar), pn = planned.slice(bar + 1);
+            if (ps && pn) out.push(`/img/${encodeURIComponent(ps)}/${encodeURIComponent(pn)}`);
+        }
     }
     if (!tokenish && set && rawNum) out.push(`/img/${encodeURIComponent(set)}/${encodeURIComponent(rawNum)}`);
     if (card.name) out.push(`/imgtoken/${encodeURIComponent(card.name)}`);

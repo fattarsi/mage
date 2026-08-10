@@ -42,4 +42,18 @@ public interface DeckSource {
     default Map<String, Object> variantView(String deckId, String variantId) throws Exception {
         return java.util.Collections.emptyMap();
     }
+
+    /**
+     * Per card NAME, a token telling the client which art to show so the board matches this deck source
+     * exactly: either {@code "set|num"} (a Scryfall printing) or {@code "oracle:<oracle_id>"} (resolved
+     * via {@link #cardImageUrl}). variantId "" means the deck's active list. Default: no hints.
+     */
+    default Map<String, String> artKeysByName(String deckId, String variantId) throws Exception {
+        return java.util.Collections.emptyMap();
+    }
+
+    /** URL of this source's own image for a card by oracle id (the exact art the planner shows), or null. */
+    default String cardImageUrl(String oracleId) {
+        return null;
+    }
 }

@@ -255,6 +255,8 @@ public class WebGatewayServer {
         app.get("/cardinfo/{set}/{num}", this::serveCardInfo);
         // token images: tokens have collector number "0", so look them up by name (type:token)
         app.get("/imgtoken/{name}", this::serveTokenImage);
+        // deck-source art by oracle id: proxy the planner's own card image so board art matches it exactly
+        app.get("/imgoracle/{oid}", this::serveOracleImage);
 
         app.start(port);
         ensureBulkIndex(); // build the Scryfall CDN image index in the background
@@ -502,6 +504,45 @@ public class WebGatewayServer {
         String name = info.getCardName(), set = info.getSetCode(), num = info.getCardNumber();
         if (name != null && set != null && !set.isEmpty() && num != null && !num.isEmpty()) {
             map.putIfAbsent(name, set.toLowerCase() + "|" + num);
+        }
+    }
+
+    /**
+     * Serve a card image straight from the deck source (planner) by oracle id, cached on disk. Used to
+     * make variant art (which has no set/number) match exactly what the planner shows.
+     * URL: {@code /imgoracle/{oid}}.
+     */
+    private void serveOracleImage(io.javalin.http.Context ctx) {
+        String oid = ctx.pathParam("oid").replaceAll("[^a-fA-F0-9-]", "");
+        if (oid.isEmpty() || deckSource == null) {
+            ctx.status(400);
+            return;
+        }
+        try {
+            File dir = new File(IMAGE_CACHE_DIR, "_oracle");
+            File file = new File(dir, oid + ".jpg");
+            byte[] bytes;
+            if (file.isFile() && file.length() > 0) {
+                bytes = Files.readAllBytes(file.toPath());
+            } else {
+                String url = deckSource.cardImageUrl(oid);
+                if (url == null) {
+                    ctx.status(404);
+                    return;
+                }
+                bytes = fetchBytes(url);
+                if (bytes == null || bytes.length == 0) {
+                    ctx.status(404);
+                    return;
+                }
+                dir.mkdirs();
+                Files.write(file.toPath(), bytes);
+            }
+            ctx.contentType("image/jpeg");
+            ctx.header("Cache-Control", "public, max-age=2592000");
+            ctx.result(bytes);
+        } catch (Exception e) {
+            ctx.status(404);
         }
     }
 
@@ -1029,7 +1070,15 @@ public class WebGatewayServer {
         // exactly (the /img proxy fetches whatever set+number we ask Scryfall for, even printings XMage
         // itself lacks). Sent every game start (empty map resets any stale printings from a prior deck).
         Map<String, String> plannerPrintings = new HashMap<>();
-        if (deck != null) {
+        if (!deckId.isEmpty() && deckSource != null) {
+            // ask the source directly (base decks -> set|num; variants -> oracle:<id> matched via /imgoracle)
+            try {
+                plannerPrintings = new HashMap<>(deckSource.artKeysByName(deckId, variantId));
+            } catch (Exception e) {
+                logger.warn("web gateway: could not load planner art keys for deck " + deckId + ": " + e);
+            }
+        } else if (deck != null) {
+            // pasted deck: use whatever printings the import carried
             for (DeckCardInfo info : deck.getCards()) addPrinting(plannerPrintings, info);
             for (DeckCardInfo info : deck.getSideboard()) addPrinting(plannerPrintings, info);
         }
