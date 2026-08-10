@@ -1,8 +1,10 @@
 package mage.server.web;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.stream.JsonReader;
 import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.websocket.WsContext;
@@ -21,7 +23,11 @@ import mage.server.managers.ManagerFactory;
 import org.apache.log4j.Logger;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLEncoder;
@@ -250,6 +256,7 @@ public class WebGatewayServer {
         app.get("/imgtoken/{name}", this::serveTokenImage);
 
         app.start(port);
+        ensureBulkIndex(); // build the Scryfall CDN image index in the background
         if (server != null) {
             keepAliveScheduler.scheduleAtFixedRate(this::pingLiveSessions,
                     KEEPALIVE_SECONDS, KEEPALIVE_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
@@ -322,6 +329,163 @@ public class WebGatewayServer {
         return null;
     }
 
+    // ------------------------------- Scryfall bulk image index -------------------------------
+    // Scryfall's *API* image endpoint (api.scryfall.com/cards/...) is what enforces the ~10 req/s
+    // limit and soft-blocks us. Its *CDN* (cards.scryfall.io) is not rate-limited the same way. So,
+    // like the desktop client, we download Scryfall's "default_cards" bulk data once (a big JSON of
+    // every card incl. its CDN image URL), index it by set|collector_number, and fetch images straight
+    // from the CDN. The throttled API path stays as a fallback for cards missing from the index.
+    private static final File BULK_FILE = new File(IMAGE_CACHE_DIR, "_bulk/default_cards.json");
+    private static final long BULK_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000; // refresh weekly
+    private volatile Map<String, String> bulkIndex = null; // "set|num" (lowercase) -> normal-size CDN image url
+    private volatile boolean bulkLoading = false;
+
+    private String bulkImageUrl(String set, String num) {
+        Map<String, String> idx = bulkIndex;
+        return (idx == null) ? null : idx.get(set.toLowerCase() + "|" + num.toLowerCase());
+    }
+
+    /** Kick off (once) a background load of the Scryfall bulk image index. Non-blocking. */
+    private synchronized void ensureBulkIndex() {
+        if (bulkIndex != null || bulkLoading) {
+            return;
+        }
+        bulkLoading = true;
+        Thread t = new Thread(this::loadBulkIndex, "scryfall-bulk-index");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void loadBulkIndex() {
+        try {
+            File f = BULK_FILE;
+            boolean fresh = f.isFile() && f.length() > 0
+                    && (System.currentTimeMillis() - f.lastModified()) < BULK_MAX_AGE_MS;
+            if (!fresh) {
+                String downloadUrl = bulkDownloadUrl();
+                if (downloadUrl == null) {
+                    logger.warn("web gateway: could not resolve Scryfall bulk-data download url; using API fallback");
+                    bulkLoading = false;
+                    return;
+                }
+                f.getParentFile().mkdirs();
+                File tmp = new File(f.getParentFile(), "default_cards.json.tmp");
+                logger.info("web gateway: downloading Scryfall bulk card data (this is large, one-time) ...");
+                streamToFile(downloadUrl, tmp);
+                if (f.exists()) f.delete();
+                if (!tmp.renameTo(f)) { Files.move(tmp.toPath(), f.toPath()); }
+            }
+            long t0 = System.currentTimeMillis();
+            Map<String, String> idx = parseBulk(f);
+            bulkIndex = idx;
+            logger.info("web gateway: Scryfall bulk image index ready — " + idx.size()
+                    + " printings in " + (System.currentTimeMillis() - t0) + "ms");
+        } catch (Exception e) {
+            logger.warn("web gateway: failed building Scryfall bulk image index (" + e + "); using API fallback");
+        } finally {
+            bulkLoading = false;
+        }
+    }
+
+    /** Ask Scryfall's bulk-data catalog for the "default_cards" download URI (throttled API call). */
+    private String bulkDownloadUrl() throws Exception {
+        HttpURLConnection conn = openScryfall("https://api.scryfall.com/bulk-data", "application/json");
+        if (conn == null) {
+            return null;
+        }
+        String json;
+        try (InputStream in = conn.getInputStream()) {
+            json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        conn.disconnect();
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        if (!root.has("data")) {
+            return null;
+        }
+        for (JsonElement e : root.getAsJsonArray("data")) {
+            JsonObject o = e.getAsJsonObject();
+            if (o.has("type") && "default_cards".equals(o.get("type").getAsString()) && o.has("download_uri")) {
+                return o.get("download_uri").getAsString();
+            }
+        }
+        return null;
+    }
+
+    /** Stream a (possibly very large) URL body to a file. Uses the descriptive UA; hits Scryfall's CDN. */
+    private void streamToFile(String url, File dest) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+        conn.setRequestProperty("User-Agent", SCRY_UA);
+        conn.setRequestProperty("Accept", "application/json");
+        conn.setConnectTimeout(8000);
+        conn.setReadTimeout(60000);
+        conn.setInstanceFollowRedirects(true);
+        try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(dest)) {
+            byte[] buf = new byte[1 << 16];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+            }
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    /** Stream-parse the bulk card array, keeping only set|collector_number -> normal image CDN url. */
+    private Map<String, String> parseBulk(File f) throws Exception {
+        Map<String, String> map = new HashMap<>(120000);
+        try (JsonReader r = new JsonReader(new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
+            r.beginArray();
+            while (r.hasNext()) {
+                String set = null, num = null, img = null, faceImg = null;
+                r.beginObject();
+                while (r.hasNext()) {
+                    switch (r.nextName()) {
+                        case "set": set = r.nextString(); break;
+                        case "collector_number": num = r.nextString(); break;
+                        case "image_uris": img = readNormal(r); break;
+                        case "card_faces": faceImg = readFacesNormal(r); break;
+                        default: r.skipValue();
+                    }
+                }
+                r.endObject();
+                String use = (img != null) ? img : faceImg;
+                if (set != null && num != null && use != null) {
+                    map.put(set.toLowerCase() + "|" + num.toLowerCase(), use);
+                }
+            }
+            r.endArray();
+        }
+        return map;
+    }
+
+    /** Read an image_uris object and return its "normal" url (or null). */
+    private String readNormal(JsonReader r) throws Exception {
+        String normal = null;
+        r.beginObject();
+        while (r.hasNext()) {
+            if ("normal".equals(r.nextName())) { normal = r.nextString(); } else { r.skipValue(); }
+        }
+        r.endObject();
+        return normal;
+    }
+
+    /** For double-faced cards, return the front face's normal image url. */
+    private String readFacesNormal(JsonReader r) throws Exception {
+        String first = null;
+        r.beginArray();
+        while (r.hasNext()) {
+            String faceNormal = null;
+            r.beginObject();
+            while (r.hasNext()) {
+                if ("image_uris".equals(r.nextName())) { faceNormal = readNormal(r); } else { r.skipValue(); }
+            }
+            r.endObject();
+            if (first == null) { first = faceNormal; }
+        }
+        r.endArray();
+        return first;
+    }
+
     /** Token images keyed by name (tokens have collector number 0). Search Scryfall for the token printing. */
     private void serveTokenImage(io.javalin.http.Context ctx) {
         String name = ctx.pathParam("name").replaceAll("[^a-zA-Z0-9 ,'\\-]", "").trim();
@@ -385,7 +549,8 @@ public class WebGatewayServer {
 
     private byte[] fetchBytes(String url) throws Exception {
         HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-        conn.setRequestProperty("User-Agent", "xmage-web-gateway/1.0");
+        conn.setRequestProperty("User-Agent", SCRY_UA);
+        conn.setRequestProperty("Accept", "image/*");
         conn.setConnectTimeout(8000);
         conn.setReadTimeout(12000);
         conn.setInstanceFollowRedirects(true);
@@ -460,16 +625,25 @@ public class WebGatewayServer {
             if (file.isFile() && file.length() > 0) {
                 bytes = Files.readAllBytes(file.toPath());
             } else {
-                String url = "https://api.scryfall.com/cards/" + set + "/" + num + "?format=image&version=normal";
-                HttpURLConnection conn = openScryfall(url, "image/*");
-                if (conn == null) {
-                    ctx.status(404);
-                    return;
+                bytes = null;
+                // preferred: resolve to a direct CDN link via the bulk index (not rate-limited)
+                String cdn = bulkImageUrl(set, num);
+                if (cdn != null) {
+                    try { bytes = fetchBytes(cdn); } catch (Exception ignore) { bytes = null; }
                 }
-                try (InputStream in = conn.getInputStream()) {
-                    bytes = in.readAllBytes();
+                // fallback: the throttled Scryfall API image endpoint
+                if (bytes == null || bytes.length == 0) {
+                    String url = "https://api.scryfall.com/cards/" + set + "/" + num + "?format=image&version=normal";
+                    HttpURLConnection conn = openScryfall(url, "image/*");
+                    if (conn == null) {
+                        ctx.status(404);
+                        return;
+                    }
+                    try (InputStream in = conn.getInputStream()) {
+                        bytes = in.readAllBytes();
+                    }
+                    conn.disconnect();
                 }
-                conn.disconnect();
                 dir.mkdirs();
                 Files.write(file.toPath(), bytes);
             }
