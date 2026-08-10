@@ -9,6 +9,7 @@ import io.javalin.Javalin;
 import io.javalin.http.staticfiles.Location;
 import io.javalin.websocket.WsContext;
 import mage.cards.decks.Deck;
+import mage.cards.decks.DeckCardInfo;
 import mage.cards.decks.DeckCardLists;
 import mage.cards.decks.DeckValidator;
 import mage.cards.decks.DeckValidatorError;
@@ -494,6 +495,14 @@ public class WebGatewayServer {
         }
         r.endArray();
         return first;
+    }
+
+    /** Record a card's deck-source printing (name -&gt; "set|num", lowercased set) when both are present. */
+    private static void addPrinting(Map<String, String> map, DeckCardInfo info) {
+        String name = info.getCardName(), set = info.getSetCode(), num = info.getCardNumber();
+        if (name != null && set != null && !set.isEmpty() && num != null && !num.isEmpty()) {
+            map.putIfAbsent(name, set.toLowerCase() + "|" + num);
+        }
     }
 
     /** Token images keyed by name (tokens have collector number 0). Search Scryfall for the token printing. */
@@ -1013,6 +1022,18 @@ public class WebGatewayServer {
                         Map.of("message", "Deck import notes: " + errs)));
             }
         }
+
+        // Tell the client which printing the deck source (planner) intended for each card, keyed by
+        // name, BEFORE we repair printings below. The board's CardView carries whatever printing XMage
+        // settled on, which can differ; the client prefers this map so board art matches the planner
+        // exactly (the /img proxy fetches whatever set+number we ask Scryfall for, even printings XMage
+        // itself lacks). Sent every game start (empty map resets any stale printings from a prior deck).
+        Map<String, String> plannerPrintings = new HashMap<>();
+        if (deck != null) {
+            for (DeckCardInfo info : deck.getCards()) addPrinting(plannerPrintings, info);
+            for (DeckCardInfo info : deck.getSideboard()) addPrinting(plannerPrintings, info);
+        }
+        ctx.send(JsonCodec.encodeCallback("GATEWAY_PRINTINGS", null, Map.of("map", plannerPrintings)));
 
         // Repair unresolvable printings: the card is implemented, but the exact set+number from the
         // import isn't in XMage's DB (promos, showcase numbers like "175s", newer sets). XMage resolves

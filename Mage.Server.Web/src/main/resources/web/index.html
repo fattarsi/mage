@@ -741,6 +741,7 @@ let validTargets = new Set();  // ids the server is currently asking us to pick 
 let priorityActive = false;    // true while the server is asking us to act at priority (GAME_SELECT)
 let myHandIds = new Set();      // ids of cards in our hand (to dim the un-castable ones at priority)
 let combatMode = null;         // 'attack' | 'block' while declaring attackers/blockers (to highlight creatures)
+let plannerPrintings = {};     // card name -> "set|num": the deck source's chosen printing (for matching board art)
 
 // callbacks that START a fresh decision (so stale target highlights should clear)
 const ACTIONABLE = new Set(['GAME_SELECT','GAME_PLAY_MANA','GAME_ASK','GAME_GET_AMOUNT','GAME_GET_MULTI_AMOUNT',
@@ -1118,6 +1119,14 @@ function artCandidates(card) {
     const rawNum = card.cardNumber || (card.imageNumber ? String(card.imageNumber) : null);
     const set = card.expansionSetCode ? String(card.expansionSetCode).toLowerCase() : null;
     const tokenish = card.isToken || rawNum === '0' || rawNum === 0;
+    // Prefer the deck-planner's chosen printing for this card name, so board art matches the planner.
+    // XMage may have loaded a different printing; fall back to it (then a token search) if this 404s.
+    const planned = (!tokenish && card.name) ? plannerPrintings[card.name] : null;
+    if (planned) {
+        const bar = planned.indexOf('|');
+        const ps = planned.slice(0, bar), pn = planned.slice(bar + 1);
+        if (ps && pn) out.push(`/img/${encodeURIComponent(ps)}/${encodeURIComponent(pn)}`);
+    }
     if (!tokenish && set && rawNum) out.push(`/img/${encodeURIComponent(set)}/${encodeURIComponent(rawNum)}`);
     if (card.name) out.push(`/imgtoken/${encodeURIComponent(card.name)}`);
     return out;
@@ -1927,6 +1936,7 @@ function handle(method, data) {
             setGameActive(false); log(esc(data.message || 'Game ended.'));
             setPrompt('Game ended. Click “New game” to start another.'); showSetup(); break;
         case 'GATEWAY_INFO': log(esc(data.message)); break;
+        case 'GATEWAY_PRINTINGS': plannerPrintings = (data && data.map) || {}; break;
         case 'GATEWAY_VARIANTS': renderVariants(data.deckId, data.variants); break;
         case 'GATEWAY_VARIANT_LIST': renderVariantList(data); break;
         case 'GATEWAY_ERROR': {
