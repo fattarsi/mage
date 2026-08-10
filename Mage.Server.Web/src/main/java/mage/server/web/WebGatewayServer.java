@@ -339,17 +339,27 @@ public class WebGatewayServer {
     private static final long BULK_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000; // refresh weekly
     private volatile Map<String, String> bulkIndex = null; // "set|num" (lowercase) -> normal-size CDN image url
     private volatile boolean bulkLoading = false;
+    private volatile long bulkLastAttempt = 0;
+    private static final long BULK_RETRY_COOLDOWN_MS = 60_000; // don't re-attempt more than once a minute
 
     private String bulkImageUrl(String set, String num) {
         Map<String, String> idx = bulkIndex;
         return (idx == null) ? null : idx.get(set.toLowerCase() + "|" + num.toLowerCase());
     }
 
-    /** Kick off (once) a background load of the Scryfall bulk image index. Non-blocking. */
+    /**
+     * Kick off a background load of the Scryfall bulk image index if it isn't ready. Non-blocking, and
+     * safe to call repeatedly (e.g. on image requests): guarded so it retries at most once a minute.
+     * This self-heals the boot-time case where egress isn't ready yet when the server first starts.
+     */
     private synchronized void ensureBulkIndex() {
         if (bulkIndex != null || bulkLoading) {
             return;
         }
+        if (System.currentTimeMillis() - bulkLastAttempt < BULK_RETRY_COOLDOWN_MS) {
+            return;
+        }
+        bulkLastAttempt = System.currentTimeMillis();
         bulkLoading = true;
         Thread t = new Thread(this::loadBulkIndex, "scryfall-bulk-index");
         t.setDaemon(true);
@@ -627,6 +637,7 @@ public class WebGatewayServer {
             } else {
                 bytes = null;
                 // preferred: resolve to a direct CDN link via the bulk index (not rate-limited)
+                if (bulkIndex == null) { ensureBulkIndex(); } // self-heal if the startup build missed
                 String cdn = bulkImageUrl(set, num);
                 if (cdn != null) {
                     try { bytes = fetchBytes(cdn); } catch (Exception ignore) { bytes = null; }
