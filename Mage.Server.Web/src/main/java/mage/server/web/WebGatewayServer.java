@@ -280,6 +280,48 @@ public class WebGatewayServer {
     private static final File IMAGE_CACHE_DIR = new File("image-cache");
     private static final File CARDINFO_CACHE_DIR = new File("cardinfo-cache");
 
+    // Scryfall asks clients to identify themselves and stay under ~10 requests/sec; a game loads ~100
+    // card images at once, which bursts past that and gets the whole server IP soft-blocked (HTTP 503),
+    // so most cards show no art. Throttle every Scryfall API call server-wide and retry on 429/503.
+    private static final String SCRY_UA = "XMageWebGateway/1.0 (https://mage.fattarsi.com; +https://github.com/fattarsi/mage)";
+    private static final Object SCRY_GATE = new Object();
+    private static long scryNextAt = 0;
+    private void scryfallThrottle() {
+        synchronized (SCRY_GATE) {
+            long wait = scryNextAt - System.currentTimeMillis();
+            if (wait > 0) {
+                try { Thread.sleep(wait); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            }
+            scryNextAt = System.currentTimeMillis() + 110; // ~9 requests/sec across the whole server
+        }
+    }
+    /** Open a Scryfall API request, throttled and retrying on 429/503. Returns a 200 connection, or null. */
+    private HttpURLConnection openScryfall(String url, String accept) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            scryfallThrottle();
+            try {
+                HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setRequestProperty("User-Agent", SCRY_UA);
+                conn.setRequestProperty("Accept", accept);
+                conn.setConnectTimeout(8000);
+                conn.setReadTimeout(12000);
+                conn.setInstanceFollowRedirects(true);
+                int code = conn.getResponseCode();
+                if (code == 200) {
+                    return conn;
+                }
+                conn.disconnect();
+                if (code != 429 && code != 503) {
+                    return null; // genuine miss (404 etc.) — don't retry
+                }
+            } catch (Exception ignore) {
+                // network hiccup — fall through to backoff
+            }
+            try { Thread.sleep(500L * (attempt + 1)); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
+        return null;
+    }
+
     /** Token images keyed by name (tokens have collector number 0). Search Scryfall for the token printing. */
     private void serveTokenImage(io.javalin.http.Context ctx) {
         String name = ctx.pathParam("name").replaceAll("[^a-zA-Z0-9 ,'\\-]", "").trim();
@@ -315,13 +357,8 @@ public class WebGatewayServer {
 
     /** Run a Scryfall search and return the first result's normal image URL (handles double-faced). */
     private String scryfallFirstImage(String searchUrl) throws Exception {
-        HttpURLConnection conn = (HttpURLConnection) new URL(searchUrl).openConnection();
-        conn.setRequestProperty("User-Agent", "xmage-web-gateway/1.0");
-        conn.setRequestProperty("Accept", "application/json");
-        conn.setConnectTimeout(8000);
-        conn.setReadTimeout(12000);
-        if (conn.getResponseCode() != 200) {
-            conn.disconnect();
+        HttpURLConnection conn = openScryfall(searchUrl, "application/json");
+        if (conn == null) {
             return null;
         }
         String json;
@@ -377,13 +414,8 @@ public class WebGatewayServer {
             if (file.isFile() && file.length() > 0) {
                 json = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
             } else {
-                HttpURLConnection conn = (HttpURLConnection) new URL("https://api.scryfall.com/cards/" + set + "/" + num).openConnection();
-                conn.setRequestProperty("User-Agent", "xmage-web-gateway/1.0");
-                conn.setRequestProperty("Accept", "application/json");
-                conn.setConnectTimeout(8000);
-                conn.setReadTimeout(12000);
-                if (conn.getResponseCode() != 200) {
-                    conn.disconnect();
+                HttpURLConnection conn = openScryfall("https://api.scryfall.com/cards/" + set + "/" + num, "application/json");
+                if (conn == null) {
                     ctx.status(404);
                     return;
                 }
@@ -429,13 +461,8 @@ public class WebGatewayServer {
                 bytes = Files.readAllBytes(file.toPath());
             } else {
                 String url = "https://api.scryfall.com/cards/" + set + "/" + num + "?format=image&version=normal";
-                HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-                conn.setRequestProperty("User-Agent", "xmage-web-gateway/1.0");
-                conn.setConnectTimeout(8000);
-                conn.setReadTimeout(12000);
-                conn.setInstanceFollowRedirects(true);
-                if (conn.getResponseCode() != 200) {
-                    conn.disconnect();
+                HttpURLConnection conn = openScryfall(url, "image/*");
+                if (conn == null) {
                     ctx.status(404);
                     return;
                 }
