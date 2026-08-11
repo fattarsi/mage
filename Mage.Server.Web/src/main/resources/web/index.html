@@ -334,6 +334,11 @@
                     align-items: center; justify-content: center; padding: 3vh 3vw; }
         #cardPeek img { max-height: 94vh; max-width: 94vw; border-radius: 14px; box-shadow: 0 10px 40px #000; }
         #cardPeek .peektext { color: #cde; font-size: 16px; }
+        /* stop the browser's long-press callout (open-in-new-tab / save-image / copy) on cards */
+        .card, .card img, #cardPeek img {
+            -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
+            -webkit-user-drag: none; user-drag: none;
+        }
     </style>
 </head>
 <body>
@@ -2573,6 +2578,13 @@ const Nav = (function () {
     document.addEventListener('click', (e) => {
         if (longFired) { longFired = false; e.stopPropagation(); e.preventDefault(); }
     }, true);
+
+    // stop the browser's own long-press menu (open in new tab / save image / copy) on cards + the overlay
+    document.addEventListener('contextmenu', (e) => {
+        if (peek.style.display === 'flex' || (e.target.closest && e.target.closest('.card'))) {
+            e.preventDefault();
+        }
+    });
 })();
 </script>
 <div id="cardPeek"></div>
