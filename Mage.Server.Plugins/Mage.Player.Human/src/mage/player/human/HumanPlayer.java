@@ -3,7 +3,9 @@ package mage.player.human;
 import mage.MageIdentifier;
 import mage.MageObject;
 import mage.abilities.*;
+import mage.abilities.costs.Cost;
 import mage.abilities.costs.common.SacrificeSourceCost;
+import mage.abilities.costs.common.SacrificeTargetCost;
 import mage.abilities.costs.common.TapSourceCost;
 import mage.abilities.costs.mana.ManaCost;
 import mage.abilities.costs.mana.ManaCostsImpl;
@@ -2342,12 +2344,13 @@ public class HumanPlayer extends PlayerImpl {
         if (abilities.size() == 1
                 && suppressAbilityPicker(abilities.values().iterator().next(), game)) {
             ActivatedAbility ability = abilities.values().iterator().next();
-            if (!ability.getTargets().isEmpty()
-                    || !(ability.getCosts().size() == 1
-                    && ability.getCosts().get(0) instanceof SacrificeSourceCost)
-                    || !(ability.getCosts().size() == 2
-                    && ability.getCosts().get(0) instanceof TapSourceCost
-                    && ability.getCosts().get(0) instanceof SacrificeSourceCost)) {
+            // Don't let a single click silently auto-fire an irreversible sacrifice (e.g. a
+            // "Tap, Sacrifice: add mana" land): with no target step to pass through first, the
+            // click would tap+sac on the spot. Fall through to the ability picker so the player
+            // confirms. Abilities with their own target step still auto-activate (you choose/cancel
+            // there). (NB: upstream tried to do this but tested one cost index against two types,
+            // so the guard never triggered.)
+            if (!ability.getTargets().isEmpty() || !costsIncludeSacrifice(ability)) {
                 activateAbility(ability, game);
                 return;
             }
@@ -2379,6 +2382,16 @@ public class HumanPlayer extends PlayerImpl {
                 activateAbility(abilities.get(responseId), game);
             }
         }
+    }
+
+    /** True if activating this ability pays an irreversible sacrifice (source or a sacrificed permanent). */
+    private static boolean costsIncludeSacrifice(ActivatedAbility ability) {
+        for (Cost cost : ability.getCosts()) {
+            if (cost instanceof SacrificeSourceCost || cost instanceof SacrificeTargetCost) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
