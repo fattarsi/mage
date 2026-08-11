@@ -339,6 +339,7 @@
     <button id="rollbackBtn" style="display:none" title="Roll the whole turn back to its start — undoes everything that happened this turn (yours and the AI's). Use this on your turn.">⟲ Start of turn</button>
     <button id="resignBtn" style="display:none">Resign</button>
     <button id="endGameBtn" style="display:none">End game</button>
+    <button id="fullscreenBtn" title="Toggle full screen" style="display:none">⛶</button>
     <button id="settingsBtn">⚙ Settings</button>
     <button id="helpBtn" title="Shortcuts & icon legend">? Help</button>
 </header>
@@ -2479,10 +2480,37 @@ const Nav = (function () {
                 '<span style="font-size:15px">&#x2191;</span>, then <b>“Add to Home Screen”</b>. ' +
                 'Launch it from the new icon to play full-screen.';
             help.style.display = 'block';
+        } else {
+            // Browsers that make a plain shortcut instead of installing (e.g. Amazon Silk on Fire
+            // tablets) never fire beforeinstallprompt. Point the user at the full-screen button.
+            help.innerHTML = 'This browser can’t install apps. Use the <b>⛶ full-screen</b> button ' +
+                'in the top bar for a chrome-free view.';
+            help.style.display = 'block';
         }
     };
 
     refreshUI();
+})();
+
+// ---- Full-screen toggle (works even where installable PWAs don't, e.g. Amazon Silk) ------------
+(function () {
+    const fsBtn = document.getElementById('fullscreenBtn');
+    if (!fsBtn) return;
+    const root = document.documentElement;
+    const enter = root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen;
+    const exit = document.exitFullscreen || document.webkitExitFullscreen;
+    const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+    const standalone = window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(display-mode: fullscreen)').matches || window.navigator.standalone === true;
+    // No Fullscreen API, or already launched chrome-free as an installed app → nothing to toggle.
+    if (!enter || standalone) { fsBtn.style.display = 'none'; return; }
+    fsBtn.style.display = '';
+    fsBtn.onclick = () => {
+        try { if (!fsEl()) { enter.call(root); } else if (exit) { exit.call(document); } } catch (e) {}
+    };
+    const sync = () => { fsBtn.textContent = fsEl() ? '⤢' : '⛶'; fsBtn.title = fsEl() ? 'Exit full screen' : 'Full screen'; };
+    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('webkitfullscreenchange', sync);
 })();
 </script>
 </body>
