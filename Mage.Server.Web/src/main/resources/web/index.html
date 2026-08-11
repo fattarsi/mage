@@ -328,6 +328,12 @@
         #resignBtn:hover { background: #9a7228; }
         #endGameBtn { background: #7a2e2e; font-size: 12px; padding: 5px 12px; }
         #endGameBtn:hover { background: #9a3838; }
+        /* full-screen card preview (long-press on touch — needed in full-screen, where the browser's
+           own pinch-zoom is disabled). Sits above everything, including the fullscreen element. */
+        #cardPeek { display: none; position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,.82);
+                    align-items: center; justify-content: center; padding: 3vh 3vw; }
+        #cardPeek img { max-height: 94vh; max-width: 94vw; border-radius: 14px; box-shadow: 0 10px 40px #000; }
+        #cardPeek .peektext { color: #cde; font-size: 16px; }
     </style>
 </head>
 <body>
@@ -469,7 +475,7 @@
 </svg>
 <!-- fixed right column: card viewer (top), then floating mana, zone buttons, and size sliders (bottom) -->
 <div id="sidecol">
-    <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"><span class="meta">Hover a card to preview it here.</span></div></div>
+    <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"><span class="meta">Hover a card to preview it here (on touch, press &amp; hold a card).</span></div></div>
     <div id="sideMana" class="meta">No floating mana</div>
     <div id="sideBtns">
         <button id="btnCommander" class="sidebtn">Commander</button>
@@ -972,8 +978,13 @@ function renderVariantList(v) {
     }
     variantList.innerHTML = html;
 }
-function showSetup(ready) {
+// Load the setup dialog's data (deck lists etc.) without opening it — so the landing page stays
+// clean and Settings/Help are usable before starting a game.
+function prepareSetup(ready) {
     if (ready) { readyData = ready; populateSetup(); }
+}
+function showSetup(ready) {
+    prepareSetup(ready);
     setupEl.style.display = 'flex';
 }
 document.getElementById('startBtn').onclick = () => {
@@ -1952,13 +1963,13 @@ function handle(method, data) {
     const message = msg(data.message);
     switch (method) {
         case 'GATEWAY_HELLO': setPrompt('Connected.'); break;
-        case 'GATEWAY_READY': sendBuffer.length = 0; showSetup(data); sendSkips(); setPrompt('Pick a format (and optionally a deck) then click Start game.'); break;
+        case 'GATEWAY_READY': sendBuffer.length = 0; prepareSetup(data); sendSkips(); setPrompt('Ready. Click “New game” to start — or open ⚙ Settings.'); break;
         case 'GATEWAY_RECONNECTED':
             setupEl.style.display = 'none'; hideBanner(); setGameActive(true);
             log('Reconnected to your game'); setPrompt('Reconnected — resuming…'); break;
         case 'GATEWAY_GAME_ENDED':
             setGameActive(false); log(esc(data.message || 'Game ended.'));
-            setPrompt('Game ended. Click “New game” to start another.'); showSetup(); break;
+            setPrompt('Game ended. Click “New game” to start another.'); break;
         case 'GATEWAY_INFO': log(esc(data.message)); break;
         case 'GATEWAY_PRINTINGS': plannerPrintings = (data && data.map) || {}; break;
         case 'GATEWAY_VARIANTS': renderVariants(data.deckId, data.variants); break;
@@ -2512,6 +2523,58 @@ const Nav = (function () {
     document.addEventListener('fullscreenchange', sync);
     document.addEventListener('webkitfullscreenchange', sync);
 })();
+
+// ---- Long-press to zoom a card (touch) --------------------------------------------------------
+// On a tablet there's no hover to drive the side viewer, and full-screen disables the browser's
+// pinch-zoom — so press-and-hold any card to see it big, tap anywhere to dismiss. The long-press
+// also swallows the tap that would otherwise play/select the card.
+(function () {
+    const peek = document.getElementById('cardPeek');
+    if (!peek) return;
+    let timer = null, sx = 0, sy = 0, longFired = false;
+    const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+    function show(card) {
+        peek.innerHTML = '';
+        if (card.faceDown) {
+            const t = document.createElement('div'); t.className = 'peektext'; t.textContent = '(face-down card)';
+            peek.appendChild(t);
+        } else {
+            const img = document.createElement('img');
+            setCardImage(img, card);          // reuse the tile's art + fallback chain
+            peek.appendChild(img);
+        }
+        peek.style.display = 'flex';
+    }
+    const hide = () => { peek.style.display = 'none'; peek.innerHTML = ''; };
+
+    // dismiss on touch/click of the overlay; preventDefault stops a stray click leaking to a card
+    peek.addEventListener('touchstart', (e) => { e.preventDefault(); hide(); }, { passive: false });
+    peek.addEventListener('click', (e) => { e.stopPropagation(); hide(); });
+
+    document.addEventListener('touchstart', (e) => {
+        if (peek.style.display === 'flex') return;
+        const el = e.target.closest && e.target.closest('.card');
+        if (!el || !el._card) return;
+        const t = e.touches[0]; sx = t.clientX; sy = t.clientY; longFired = false;
+        clear();
+        timer = setTimeout(() => { longFired = true; show(el._card); }, 360);
+    }, { passive: true, capture: true });
+
+    document.addEventListener('touchmove', (e) => {
+        if (!timer) return;
+        const t = e.touches[0];
+        if (Math.abs(t.clientX - sx) > 12 || Math.abs(t.clientY - sy) > 12) clear();
+    }, { passive: true, capture: true });
+
+    document.addEventListener('touchend', () => { clear(); }, { passive: true, capture: true });
+
+    // swallow exactly the click that follows a long-press so it doesn't also play/select the card
+    document.addEventListener('click', (e) => {
+        if (longFired) { longFired = false; e.stopPropagation(); e.preventDefault(); }
+    }, true);
+})();
 </script>
+<div id="cardPeek"></div>
 </body>
 </html>
