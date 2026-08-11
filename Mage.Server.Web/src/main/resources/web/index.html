@@ -2,7 +2,18 @@
 <html lang="en">
 <head>
     <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
     <title>XMage Web — Play vs AI</title>
+    <!-- Installable web app (add to home screen -> opens full-screen, no browser chrome) -->
+    <link rel="manifest" href="manifest.json"/>
+    <meta name="theme-color" content="#1f242c"/>
+    <link rel="icon" href="icon-192.png"/>
+    <!-- iOS / iPadOS: Safari ignores the manifest for install, so it needs its own tags -->
+    <meta name="apple-mobile-web-app-capable" content="yes"/>
+    <meta name="mobile-web-app-capable" content="yes"/>
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+    <meta name="apple-mobile-web-app-title" content="XMage"/>
+    <link rel="apple-touch-icon" href="icon-180.png"/>
     <style>
         * { box-sizing: border-box; }
         :root { --card-w: 104px; --bf-card-w: 78px; --opp-card-w: 78px; }
@@ -10,6 +21,10 @@
         header { padding: 8px 14px; background: #1f242c; border-bottom: 1px solid #333;
                  display: flex; align-items: center; gap: 14px; }
         header b { color: #cfe; }
+        /* when launched full-screen from the home screen, keep the header clear of the status bar/notch */
+        header { padding-top: calc(8px + env(safe-area-inset-top, 0px));
+                 padding-left: calc(14px + env(safe-area-inset-left, 0px));
+                 padding-right: calc(14px + env(safe-area-inset-right, 0px)); }
         #status { font-size: 12px; color: #8bd; }
         #turn { font-size: 12px; color: #fc9; margin-left: auto; }
         #board { padding: 10px 14px; }
@@ -355,6 +370,10 @@
 </div>
 
 <div id="settings" style="display:none">
+    <div class="setrow" id="installRow" style="display:none; border-bottom:1px solid #2c3340; padding-bottom:8px; margin-bottom:8px;">
+        <button id="installBtn" style="width:100%; background:#3a4150; padding:7px;">📲 Install app (full-screen)</button>
+        <div id="installHelp" class="hint" style="display:none; margin-top:6px; color:#9ab; line-height:1.4;"></div>
+    </div>
     <div class="setrow hint" style="color:#9ab">Card sizes are in the right column ▸</div>
     <div class="setrow"><label><input type="checkbox" id="viewerToggle" checked> Update viewer on hover</label></div>
     <div class="setrow"><label><input type="checkbox" id="soundToggle"> Sound effects</label></div>
@@ -2412,6 +2431,58 @@ const Nav = (function () {
 
     // refresh must never break board rendering
     return { refresh: function () { try { refresh(); } catch (e) { /* nav is best-effort */ } } };
+})();
+
+// ---- Install to home screen (PWA) -------------------------------------------------------------
+(function () {
+    // Register the (minimal) service worker so the app is installable and relaunches full-screen.
+    if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    }
+    const row = document.getElementById('installRow');
+    const btn = document.getElementById('installBtn');
+    const help = document.getElementById('installHelp');
+    if (!row || !btn) return;
+
+    const isStandalone = () =>
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(display-mode: fullscreen)').matches ||
+        window.navigator.standalone === true;         // iOS
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS reports as Mac
+
+    let deferred = null; // Chrome/Android beforeinstallprompt event, saved for our own button
+
+    function refreshUI() {
+        // Already installed? Nothing to offer.
+        if (isStandalone()) { row.style.display = 'none'; return; }
+        // Show the row if we can prompt (Android) or can give instructions (iOS).
+        row.style.display = (deferred || isIOS) ? '' : 'none';
+    }
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();           // stop Chrome's mini-infobar; we drive install from Settings
+        deferred = e;
+        refreshUI();
+    });
+    window.addEventListener('appinstalled', () => { deferred = null; row.style.display = 'none'; });
+
+    btn.onclick = async () => {
+        if (deferred) {
+            deferred.prompt();
+            try { await deferred.userChoice; } catch (e) {}
+            deferred = null;
+            refreshUI();
+        } else if (isIOS) {
+            // Safari has no install API — tell the user the manual steps.
+            help.innerHTML = 'In Safari: tap the <b>Share</b> button ' +
+                '<span style="font-size:15px">&#x2191;</span>, then <b>“Add to Home Screen”</b>. ' +
+                'Launch it from the new icon to play full-screen.';
+            help.style.display = 'block';
+        }
+    };
+
+    refreshUI();
 })();
 </script>
 </body>
