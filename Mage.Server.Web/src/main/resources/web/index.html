@@ -2556,6 +2556,11 @@ const Nav = (function () {
 function onCardClick(e, card, d) {
     if (swipeConsumed) { swipeConsumed = false; return; }        // a swipe already played this card
     if (!touchMode) { if (d._activate) d._activate(); return; }   // classic: click = play/select
+    // A choice the game is actively asking for (target, declare attacker/blocker, pick a card) is
+    // reversible and expected — take it on a single tap. Only proactively activating a permanent's
+    // ability needs the double-tap guard (so a stray tap can't fire something you didn't mean to).
+    const isChoice = (typeof validTargets !== 'undefined' && validTargets.has(card.id)) || !!combatMode;
+    if (isChoice) { if (d._activate) d._activate(); return; }
     if (myHandIds.has(card.id)) { showCardViewer(card); return; } // hand: tap previews (swipe up to play)
     // battlefield: first tap previews, a second tap within the window selects (like a classic click)
     const now = performance.now();
