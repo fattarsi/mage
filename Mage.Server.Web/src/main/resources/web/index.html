@@ -348,6 +348,10 @@
         .aiSeatRow .aiDeckSel { flex: 1 1 40%; min-width: 0; }
         .aiSeatRow .aiDeckUrl { flex: 1 1 60%; min-width: 0; }
         #deckUrlInput { width: 100%; }
+        /* card picker: highlight the valid choices, dim the rest, mark the previewed selection */
+        #pickerCards .pickok { outline: 2px solid #3fae67; outline-offset: -2px; border-radius: 8px; cursor: pointer; }
+        #pickerCards .pickdim { opacity: .4; pointer-events: none; filter: grayscale(.5); }
+        #pickerCards .picksel { outline: 3px solid #ffd166; outline-offset: -2px; box-shadow: 0 0 12px #ffd16688; }
     </style>
 </head>
 <body>
@@ -419,8 +423,13 @@
         <label for="formatSel">Format</label>
         <select id="formatSel"></select>
         <div id="deckSourceWrap" style="display:none">
-            <label for="deckSourceSel">Load a deck from <span id="deckSourceLabel">your site</span></label>
-            <select id="deckSourceSel"><option value="">— none (use pasted or random) —</option></select>
+            <label for="deckSourceSel">Load a deck <span id="deckSourceLabel"></span>
+                <button id="reloadDecksBtn" type="button" class="alt" title="Reload deck list" style="padding:1px 7px;display:none">↻</button>
+                <span id="deckSourceErr" class="hint" style="color:#e0a0a0;display:none">deck list unavailable — tap ↻</span></label>
+            <div style="display:flex; gap:6px; align-items:center;">
+                <select id="deckSourceSel" style="flex:1 1 auto"><option value="">— none (use pasted / URL / random) —</option></select>
+                <button id="removeSavedBtn" type="button" class="alt" title="Remove this saved URL deck" style="flex:0 0 auto;display:none">🗑</button>
+            </div>
         </div>
         <div id="variantWrap" style="display:none">
             <label for="variantSel">Variant <span id="variantHint" class="hint" style="display:inline"></span></label>
@@ -437,7 +446,11 @@
             <div class="aiSeatRow"><select class="aiDeckSel"><option value="">— AI 3: auto —</option></select><input class="aiDeckUrl" type="text" placeholder="…or Archidekt deck URL"></div>
         </div>
         <label for="deckUrlInput">Your deck — import from a URL <span class="hint">(Archidekt; Moxfield blocks imports — use its Export &amp; paste below)</span></label>
-        <input id="deckUrlInput" type="text" placeholder="https://archidekt.com/decks/…"/>
+        <div style="display:flex; gap:6px;">
+            <input id="deckUrlInput" type="text" placeholder="https://archidekt.com/decks/…" style="flex:1 1 auto"/>
+            <button id="saveDeckBtn" type="button" class="alt" style="flex:0 0 auto" title="Save this deck to your list for reuse">＋ Save</button>
+        </div>
+        <div id="saveDeckMsg" class="hint" style="display:none;margin-top:3px"></div>
         <label for="deckInput">…or paste a decklist (leave both blank for a random deck)</label>
         <textarea id="deckInput" placeholder="4 Lightning Bolt&#10;4 Monastery Swiftspear&#10;20 Mountain&#10;...&#10;&#10;(plain '<count> <card name>' per line, or paste an XMage .dck)"></textarea>
         <div><button id="startBtn">Start game</button></div>
@@ -448,8 +461,9 @@
 <div id="picker" class="overlay" style="display:none">
     <div class="panel" style="width:min(820px,94vw)">
         <h2 id="pickerMsg">Choose a card</h2>
-        <div id="pickerCards" class="zone" style="max-height:62vh;overflow:auto"></div>
-        <div style="margin-top:10px"><button id="pickerDone">Done / none</button></div>
+        <div class="hint" style="margin:-4px 0 6px">Tap a highlighted card to preview it, then <b>Choose</b>.</div>
+        <div id="pickerCards" class="zone" style="max-height:60vh;overflow:auto"></div>
+        <div style="margin-top:10px;display:flex;gap:8px"><button id="pickerChoose" disabled>Choose</button><button id="pickerDone" class="alt">Done / none</button></div>
     </div>
 </div>
 
@@ -907,6 +921,42 @@ const formatSel = document.getElementById('formatSel');
 const deckInput = document.getElementById('deckInput');
 let readyData = null;
 const deckSourceSel = document.getElementById('deckSourceSel');
+// Saved URL decks (localStorage) — a personal collection of Archidekt links, labelled by commander.
+function savedDecks() { try { return JSON.parse(localStorage.getItem('savedUrlDecks') || '[]'); } catch (e) { return []; } }
+function setSavedDecks(a) { localStorage.setItem('savedUrlDecks', JSON.stringify(a)); }
+
+// (Re)build the player + AI deck dropdowns from the site deck list plus saved URL decks. Safe to call
+// repeatedly (on load, on reload, after save/remove) — it preserves the current selections.
+function rebuildDeckOptions() {
+    const site = (readyData && readyData.decks) ? readyData.decks : [];
+    const saved = savedDecks();
+    const aiSels = [...document.querySelectorAll('.aiDeckSel')];
+    const prevMain = deckSourceSel.value;
+    const prevAi = aiSels.map(s => s.value);
+    deckSourceSel.innerHTML = '<option value="">— none (use pasted / URL / random) —</option>';
+    aiSels.forEach((s, i) => { s.innerHTML = '<option value="">— AI ' + (i + 1) + ': auto —</option>'; });
+    const addOpt = (value, label, color) => {
+        [deckSourceSel, ...aiSels].forEach(sel => {
+            const o = document.createElement('option'); o.value = value; o.textContent = label; if (color) o.style.color = color;
+            sel.appendChild(o);
+        });
+    };
+    site.forEach(d => {
+        const incomplete = (d.cardCount && d.cardCount < 100) || d.active === false;
+        addOpt(d.id, d.name + (d.commander ? ' — ' + d.commander : '') + (d.cardCount ? ' (' + d.cardCount + ')' : '')
+            + (incomplete ? ' ⚠ incomplete' : ''), incomplete ? '#c99' : '');
+    });
+    if (saved.length) {
+        [deckSourceSel, ...aiSels].forEach(sel => { const o = document.createElement('option'); o.disabled = true; o.textContent = '— saved deck URLs —'; sel.appendChild(o); });
+        saved.forEach(d => addOpt('url:' + d.url, '★ ' + (d.label || d.url), '#bcd'));
+    }
+    deckSourceSel.value = prevMain;
+    aiSels.forEach((s, i) => { s.value = prevAi[i]; });
+    updateRemoveBtn();
+}
+function updateRemoveBtn() {
+    document.getElementById('removeSavedBtn').style.display = deckSourceSel.value.startsWith('url:') ? '' : 'none';
+}
 function populateSetup() {
     if (!readyData) return;
     if (formatSel.options.length === 0 && readyData.formats) {
@@ -914,24 +964,14 @@ function populateSetup() {
         // default to 3-player Commander (you + 2 AI) if that format is offered
         if ([...formatSel.options].some(o => o.value === 'commander3')) formatSel.value = 'commander3';
     }
-    if (readyData.decks && deckSourceSel.options.length <= 1) {
-        document.getElementById('deckSourceLabel').textContent = readyData.deckSourceLabel || 'your site';
-        readyData.decks.forEach(d => {
-            const o=document.createElement('option'); o.value=d.id;
-            const incomplete = (d.cardCount && d.cardCount < 100) || d.active === false;
-            o.textContent = d.name + (d.commander ? ' — ' + d.commander : '')
-                + (d.cardCount ? ' (' + d.cardCount + ')' : '')
-                + (incomplete ? ' ⚠ incomplete' : '');
-            if (incomplete) o.style.color = '#c99';
-            deckSourceSel.appendChild(o);
-            // mirror each deck into the AI opponent selectors too
-            document.querySelectorAll('.aiDeckSel').forEach(sel => sel.appendChild(o.cloneNode(true)));
-        });
-        document.getElementById('deckSourceWrap').style.display = 'block';
-        deckSourceSel.onchange = onDeckChange;
-    }
-    // AI deck options are always available (you can paste an Archidekt URL per seat even with no site)
+    document.getElementById('deckSourceLabel').textContent = readyData.deckSourceConfigured ? ('from ' + (readyData.deckSourceLabel || 'your site')) : '';
+    document.getElementById('reloadDecksBtn').style.display = readyData.deckSourceConfigured ? '' : 'none';
+    document.getElementById('deckSourceErr').style.display = readyData.deckSourceError ? '' : 'none';
+    // deck picker + AI decks are always shown — saved URL decks work even with no site configured
+    document.getElementById('deckSourceWrap').style.display = 'block';
     document.getElementById('aiDecksWrap').style.display = 'block';
+    rebuildDeckOptions();
+    deckSourceSel.onchange = onDeckChange;
 }
 // ---- deck variants (view alternate configurations of a deck) ----
 const variantWrap = document.getElementById('variantWrap');
@@ -939,14 +979,43 @@ const variantSel = document.getElementById('variantSel');
 const variantList = document.getElementById('variantList');
 let variantsByDeck = {}; // deckId -> [variants]
 function onDeckChange() {
-    // a site deck is a Commander deck; default the format to Commander if not already
-    if (deckSourceSel.value && formatSel.value.indexOf('commander') < 0) {
+    updateRemoveBtn();
+    const val = deckSourceSel.value;
+    const isUrl = val.startsWith('url:');
+    // a site/URL deck is a Commander deck; default the format to Commander if not already
+    if (val && formatSel.value.indexOf('commander') < 0) {
         if ([...formatSel.options].some(o => o.value === 'commander3')) formatSel.value = 'commander3';
         else if ([...formatSel.options].some(o => o.value === 'commander')) formatSel.value = 'commander';
     }
     variantWrap.style.display = 'none'; variantList.style.display = 'none'; variantSel.innerHTML = '';
-    if (deckSourceSel.value) send('deckVariants', undefined, { deckId: deckSourceSel.value }); // -> GATEWAY_VARIANTS
+    // variants only apply to site (planner) decks, not URL imports
+    if (val && !isUrl) send('deckVariants', undefined, { deckId: val }); // -> GATEWAY_VARIANTS
 }
+// reload the deck list (self-heal a transient planner failure), + save/remove saved URL decks
+document.getElementById('reloadDecksBtn').onclick = () => send('refreshDecks');
+document.getElementById('removeSavedBtn').onclick = () => {
+    const v = deckSourceSel.value;
+    if (!v.startsWith('url:')) return;
+    setSavedDecks(savedDecks().filter(d => ('url:' + d.url) !== v));
+    deckSourceSel.value = ''; rebuildDeckOptions(); onDeckChange();
+};
+document.getElementById('saveDeckBtn').onclick = async () => {
+    const url = document.getElementById('deckUrlInput').value.trim();
+    const msg = document.getElementById('saveDeckMsg');
+    const show = (t, ok) => { msg.style.display = 'block'; msg.style.color = ok ? '#9c9' : '#e0a0a0'; msg.textContent = t; };
+    if (!url) { show('Enter a deck URL first.', false); return; }
+    show('Saving…', true); msg.style.color = '#9ab';
+    try {
+        const r = await fetch('/deckinfo?url=' + encodeURIComponent(url));
+        const info = await r.json().catch(() => ({}));
+        if (!r.ok || info.error) throw new Error(info.error || ('HTTP ' + r.status));
+        const label = info.commander || info.name || url;
+        const list = savedDecks().filter(d => d.url !== url); list.push({ url, label });
+        setSavedDecks(list); rebuildDeckOptions();
+        deckSourceSel.value = 'url:' + url; onDeckChange();
+        show('Saved: ' + label, true);
+    } catch (e) { show('Could not save: ' + (e.message || e), false); }
+};
 function renderVariants(deckId, variants) {
     if (deckSourceSel.value !== String(deckId)) return; // deck changed while loading
     variantsByDeck[deckId] = variants || [];
@@ -1011,11 +1080,18 @@ function showSetup(ready) {
 document.getElementById('startBtn').onclick = () => {
     document.getElementById('banner').style.display = 'none';
     document.getElementById('setupError').style.display = 'none';
-    const deckId = deckSourceSel.value;
-    const deckUrl = document.getElementById('deckUrlInput').value.trim();
-    // chosen AI opponent decks (empty string = let the host auto-pick that seat) + optional per-seat URLs
-    const aiDeckIds = [...document.querySelectorAll('.aiDeckSel')].map(s => s.value);
-    const aiDeckUrls = [...document.querySelectorAll('.aiDeckUrl')].map(i => i.value.trim());
+    // the deck picker holds either a site deck id or a saved "url:<link>" — split them out
+    const sel = deckSourceSel.value;
+    const deckId = sel.startsWith('url:') ? '' : sel;
+    const deckUrl = sel.startsWith('url:') ? sel.slice(4) : document.getElementById('deckUrlInput').value.trim();
+    // chosen AI opponent decks per seat: a dropdown value (site id or url:) plus an optional URL text box
+    const aiSels = [...document.querySelectorAll('.aiDeckSel')];
+    const aiUrlInputs = [...document.querySelectorAll('.aiDeckUrl')];
+    const aiDeckIds = aiSels.map(s => s.value.startsWith('url:') ? '' : s.value);
+    const aiDeckUrls = aiSels.map((s, i) => {
+        const typed = (aiUrlInputs[i] && aiUrlInputs[i].value.trim()) || '';
+        return typed || (s.value.startsWith('url:') ? s.value.slice(4) : '');
+    });
     // play the chosen variant when a site deck + variant selector are in play (else the active variant)
     const variantId = (deckId && variantWrap.style.display !== 'none') ? variantSel.value : '';
     const deckText = (deckId || deckUrl) ? '' : deckInput.value; // URL/site deck take precedence over pasted text
@@ -1023,7 +1099,7 @@ document.getElementById('startBtn').onclick = () => {
     setupEl.style.display = 'none';
     setPrompt('Starting game…');
 };
-document.getElementById('newGameBtn').onclick = () => showSetup();
+document.getElementById('newGameBtn').onclick = () => { if (readyData) send('refreshDecks'); showSetup(); };
 
 // Resign vs End game are different: resign concedes (AIs play it out, you can watch);
 // end game stops the whole game immediately.
@@ -1907,7 +1983,10 @@ function renderReveals(gv) {
 const pickerEl = document.getElementById('picker');
 const pickerMsgEl = document.getElementById('pickerMsg');
 const pickerCardsEl = document.getElementById('pickerCards');
-document.getElementById('pickerDone').onclick = () => { pickerEl.style.display = 'none'; send('playerBoolean', false); };
+const pickerChooseBtn = document.getElementById('pickerChoose');
+let pickerPick = null; // id of the card currently previewed/selected in the picker (not yet confirmed)
+document.getElementById('pickerDone').onclick = () => { pickerEl.style.display = 'none'; pickerPick = null; send('playerBoolean', false); };
+pickerChooseBtn.onclick = () => { if (pickerPick) { const id = pickerPick; pickerPick = null; pickerEl.style.display = 'none'; send('playerUUID', id); } };
 // Are all these choices permanents/cards already visible and clickable on the main board (battlefield
 // or my hand)? If so we should NOT pop a full-screen modal over them — it would hide the highlighted
 // targets. The board highlights + prompt handle it instead.
@@ -1926,7 +2005,28 @@ function renderPicker(method, data) {
     if (isDialog && cards.length && !onBoard) {
         pickerMsgEl.textContent = String(data.message || 'Choose a card').replace(/<[^>]+>/g, '');
         pickerCardsEl.innerHTML = '';
-        cards.forEach(c => pickerCardsEl.appendChild(cardEl(c, true))); // click -> playerUUID(id)
+        pickerPick = null;
+        pickerChooseBtn.disabled = true;
+        // only some cards may be legal picks — highlight those, dim the rest (null = all selectable)
+        const validSet = (Array.isArray(data.targets) && data.targets.length) ? new Set(data.targets) : null;
+        cards.forEach(c => {
+            const el = cardEl(c, false); // not auto-committing; we select+preview first
+            el.classList.add('pickcard');
+            const selectable = !validSet || validSet.has(c.id);
+            if (selectable) {
+                el.classList.add('pickok');
+                el.onclick = () => {                       // click = preview + select, not commit
+                    pickerPick = c.id;
+                    [...pickerCardsEl.children].forEach(x => x.classList.remove('picksel'));
+                    el.classList.add('picksel');
+                    showCardViewer(c);
+                    pickerChooseBtn.disabled = false;
+                };
+            } else {
+                el.classList.add('pickdim');
+            }
+            pickerCardsEl.appendChild(el);
+        });
         pickerEl.style.display = 'flex';
     } else if (onBoard || ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO') {
         pickerEl.style.display = 'none'; // targeting on the board, or moved past this choice

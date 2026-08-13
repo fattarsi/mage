@@ -109,21 +109,33 @@ public class WebGatewayServer {
         m.put("formats", formats);
         if (deckSource != null) {
             m.put("deckSourceLabel", deckSource.label());
-            try {
-                JsonArray decks = new JsonArray();
-                for (Map<String, Object> d : deckSource.listDecks()) {
-                    JsonObject o = new JsonObject();
-                    o.addProperty("id", String.valueOf(d.get("id")));
-                    o.addProperty("name", String.valueOf(d.get("name")));
-                    if (d.get("commander") != null) o.addProperty("commander", String.valueOf(d.get("commander")));
-                    if (d.get("cardCount") instanceof Number) o.addProperty("cardCount", ((Number) d.get("cardCount")).intValue());
-                    o.addProperty("active", Boolean.TRUE.equals(d.get("active")));
-                    decks.add(o);
+            m.put("deckSourceConfigured", true); // so the client shows the deck picker even if the list fails
+            JsonArray decks = new JsonArray();
+            Exception last = null;
+            for (int attempt = 0; attempt < 3; attempt++) { // retry: a transient planner hiccup shouldn't strip the menu
+                try {
+                    decks = new JsonArray();
+                    for (Map<String, Object> d : deckSource.listDecks()) {
+                        JsonObject o = new JsonObject();
+                        o.addProperty("id", String.valueOf(d.get("id")));
+                        o.addProperty("name", String.valueOf(d.get("name")));
+                        if (d.get("commander") != null) o.addProperty("commander", String.valueOf(d.get("commander")));
+                        if (d.get("cardCount") instanceof Number) o.addProperty("cardCount", ((Number) d.get("cardCount")).intValue());
+                        o.addProperty("active", Boolean.TRUE.equals(d.get("active")));
+                        decks.add(o);
+                    }
+                    last = null;
+                    break;
+                } catch (Exception e) {
+                    last = e;
+                    try { Thread.sleep(300); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
                 }
-                m.put("decks", decks);
-            } catch (Exception e) {
-                logger.warn("web gateway: failed to list external decks", e);
             }
+            if (last != null) {
+                logger.warn("web gateway: failed to list external decks", last);
+                m.put("deckSourceError", true); // client shows a reload hint instead of the bare fallback menu
+            }
+            m.put("decks", decks); // always present (possibly empty) so the client knows a source exists
         }
         return m;
     }
@@ -257,6 +269,8 @@ public class WebGatewayServer {
         app.get("/imgtoken/{name}", this::serveTokenImage);
         // deck-source art by oracle id: proxy the planner's own card image so board art matches it exactly
         app.get("/imgoracle/{oid}", this::serveOracleImage);
+        // resolve a deck URL to a label (commander/name) so the client can save it for reuse
+        app.get("/deckinfo", this::serveDeckInfo);
 
         app.start(port);
         ensureBulkIndex(); // build the Scryfall CDN image index in the background
@@ -543,6 +557,32 @@ public class WebGatewayServer {
             ctx.result(bytes);
         } catch (Exception e) {
             ctx.status(404);
+        }
+    }
+
+    /** Resolve a deck URL to {name, commander, cardCount} so the client can save/label it. */
+    private void serveDeckInfo(io.javalin.http.Context ctx) {
+        String url = ctx.queryParam("url");
+        if (url == null || url.trim().isEmpty()) {
+            ctx.status(400);
+            return;
+        }
+        try {
+            DeckCardLists deck = DeckUrlImporter.fetch(url);
+            String commander = deck.getSideboard().isEmpty() ? null : deck.getSideboard().get(0).getCardName();
+            int count = 0;
+            for (DeckCardInfo c : deck.getCards()) count += Math.max(1, c.getAmount());
+            for (DeckCardInfo c : deck.getSideboard()) count += Math.max(1, c.getAmount());
+            JsonObject out = new JsonObject();
+            out.addProperty("name", deck.getName());
+            if (commander != null) out.addProperty("commander", commander);
+            out.addProperty("cardCount", count);
+            ctx.contentType("application/json");
+            ctx.result(out.toString());
+        } catch (Exception e) {
+            ctx.status(400);
+            ctx.contentType("application/json");
+            ctx.result("{\"error\":" + new com.google.gson.JsonPrimitive(e.getMessage() == null ? "import failed" : e.getMessage()).toString() + "}");
         }
     }
 
@@ -884,6 +924,12 @@ public class WebGatewayServer {
                     logger.warn("web gateway: resync failed", e);
                 }
             }
+            return;
+        }
+
+        // Re-send the format + deck-source catalog (self-heal a transient planner failure at connect).
+        if ("refreshDecks".equals(action)) {
+            ctx.send(JsonCodec.encodeCallback("GATEWAY_READY", null, readyPayload()));
             return;
         }
 
