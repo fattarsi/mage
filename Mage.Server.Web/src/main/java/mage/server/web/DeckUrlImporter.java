@@ -91,8 +91,16 @@ public final class DeckUrlImporter {
                     }
                 }
             }
-            // drop cards that live only in excluded categories (maybeboard / token extras)
-            if (!isCommander && !cats.isEmpty() && excludedCats.containsAll(cats)) {
+            // Drop cards in an excluded board (Maybeboard / Sideboard / token "extras"). Archidekt also
+            // auto-tags every card with its TYPE category (Creature, Land, …), so a maybeboard card looks
+            // like [Maybeboard, Creature]; excluding only when ALL categories are excluded would wrongly
+            // keep it (→ decks importing over 100, or a card in both maindeck + maybeboard counting twice).
+            // Match Archidekt: an excluded-category membership removes the card from the deck.
+            boolean inExcludedBoard = false;
+            for (String c : cats) {
+                if (excludedCats.contains(c)) { inExcludedBoard = true; break; }
+            }
+            if (!isCommander && inExcludedBoard) {
                 continue;
             }
 
@@ -122,14 +130,20 @@ public final class DeckUrlImporter {
             }
             int qty = entry.has("quantity") ? entry.get("quantity").getAsInt() : 1;
 
-            DeckCardInfo info = new DeckCardInfo(name, num, set, qty);
-            if (isCommander) {
-                list.getSideboard().add(info); // commander -> command zone
-                commanders += qty;
-            } else {
-                list.getCards().add(info);
+            // XMage represents quantities as repeated amount=1 entries ("xmage uses 1 for amount all
+            // around"); the working deck-source path does the same. Emitting amount>1 entries here made
+            // the server's deck load/validate miscount (over-100 decks, singleton "Too many: 2"), so
+            // expand into one entry per copy.
+            for (int q = 0; q < Math.max(1, qty); q++) {
+                DeckCardInfo info = new DeckCardInfo(name, num, set);
+                if (isCommander) {
+                    list.getSideboard().add(info); // commander -> command zone
+                    commanders++;
+                } else {
+                    list.getCards().add(info);
+                }
+                total++;
             }
-            total += qty;
         }
         logger.info("web gateway: imported Archidekt deck '" + list.getName() + "' (" + total + " cards, "
                 + commanders + " commander(s))");
