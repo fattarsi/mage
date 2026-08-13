@@ -1043,11 +1043,18 @@ public class WebGatewayServer {
         String deckId = msg.has("deckId") && !msg.get("deckId").isJsonNull() ? msg.get("deckId").getAsString() : "";
         // optional deck variant — play a specific configuration instead of the active one
         String variantId = msg.has("variantId") && !msg.get("variantId").isJsonNull() ? msg.get("variantId").getAsString() : "";
+        // optional: import the human's deck straight from a deck-site URL (Archidekt)
+        String deckUrl = msg.has("deckUrl") && !msg.get("deckUrl").isJsonNull() ? msg.get("deckUrl").getAsString() : "";
 
         // optional per-seat AI opponent deck ids ("" = let the host auto-pick that seat)
         List<String> aiDeckIds = new java.util.ArrayList<>();
         if (msg.has("aiDeckIds") && msg.get("aiDeckIds").isJsonArray()) {
             msg.getAsJsonArray("aiDeckIds").forEach(e -> aiDeckIds.add(e.isJsonNull() ? "" : e.getAsString()));
+        }
+        // optional per-seat AI opponent deck URLs (Archidekt) — take precedence over aiDeckIds for that seat
+        List<String> aiDeckUrls = new java.util.ArrayList<>();
+        if (msg.has("aiDeckUrls") && msg.get("aiDeckUrls").isJsonArray()) {
+            msg.getAsJsonArray("aiDeckUrls").forEach(e -> aiDeckUrls.add(e.isJsonNull() ? "" : e.getAsString()));
         }
 
         DeckCardLists deck = null;
@@ -1055,6 +1062,8 @@ public class WebGatewayServer {
             deck = variantId.isEmpty()
                     ? deckSource.fetchDeck(deckId)                  // active variant (default)
                     : deckSource.fetchVariant(deckId, variantId);  // a chosen variant
+        } else if (!deckUrl.trim().isEmpty()) {
+            deck = DeckUrlImporter.fetch(deckUrl);                  // Archidekt/Moxfield URL
         } else if (!deckText.trim().isEmpty()) {
             StringBuilder errs = new StringBuilder();
             deck = DeckFactory.parseDeckList(deckText, errs);
@@ -1096,41 +1105,46 @@ public class WebGatewayServer {
             }
         }
 
-        // Commander games need a real Commander deck for every seat — give the AIs decks from the source.
+        // Give each AI seat a deck: per-seat URL (Archidekt) wins, else a picked site deck, else — for
+        // Commander — auto-pick a site deck (Commander needs a real deck per seat), else a random deck.
         List<DeckCardLists> aiDecks = null;
         boolean isCommander = fmt.deckType.toLowerCase().contains("commander");
-        if (isCommander) {
-            if (deckSource == null) {
-                throw new IllegalStateException("Commander vs AI needs a deck source (start with -Dxmage.web.deckSourceUrl=...).");
-            }
-            List<Map<String, Object>> all = deckSource.listDecks();
-            // only complete, active decks make legal commander opponents (skip incomplete/inactive ones)
-            List<String> ids = new java.util.ArrayList<>();
-            for (Map<String, Object> d : all) {
-                String did = String.valueOf(d.get("id"));
-                boolean active = Boolean.TRUE.equals(d.get("active"));
-                int count = d.get("cardCount") instanceof Number ? ((Number) d.get("cardCount")).intValue() : 0;
-                if (active && count >= 100 && !did.equals(deckId)) ids.add(did);
-            }
-            if (ids.isEmpty()) { // last resort: any deck other than the human's
+        boolean anyAiUrl = aiDeckUrls.stream().anyMatch(s -> !s.trim().isEmpty());
+        boolean anyAiId = aiDeckIds.stream().anyMatch(s -> !s.isEmpty());
+        if (isCommander || anyAiUrl || anyAiId) {
+            // pool of site decks for auto-filling Commander seats (only when a deck source exists)
+            List<String> autoIds = new java.util.ArrayList<>();
+            if (isCommander && deckSource != null) {
+                List<Map<String, Object>> all = deckSource.listDecks();
                 for (Map<String, Object> d : all) {
                     String did = String.valueOf(d.get("id"));
-                    if (!did.equals(deckId)) ids.add(did);
+                    boolean active = Boolean.TRUE.equals(d.get("active"));
+                    int count = d.get("cardCount") instanceof Number ? ((Number) d.get("cardCount")).intValue() : 0;
+                    if (active && count >= 100 && !did.equals(deckId)) autoIds.add(did);
+                }
+                if (autoIds.isEmpty()) { // last resort: any deck other than the human's
+                    for (Map<String, Object> d : all) {
+                        String did = String.valueOf(d.get("id"));
+                        if (!did.equals(deckId)) autoIds.add(did);
+                    }
                 }
             }
-            if (ids.isEmpty()) throw new IllegalStateException("No complete commander decks available for AI opponents.");
             aiDecks = new java.util.ArrayList<>();
             for (int i = 0; i < fmt.aiSeats; i++) {
-                String chosen = i < aiDeckIds.size() ? aiDeckIds.get(i) : "";        // user-picked deck for this seat
-                String pick = chosen.isEmpty() ? ids.get(i % ids.size()) : chosen;   // else auto-pick
-                aiDecks.add(deckSource.fetchDeck(pick));
-            }
-        } else if (deckSource != null && aiDeckIds.stream().anyMatch(s -> !s.isEmpty())) {
-            // non-commander: honor any explicitly chosen AI decks; null seats fall back to a random deck
-            aiDecks = new java.util.ArrayList<>();
-            for (int i = 0; i < fmt.aiSeats; i++) {
+                String url = i < aiDeckUrls.size() ? aiDeckUrls.get(i).trim() : "";
                 String chosen = i < aiDeckIds.size() ? aiDeckIds.get(i) : "";
-                aiDecks.add(chosen.isEmpty() ? null : deckSource.fetchDeck(chosen));
+                if (!url.isEmpty()) {
+                    aiDecks.add(DeckUrlImporter.fetch(url));
+                } else if (!chosen.isEmpty() && deckSource != null) {
+                    aiDecks.add(deckSource.fetchDeck(chosen));
+                } else if (isCommander) {
+                    if (deckSource == null || autoIds.isEmpty()) {
+                        throw new IllegalStateException("Commander vs AI needs a deck source or an Archidekt URL for each AI seat.");
+                    }
+                    aiDecks.add(deckSource.fetchDeck(autoIds.get(i % autoIds.size())));
+                } else {
+                    aiDecks.add(null); // non-commander seat left on auto -> random deck
+                }
             }
         }
 

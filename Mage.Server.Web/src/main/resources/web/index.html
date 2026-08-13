@@ -343,6 +343,11 @@
            and let a hand card be dragged up to play it without the page scrolling instead */
         body.touchmode .card { touch-action: manipulation; }
         body.touchmode .handcard { touch-action: none; }
+        /* setup: AI seat row (site-deck picker + optional deck URL) */
+        .aiSeatRow { display: flex; gap: 6px; margin: 4px 0; }
+        .aiSeatRow .aiDeckSel { flex: 1 1 40%; min-width: 0; }
+        .aiSeatRow .aiDeckUrl { flex: 1 1 60%; min-width: 0; }
+        #deckUrlInput { width: 100%; }
     </style>
 </head>
 <body>
@@ -426,12 +431,14 @@
             <div id="variantList" style="display:none"></div>
         </div>
         <div id="aiDecksWrap" style="display:none">
-            <label>AI opponent decks (optional — leave as auto to let the host pick)</label>
-            <select class="aiDeckSel"><option value="">— AI 1: auto —</option></select>
-            <select class="aiDeckSel"><option value="">— AI 2: auto —</option></select>
-            <select class="aiDeckSel"><option value="">— AI 3: auto —</option></select>
+            <label>AI opponent decks (optional — pick from your site, paste an Archidekt URL, or leave auto)</label>
+            <div class="aiSeatRow"><select class="aiDeckSel"><option value="">— AI 1: auto —</option></select><input class="aiDeckUrl" type="text" placeholder="…or Archidekt deck URL"></div>
+            <div class="aiSeatRow"><select class="aiDeckSel"><option value="">— AI 2: auto —</option></select><input class="aiDeckUrl" type="text" placeholder="…or Archidekt deck URL"></div>
+            <div class="aiSeatRow"><select class="aiDeckSel"><option value="">— AI 3: auto —</option></select><input class="aiDeckUrl" type="text" placeholder="…or Archidekt deck URL"></div>
         </div>
-        <label for="deckInput">Your deck — paste a decklist, or leave blank for a random deck</label>
+        <label for="deckUrlInput">Your deck — import from a URL <span class="hint">(Archidekt; Moxfield blocks imports — use its Export &amp; paste below)</span></label>
+        <input id="deckUrlInput" type="text" placeholder="https://archidekt.com/decks/…"/>
+        <label for="deckInput">…or paste a decklist (leave both blank for a random deck)</label>
         <textarea id="deckInput" placeholder="4 Lightning Bolt&#10;4 Monastery Swiftspear&#10;20 Mountain&#10;...&#10;&#10;(plain '<count> <card name>' per line, or paste an XMage .dck)"></textarea>
         <div><button id="startBtn">Start game</button></div>
         <div class="hint">Random decks work for any non-Commander format. Commander needs a real deck with a commander (paste a .dck).</div>
@@ -921,9 +928,10 @@ function populateSetup() {
             document.querySelectorAll('.aiDeckSel').forEach(sel => sel.appendChild(o.cloneNode(true)));
         });
         document.getElementById('deckSourceWrap').style.display = 'block';
-        document.getElementById('aiDecksWrap').style.display = 'block';
         deckSourceSel.onchange = onDeckChange;
     }
+    // AI deck options are always available (you can paste an Archidekt URL per seat even with no site)
+    document.getElementById('aiDecksWrap').style.display = 'block';
 }
 // ---- deck variants (view alternate configurations of a deck) ----
 const variantWrap = document.getElementById('variantWrap');
@@ -1004,11 +1012,14 @@ document.getElementById('startBtn').onclick = () => {
     document.getElementById('banner').style.display = 'none';
     document.getElementById('setupError').style.display = 'none';
     const deckId = deckSourceSel.value;
-    // chosen AI opponent decks (empty string = let the host auto-pick that seat)
+    const deckUrl = document.getElementById('deckUrlInput').value.trim();
+    // chosen AI opponent decks (empty string = let the host auto-pick that seat) + optional per-seat URLs
     const aiDeckIds = [...document.querySelectorAll('.aiDeckSel')].map(s => s.value);
+    const aiDeckUrls = [...document.querySelectorAll('.aiDeckUrl')].map(i => i.value.trim());
     // play the chosen variant when a site deck + variant selector are in play (else the active variant)
     const variantId = (deckId && variantWrap.style.display !== 'none') ? variantSel.value : '';
-    send('newGame', undefined, { format: formatSel.value, deck: deckId ? '' : deckInput.value, deckId, variantId, aiDeckIds });
+    const deckText = (deckId || deckUrl) ? '' : deckInput.value; // URL/site deck take precedence over pasted text
+    send('newGame', undefined, { format: formatSel.value, deck: deckText, deckId, deckUrl, variantId, aiDeckIds, aiDeckUrls });
     setupEl.style.display = 'none';
     setPrompt('Starting game…');
 };
