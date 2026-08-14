@@ -221,6 +221,14 @@
         .phead.targetable { box-shadow: 0 0 0 3px #fd5; border-radius: 5px; }
         .card .cn { font-weight: 700; color: #dde; }
         .card .cc { float: right; color: #ad8; }
+        /* mana pips: render {2}{R}{R}{G} etc. as coloured circles instead of text */
+        .pip { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px;
+               border-radius: 50%; font-size: 10px; font-weight: 800; line-height: 1; vertical-align: -3px;
+               margin: 0 .5px; color: #1b1e24; box-shadow: inset 0 0 0 1px rgba(0,0,0,.42); }
+        .pip-n { background: #d9c9a7; }   /* generic (numbers) / X */
+        .pip-c { background: #c7ccd3; }   /* colorless */
+        .pip-s { background: #e4ebf2; }   /* snow */
+        .card .cc .pip { width: 12px; height: 12px; font-size: 8.5px; vertical-align: -2px; }
         .card .ct { color: #89a; font-size: 9px; }
         .card .rules { color: #aab; font-size: 9px; margin-top: 2px; max-height: 40px; overflow: hidden; }
         /* attached auras/equipment: stacked under their host creature, shown as text strips */
@@ -715,7 +723,7 @@ function showCardViewer(card) {
     const pt = (info.power !== undefined && (info.cardTypes||[]).includes('CREATURE')) ? `${info.power}/${info.toughness}`
              : (info.loyalty ? 'Loyalty ' + info.loyalty : '');
     const note = playabilityNote(card);
-    viewerInfo.innerHTML = `<span class="vc">${esc(cost)}</span><span class="vn">${msg(info.name||'?')}</span>`
+    viewerInfo.innerHTML = `<span class="vc">${manaPips(cost)}</span><span class="vn">${msg(info.name||'?')}</span>`
         + `<div class="vt">${esc(types)}</div>`
         + (pt ? `<div class="vpt">${esc(pt)}</div>` : '')
         + (abilityText.length ? `<div class="vability">⚡ On the stack: ${abilityText.map(msg).join('\n')}</div>` : '')
@@ -1225,6 +1233,26 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','
 // icons). Replace them with glyphs so they don't show as raw placeholder text.
 const HINT_ICONS = {ICON_DUNGEON_ROOM_CURRENT:'📍 ',ICON_DUNGEON_ROOM_NEXT:'▶ ',ICON_GOOD:'🟢 ',ICON_BAD:'🔴 ',ICON_RESTRICT:'⛔ ',ICON_REQUIRE:'❗ '};
 function deIcon(s){return String(s||'').replace(/ICON_DUNGEON_ROOM_CURRENT|ICON_DUNGEON_ROOM_NEXT|ICON_GOOD|ICON_BAD|ICON_RESTRICT|ICON_REQUIRE/g,m=>HINT_ICONS[m]||'');}
+// ---- mana symbols as coloured pips (no text for colours; number for generic; ◇ colorless) ----
+const PIP_COLOR = { W: '#f7f0cf', U: '#a7d5f2', B: '#c0b7cc', R: '#f0a08f', G: '#8fce9c', C: '#c9ced6' };
+function pip(tok) {
+    tok = String(tok || '').trim();
+    if (tok.includes('/')) { // hybrid or phyrexian, e.g. W/U, 2/R, R/P
+        const [a, b] = tok.split('/');
+        const half = (h) => PIP_COLOR[h] || (h === 'P' ? '#c8b7cc' : '#d9c9a7');
+        const label = (a === 'P' || b === 'P') ? 'Φ' : '';
+        return `<span class="pip" title="{${esc(tok)}}" style="background:linear-gradient(135deg,${half(a)} 49%,${half(b)} 51%)">${label}</span>`;
+    }
+    const up = tok.toUpperCase();
+    if (/^\d+$/.test(tok) || up === 'X' || up === 'Y' || up === 'Z') return `<span class="pip pip-n" title="{${esc(tok)}} generic">${esc(tok)}</span>`;
+    if (up === 'C') return `<span class="pip pip-c" title="{C} colorless">◇</span>`;
+    if (up === 'S') return `<span class="pip pip-s" title="{S} snow">❄</span>`;
+    if (PIP_COLOR[up]) return `<span class="pip" title="{${up}}" style="background:${PIP_COLOR[up]}"></span>`; // solid colour, no text
+    return `<span class="pip pip-n" title="{${esc(tok)}}">${esc(tok)}</span>`; // unknown symbol (e.g. {T}) — show raw
+}
+// Replace {..} mana tokens in a string with pip HTML; non-token text is passed through untouched.
+function manaPips(s) { return String(s == null ? '' : s).replace(/\{([^{}]+)\}/g, (_, t) => pip(t)); }
+
 // XMage messages embed HTML-ish markup (e.g. <font color=#ff0>...</font>); strip tags for clean display
 function msg(s){return esc(deIcon(s).replace(/<[^>]+>/g,''));}
 function strip(s){return deIcon(s).replace(/<[^>]+>/g,'');}  // plain text (for title attributes)
@@ -1416,7 +1444,7 @@ function cardEl(card, clickable) {
         `<span class="ctr" title="${esc(c.name)} counters">${msg(c.name)}${c.count>1?' ×'+c.count:''}</span>`).join('');
     // summoning sickness: a creature that came under control this turn can't attack/tap for abilities
     const sick = isCreature && card.summoningSickness;
-    d.innerHTML = `<span class="cc">${esc(cost)}</span><span class="cn">${card.isAbility?'⚡ ':''}${msg(card.name||'?')}</span>`
+    d.innerHTML = `<span class="cc">${manaPips(cost)}</span><span class="cn">${card.isAbility?'⚡ ':''}${msg(card.name||'?')}</span>`
         + `<div class="ct">${esc(types)}</div>`
         + (card.rules && card.rules.length ? `<div class="rules">${msg(card.rules.join(' • '))}</div>` : '')
         + (sick ? `<div class="sick" title="Summoning sickness — can't attack or tap this turn">💤</div>` : '')
@@ -1582,7 +1610,7 @@ const MANA_COLORS = [['white','WHITE','W','#e9dca0'],['blue','BLUE','U','#86b5e6
 function manaPoolHtml(pool) {
     if (!pool) return '';
     const s = MANA_COLORS.filter(([k]) => pool[k] > 0)
-        .map(([k,t,sym,col]) => `<span class="mana" style="color:${col}">${pool[k]}${sym}</span>`).join(' ');
+        .map(([k,t,sym]) => `<span class="mana">${pool[k]}${pip(sym)}</span>`).join(' ');
     return s ? ` <span class="manapool" title="floating mana">[ ${s} ]</span>` : '';
 }
 
@@ -2179,8 +2207,8 @@ function handle(method, data) {
                 });
             }
             btns.push({ label: 'Cancel cast', alt: true, onClick: () => send('playerBoolean', false) });
-            // the message carries the still-needed cost (casting progress); show it prominently
-            setPrompt('<b>Pay mana — still needed:</b> ' + message
+            // the message carries the still-needed cost (casting progress); render its {..} as pips
+            setPrompt('<b>Pay mana — still needed:</b> ' + manaPips(message)
                 + ' <i>— click highlighted untapped lands, or spend floating mana:</i>', btns);
             break;
         }
