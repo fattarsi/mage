@@ -84,6 +84,13 @@ public class RealGameOrchestrator {
         options.setRange(RangeOfInfluence.ALL);
         options.setWinsNeeded(1);
         options.setMatchTimeLimit(MatchTimeLimit.NONE);      // no priority clock (don't kick idle players)
+        // Commander house rule: the first mulligan is free (costs no card). The Commander match honors
+        // options.getFreeMulligans(); other formats keep the standard London mulligan (0 free).
+        boolean commander = (deckType != null && deckType.toLowerCase().contains("commander"))
+                || (gameType != null && gameType.toLowerCase().contains("commander"));
+        if (commander) {
+            options.setFreeMulligans(1);
+        }
 
         TableView table = server.roomCreateTable(humanSession, room, options);
         if (table == null) {
