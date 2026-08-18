@@ -356,6 +356,16 @@
         .aiSeatRow .aiDeckSel { flex: 1 1 40%; min-width: 0; }
         .aiSeatRow .aiDeckUrl { flex: 1 1 60%; min-width: 0; }
         #deckUrlInput { width: 100%; }
+        /* deck manager rows */
+        .mgrRow { display: flex; align-items: center; gap: 8px; padding: 8px; border: 1px solid #2c3340;
+            border-radius: 8px; margin-bottom: 6px; background: #161b24; }
+        .mgrRow .mgrName { flex: 1 1 auto; min-width: 0; }
+        .mgrRow .mgrName b { color: #dbe6f2; }
+        .mgrRow .mgrMeta { font-size: 11.5px; color: #8fa3ba; }
+        .mgrRow .mgrBad { color: #f0a0a0; }
+        .mgrRow .mgrOk { color: #9c9; }
+        .mgrRow button { padding: 4px 9px; font-size: 12px; }
+        .mgrEmpty { color: #8fa3ba; font-size: 13px; padding: 8px; }
         /* card picker: highlight the valid choices, dim the rest, mark the chosen ones with a check */
         .pickcount { font-size: 15px; font-weight: 800; color: #ffd166; margin: -4px 0 4px; }
         /* fixed quick-target bar (target a player without scrolling up to their area) */
@@ -459,7 +469,7 @@
                 <span id="deckSourceErr" class="hint" style="color:#e0a0a0;display:none">deck list unavailable — tap ↻</span></label>
             <div style="display:flex; gap:6px; align-items:center;">
                 <select id="deckSourceSel" style="flex:1 1 auto"><option value="">— none (use pasted / URL / random) —</option></select>
-                <button id="removeSavedBtn" type="button" class="alt" title="Remove this saved URL deck" style="flex:0 0 auto;display:none">🗑</button>
+                <button id="deckMgrBtn" type="button" class="alt" title="Manage saved decks (add, validate, rename, delete)" style="flex:0 0 auto">🗂 Manage</button>
             </div>
         </div>
         <div id="variantWrap" style="display:none">
@@ -486,6 +496,21 @@
         <textarea id="deckInput" placeholder="4 Lightning Bolt&#10;4 Monastery Swiftspear&#10;20 Mountain&#10;...&#10;&#10;(plain '<count> <card name>' per line, or paste an XMage .dck)"></textarea>
         <div><button id="startBtn">Start game</button></div>
         <div class="hint">Random decks work for any non-Commander format. Commander needs a real deck with a commander (paste a .dck).</div>
+    </div>
+</div>
+
+<div id="deckMgr" class="overlay" style="display:none">
+    <div class="panel" style="width:min(680px,95vw)">
+        <h2>🗂 Deck manager</h2>
+        <div class="hint" style="margin:-4px 0 8px">Saved decks are stored on the server as a snapshot, so they keep working even if the Archidekt deck later changes or is deleted — and never need re-fetching.</div>
+        <label for="mgrUrlInput">Add a deck by URL (Archidekt)</label>
+        <div style="display:flex; gap:6px;">
+            <input id="mgrUrlInput" type="text" placeholder="https://archidekt.com/decks/…" style="flex:1 1 auto"/>
+            <button id="mgrAddBtn" type="button" style="flex:0 0 auto">Validate &amp; add</button>
+        </div>
+        <div id="mgrMsg" class="hint" style="display:none;margin-top:4px"></div>
+        <div id="mgrList" style="margin-top:12px; max-height:52vh; overflow:auto"></div>
+        <div style="margin-top:12px"><button id="mgrCloseBtn" class="alt">Close</button></div>
     </div>
 </div>
 
@@ -955,15 +980,21 @@ const formatSel = document.getElementById('formatSel');
 const deckInput = document.getElementById('deckInput');
 let readyData = null;
 const deckSourceSel = document.getElementById('deckSourceSel');
-// Saved URL decks (localStorage) — a personal collection of Archidekt links, labelled by commander.
-function savedDecks() { try { return JSON.parse(localStorage.getItem('savedUrlDecks') || '[]'); } catch (e) { return []; } }
-function setSavedDecks(a) { localStorage.setItem('savedUrlDecks', JSON.stringify(a)); }
+// Saved decks live on the server now (durable snapshots). We cache the list here for the dropdowns.
+let savedDecksCache = [];
+function loadSavedDecks() {
+    return fetch('/decks/saved').then(r => r.json()).then(list => {
+        savedDecksCache = Array.isArray(list) ? list : [];
+        rebuildDeckOptions();
+        return savedDecksCache;
+    }).catch(() => { savedDecksCache = []; });
+}
 
-// (Re)build the player + AI deck dropdowns from the site deck list plus saved URL decks. Safe to call
-// repeatedly (on load, on reload, after save/remove) — it preserves the current selections.
+// (Re)build the player + AI deck dropdowns from the site deck list plus saved decks. Safe to call
+// repeatedly — it preserves the current selections.
 function rebuildDeckOptions() {
     const site = (readyData && readyData.decks) ? readyData.decks : [];
-    const saved = savedDecks();
+    const saved = savedDecksCache;
     const aiSels = [...document.querySelectorAll('.aiDeckSel')];
     const prevMain = deckSourceSel.value;
     const prevAi = aiSels.map(s => s.value);
@@ -981,15 +1012,12 @@ function rebuildDeckOptions() {
             + (incomplete ? ' ⚠ incomplete' : ''), incomplete ? '#c99' : '');
     });
     if (saved.length) {
-        [deckSourceSel, ...aiSels].forEach(sel => { const o = document.createElement('option'); o.disabled = true; o.textContent = '— saved deck URLs —'; sel.appendChild(o); });
-        saved.forEach(d => addOpt('url:' + d.url, '★ ' + (d.label || d.url), '#bcd'));
+        [deckSourceSel, ...aiSels].forEach(sel => { const o = document.createElement('option'); o.disabled = true; o.textContent = '— saved decks —'; sel.appendChild(o); });
+        saved.forEach(d => addOpt('saved:' + d.id, '★ ' + (d.label || d.name || d.id)
+            + (d.cardCount ? ' (' + d.cardCount + ')' : '') + (d.valid === false ? ' ⚠' : ''), d.valid === false ? '#c99' : '#bcd'));
     }
     deckSourceSel.value = prevMain;
     aiSels.forEach((s, i) => { s.value = prevAi[i]; });
-    updateRemoveBtn();
-}
-function updateRemoveBtn() {
-    document.getElementById('removeSavedBtn').style.display = deckSourceSel.value.startsWith('url:') ? '' : 'none';
 }
 function populateSetup() {
     if (!readyData) return;
@@ -1005,6 +1033,7 @@ function populateSetup() {
     document.getElementById('deckSourceWrap').style.display = 'block';
     document.getElementById('aiDecksWrap').style.display = 'block';
     rebuildDeckOptions();
+    loadSavedDecks(); // fetch saved decks from the server, then rebuild options
     deckSourceSel.onchange = onDeckChange;
 }
 // ---- deck variants (view alternate configurations of a deck) ----
@@ -1013,42 +1042,92 @@ const variantSel = document.getElementById('variantSel');
 const variantList = document.getElementById('variantList');
 let variantsByDeck = {}; // deckId -> [variants]
 function onDeckChange() {
-    updateRemoveBtn();
     const val = deckSourceSel.value;
-    const isUrl = val.startsWith('url:');
-    // a site/URL deck is a Commander deck; default the format to Commander if not already
+    const isSite = val && !val.startsWith('saved:'); // saved snapshots have no variants
+    // a site/saved deck is a Commander deck; default the format to Commander if not already
     if (val && formatSel.value.indexOf('commander') < 0) {
         if ([...formatSel.options].some(o => o.value === 'commander3')) formatSel.value = 'commander3';
         else if ([...formatSel.options].some(o => o.value === 'commander')) formatSel.value = 'commander';
     }
     variantWrap.style.display = 'none'; variantList.style.display = 'none'; variantSel.innerHTML = '';
-    // variants only apply to site (planner) decks, not URL imports
-    if (val && !isUrl) send('deckVariants', undefined, { deckId: val }); // -> GATEWAY_VARIANTS
+    if (isSite) send('deckVariants', undefined, { deckId: val }); // -> GATEWAY_VARIANTS
 }
-// reload the deck list (self-heal a transient planner failure), + save/remove saved URL decks
 document.getElementById('reloadDecksBtn').onclick = () => send('refreshDecks');
-document.getElementById('removeSavedBtn').onclick = () => {
-    const v = deckSourceSel.value;
-    if (!v.startsWith('url:')) return;
-    setSavedDecks(savedDecks().filter(d => ('url:' + d.url) !== v));
-    deckSourceSel.value = ''; rebuildDeckOptions(); onDeckChange();
-};
+
+// ---- saved-deck server API + Deck manager modal ----
+async function addSavedDeck(url) { // POST to add/refresh; returns the saved entry (with valid/errors)
+    const r = await fetch('/decks/saved?url=' + encodeURIComponent(url), { method: 'POST' });
+    const info = await r.json().catch(() => ({}));
+    if (!r.ok || info.error) throw new Error(info.error || ('HTTP ' + r.status));
+    return info;
+}
+// quick-save the URL box into the collection
 document.getElementById('saveDeckBtn').onclick = async () => {
     const url = document.getElementById('deckUrlInput').value.trim();
     const msg = document.getElementById('saveDeckMsg');
     const show = (t, ok) => { msg.style.display = 'block'; msg.style.color = ok ? '#9c9' : '#e0a0a0'; msg.textContent = t; };
     if (!url) { show('Enter a deck URL first.', false); return; }
-    show('Saving…', true); msg.style.color = '#9ab';
+    show('Validating & saving…', true); msg.style.color = '#9ab';
     try {
-        const r = await fetch('/deckinfo?url=' + encodeURIComponent(url));
-        const info = await r.json().catch(() => ({}));
-        if (!r.ok || info.error) throw new Error(info.error || ('HTTP ' + r.status));
-        const label = info.commander || info.name || url;
-        const list = savedDecks().filter(d => d.url !== url); list.push({ url, label });
-        setSavedDecks(list); rebuildDeckOptions();
-        deckSourceSel.value = 'url:' + url; onDeckChange();
-        show('Saved: ' + label, true);
+        const info = await addSavedDeck(url);
+        await loadSavedDecks();
+        deckSourceSel.value = 'saved:' + info.id; onDeckChange();
+        show((info.valid === false ? '⚠ Saved with issues: ' + (info.errors || '') : 'Saved: ' + (info.label || info.name)), info.valid !== false);
     } catch (e) { show('Could not save: ' + (e.message || e), false); }
+};
+
+const deckMgrEl = document.getElementById('deckMgr');
+function openDeckMgr() { deckMgrEl.style.display = 'flex'; document.getElementById('mgrMsg').style.display = 'none'; renderMgrList(); }
+document.getElementById('deckMgrBtn').onclick = openDeckMgr;
+document.getElementById('mgrCloseBtn').onclick = () => { deckMgrEl.style.display = 'none'; };
+deckMgrEl.onclick = (e) => { if (e.target === deckMgrEl) deckMgrEl.style.display = 'none'; };
+function renderMgrList() {
+    const box = document.getElementById('mgrList');
+    box.innerHTML = savedDecksCache.length ? '' : '<div class="mgrEmpty">No saved decks yet — add one above.</div>';
+    savedDecksCache.forEach(d => {
+        const row = document.createElement('div'); row.className = 'mgrRow';
+        const name = document.createElement('div'); name.className = 'mgrName';
+        name.innerHTML = `<b>${esc(d.label || d.name || d.id)}</b>`
+            + `<div class="mgrMeta">${d.cardCount || '?'} cards`
+            + (d.commander ? ' · ' + esc(d.commander) : '')
+            + (d.valid === false ? ` · <span class="mgrBad">⚠ ${esc(d.errors || 'has issues')}</span>` : ' · <span class="mgrOk">✓ ok</span>')
+            + `</div>`;
+        row.appendChild(name);
+        const mk = (label, title, fn) => { const b = document.createElement('button'); b.className = 'alt'; b.textContent = label; b.title = title; b.onclick = fn; return b; };
+        row.appendChild(mk('✎', 'Rename', async () => {
+            const nl = prompt('Rename deck:', d.label || d.name || ''); if (nl == null) return;
+            await fetch('/decks/saved/rename?id=' + encodeURIComponent(d.id) + '&label=' + encodeURIComponent(nl), { method: 'POST' });
+            await loadSavedDecks(); renderMgrList();
+        }));
+        row.appendChild(mk('↻', 'Re-fetch from the source URL to update this snapshot', async () => {
+            if (!d.url) return; const msg = document.getElementById('mgrMsg');
+            msg.style.display = 'block'; msg.style.color = '#9ab'; msg.textContent = 'Refreshing ' + (d.label || '') + '…';
+            try { const info = await addSavedDeck(d.url); await loadSavedDecks(); renderMgrList();
+                msg.style.color = info.valid === false ? '#e0a0a0' : '#9c9';
+                msg.textContent = info.valid === false ? ('⚠ ' + (info.errors || 'has issues')) : 'Refreshed ✓';
+            } catch (e) { msg.style.color = '#e0a0a0'; msg.textContent = 'Refresh failed: ' + (e.message || e); }
+        }));
+        row.appendChild(mk('🗑', 'Delete', async () => {
+            if (!confirm('Delete "' + (d.label || d.name) + '"?')) return;
+            await fetch('/decks/saved/delete?id=' + encodeURIComponent(d.id), { method: 'POST' });
+            if (deckSourceSel.value === 'saved:' + d.id) deckSourceSel.value = '';
+            await loadSavedDecks(); renderMgrList();
+        }));
+        box.appendChild(row);
+    });
+}
+document.getElementById('mgrAddBtn').onclick = async () => {
+    const url = document.getElementById('mgrUrlInput').value.trim();
+    const msg = document.getElementById('mgrMsg');
+    const show = (t, ok) => { msg.style.display = 'block'; msg.style.color = ok ? '#9c9' : '#e0a0a0'; msg.textContent = t; };
+    if (!url) { show('Enter a deck URL first.', false); return; }
+    show('Validating & adding…', true); msg.style.color = '#9ab';
+    try {
+        const info = await addSavedDeck(url);
+        document.getElementById('mgrUrlInput').value = '';
+        await loadSavedDecks(); renderMgrList();
+        show(info.valid === false ? ('Added, but ⚠ ' + (info.errors || 'has issues')) : ('Added ✓ ' + (info.label || info.name)), info.valid !== false);
+    } catch (e) { show('Could not add: ' + (e.message || e), false); }
 };
 function renderVariants(deckId, variants) {
     if (deckSourceSel.value !== String(deckId)) return; // deck changed while loading
@@ -1114,22 +1193,21 @@ function showSetup(ready) {
 document.getElementById('startBtn').onclick = () => {
     document.getElementById('banner').style.display = 'none';
     document.getElementById('setupError').style.display = 'none';
-    // the deck picker holds either a site deck id or a saved "url:<link>" — split them out
+    // the deck picker holds a site deck id, a saved "saved:<id>", or nothing — split them out
     const sel = deckSourceSel.value;
-    const deckId = sel.startsWith('url:') ? '' : sel;
-    const deckUrl = sel.startsWith('url:') ? sel.slice(4) : document.getElementById('deckUrlInput').value.trim();
-    // chosen AI opponent decks per seat: a dropdown value (site id or url:) plus an optional URL text box
+    const savedDeckId = sel.startsWith('saved:') ? sel.slice(6) : '';
+    const deckId = (sel && !savedDeckId) ? sel : '';
+    const deckUrl = document.getElementById('deckUrlInput').value.trim(); // one-off "play from URL" without saving
+    // chosen AI opponent decks per seat: a dropdown value (site id / saved:) plus an optional URL text box
     const aiSels = [...document.querySelectorAll('.aiDeckSel')];
     const aiUrlInputs = [...document.querySelectorAll('.aiDeckUrl')];
-    const aiDeckIds = aiSels.map(s => s.value.startsWith('url:') ? '' : s.value);
-    const aiDeckUrls = aiSels.map((s, i) => {
-        const typed = (aiUrlInputs[i] && aiUrlInputs[i].value.trim()) || '';
-        return typed || (s.value.startsWith('url:') ? s.value.slice(4) : '');
-    });
+    const aiSavedDeckIds = aiSels.map(s => s.value.startsWith('saved:') ? s.value.slice(6) : '');
+    const aiDeckIds = aiSels.map(s => s.value.startsWith('saved:') ? '' : s.value);
+    const aiDeckUrls = aiUrlInputs.map(inp => (inp && inp.value.trim()) || '');
     // play the chosen variant when a site deck + variant selector are in play (else the active variant)
     const variantId = (deckId && variantWrap.style.display !== 'none') ? variantSel.value : '';
-    const deckText = (deckId || deckUrl) ? '' : deckInput.value; // URL/site deck take precedence over pasted text
-    send('newGame', undefined, { format: formatSel.value, deck: deckText, deckId, deckUrl, variantId, aiDeckIds, aiDeckUrls });
+    const deckText = (deckId || savedDeckId || deckUrl) ? '' : deckInput.value; // picked deck beats pasted text
+    send('newGame', undefined, { format: formatSel.value, deck: deckText, deckId, deckUrl, savedDeckId, variantId, aiDeckIds, aiDeckUrls, aiSavedDeckIds });
     setupEl.style.display = 'none';
     setPrompt('Starting game…');
 };

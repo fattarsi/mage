@@ -272,6 +272,12 @@ public class WebGatewayServer {
         app.get("/imgoracle/{oid}", this::serveOracleImage);
         // resolve a deck URL to a label (commander/name) so the client can save it for reuse
         app.get("/deckinfo", this::serveDeckInfo);
+        // saved-deck manager: durable snapshots so decks survive remote changes and never re-fetch
+        app.get("/decks/saved", ctx -> { ctx.contentType("application/json"); ctx.result(deckStore.listMeta().toString()); });
+        app.post("/decks/saved", this::serveDeckSaveAdd);      // ?url=  -> fetch, validate, store snapshot
+        app.post("/decks/saved/refresh", this::serveDeckSaveAdd); // ?url= -> re-fetch same url (upsert by url)
+        app.post("/decks/saved/rename", this::serveDeckRename);  // ?id=&label=
+        app.post("/decks/saved/delete", this::serveDeckDelete);  // ?id=
 
         app.start(port);
         ensureBulkIndex(); // build the Scryfall CDN image index in the background
@@ -304,6 +310,8 @@ public class WebGatewayServer {
 
     private static final File IMAGE_CACHE_DIR = new File("image-cache");
     private static final File CARDINFO_CACHE_DIR = new File("cardinfo-cache");
+    // saved decks live in the persistent image-cache volume so they survive container recreation
+    private final DeckStore deckStore = new DeckStore(new File(IMAGE_CACHE_DIR, "_decks/decks.json"));
 
     // Scryfall asks clients to identify themselves and stay under ~10 requests/sec; a game loads ~100
     // card images at once, which bursts past that and gets the whole server IP soft-blocked (HTTP 503),
@@ -597,6 +605,65 @@ public class WebGatewayServer {
             ctx.contentType("application/json");
             ctx.result("{\"error\":" + new com.google.gson.JsonPrimitive(e.getMessage() == null ? "import failed" : e.getMessage()).toString() + "}");
         }
+    }
+
+    /** Add (or refresh) a saved deck: fetch the URL, repair printings, validate, and store a snapshot. */
+    private void serveDeckSaveAdd(io.javalin.http.Context ctx) {
+        String url = ctx.queryParam("url");
+        if (url == null || url.trim().isEmpty()) {
+            ctx.status(400);
+            ctx.contentType("application/json");
+            ctx.result("{\"error\":\"missing url\"}");
+            return;
+        }
+        try {
+            DeckCardLists deck = DeckUrlImporter.fetch(url.trim());
+            resolveToAvailablePrintings(deck);
+            java.util.List<String> unresolved = describeUnresolvedCards(deck);
+            int count = deck.getCards().size() + deck.getSideboard().size();
+            String commander = deck.getSideboard().isEmpty() ? null : deck.getSideboard().get(0).getCardName();
+            JsonObject entry = DeckStore.snapshot(deck);
+            entry.addProperty("url", url.trim());
+            entry.addProperty("cardCount", count);
+            if (commander != null) entry.addProperty("commander", commander);
+            entry.addProperty("label", commander != null ? commander : deck.getName());
+            entry.addProperty("addedAt", String.valueOf(System.currentTimeMillis()));
+            boolean valid = unresolved.isEmpty();
+            entry.addProperty("valid", valid);
+            entry.addProperty("errors", valid ? "" : ("Cards XMage can't load: " + String.join("; ", unresolved)));
+            JsonObject saved = deckStore.upsert(entry, url.trim());
+            ctx.contentType("application/json");
+            ctx.result(metaOf(saved).toString());
+        } catch (Exception e) {
+            ctx.status(400);
+            ctx.contentType("application/json");
+            ctx.result("{\"error\":" + new com.google.gson.JsonPrimitive(e.getMessage() == null ? "import failed" : e.getMessage()).toString() + "}");
+        }
+    }
+
+    private void serveDeckRename(io.javalin.http.Context ctx) {
+        String id = ctx.queryParam("id"), label = ctx.queryParam("label");
+        boolean ok = id != null && label != null && deckStore.rename(id, label.trim());
+        ctx.status(ok ? 200 : 400);
+        ctx.contentType("application/json");
+        ctx.result("{\"ok\":" + ok + "}");
+    }
+
+    private void serveDeckDelete(io.javalin.http.Context ctx) {
+        String id = ctx.queryParam("id");
+        boolean ok = id != null && deckStore.removeById(id);
+        ctx.status(ok ? 200 : 400);
+        ctx.contentType("application/json");
+        ctx.result("{\"ok\":" + ok + "}");
+    }
+
+    /** The public metadata view of a saved deck (no card list). */
+    private static JsonObject metaOf(JsonObject d) {
+        JsonObject m = new JsonObject();
+        for (String k : new String[]{"id", "label", "name", "commander", "cardCount", "url", "addedAt", "valid", "errors"}) {
+            if (d.has(k)) m.add(k, d.get(k));
+        }
+        return m;
     }
 
     /** Token images keyed by name (tokens have collector number 0). Search Scryfall for the token printing. */
@@ -1116,6 +1183,8 @@ public class WebGatewayServer {
         String variantId = msg.has("variantId") && !msg.get("variantId").isJsonNull() ? msg.get("variantId").getAsString() : "";
         // optional: import the human's deck straight from a deck-site URL (Archidekt)
         String deckUrl = msg.has("deckUrl") && !msg.get("deckUrl").isJsonNull() ? msg.get("deckUrl").getAsString() : "";
+        // optional saved-deck id (a durable local snapshot) — no remote fetch, survives remote changes
+        String savedDeckId = msg.has("savedDeckId") && !msg.get("savedDeckId").isJsonNull() ? msg.get("savedDeckId").getAsString() : "";
 
         // optional per-seat AI opponent deck ids ("" = let the host auto-pick that seat)
         List<String> aiDeckIds = new java.util.ArrayList<>();
@@ -1127,9 +1196,17 @@ public class WebGatewayServer {
         if (msg.has("aiDeckUrls") && msg.get("aiDeckUrls").isJsonArray()) {
             msg.getAsJsonArray("aiDeckUrls").forEach(e -> aiDeckUrls.add(e.isJsonNull() ? "" : e.getAsString()));
         }
+        // optional per-seat AI opponent saved-deck ids
+        List<String> aiSavedDeckIds = new java.util.ArrayList<>();
+        if (msg.has("aiSavedDeckIds") && msg.get("aiSavedDeckIds").isJsonArray()) {
+            msg.getAsJsonArray("aiSavedDeckIds").forEach(e -> aiSavedDeckIds.add(e.isJsonNull() ? "" : e.getAsString()));
+        }
 
         DeckCardLists deck = null;
-        if (!deckId.isEmpty() && deckSource != null) {
+        if (!savedDeckId.isEmpty()) {
+            deck = deckStore.toDeck(savedDeckId);                  // durable saved snapshot
+            if (deck == null) throw new IllegalStateException("Saved deck not found — it may have been deleted.");
+        } else if (!deckId.isEmpty() && deckSource != null) {
             deck = variantId.isEmpty()
                     ? deckSource.fetchDeck(deckId)                  // active variant (default)
                     : deckSource.fetchVariant(deckId, variantId);  // a chosen variant
@@ -1182,7 +1259,8 @@ public class WebGatewayServer {
         boolean isCommander = fmt.deckType.toLowerCase().contains("commander");
         boolean anyAiUrl = aiDeckUrls.stream().anyMatch(s -> !s.trim().isEmpty());
         boolean anyAiId = aiDeckIds.stream().anyMatch(s -> !s.isEmpty());
-        if (isCommander || anyAiUrl || anyAiId) {
+        boolean anyAiSaved = aiSavedDeckIds.stream().anyMatch(s -> !s.trim().isEmpty());
+        if (isCommander || anyAiUrl || anyAiId || anyAiSaved) {
             // pool of site decks for auto-filling Commander seats (only when a deck source exists)
             List<String> autoIds = new java.util.ArrayList<>();
             if (isCommander && deckSource != null) {
@@ -1202,9 +1280,14 @@ public class WebGatewayServer {
             }
             aiDecks = new java.util.ArrayList<>();
             for (int i = 0; i < fmt.aiSeats; i++) {
+                String saved = i < aiSavedDeckIds.size() ? aiSavedDeckIds.get(i).trim() : "";
                 String url = i < aiDeckUrls.size() ? aiDeckUrls.get(i).trim() : "";
                 String chosen = i < aiDeckIds.size() ? aiDeckIds.get(i) : "";
-                if (!url.isEmpty()) {
+                if (!saved.isEmpty()) {
+                    DeckCardLists sd = deckStore.toDeck(saved);
+                    if (sd == null) throw new IllegalStateException("A saved deck for AI " + (i + 1) + " was not found.");
+                    aiDecks.add(sd);
+                } else if (!url.isEmpty()) {
                     aiDecks.add(DeckUrlImporter.fetch(url));
                 } else if (!chosen.isEmpty() && deckSource != null) {
                     aiDecks.add(deckSource.fetchDeck(chosen));
