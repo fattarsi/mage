@@ -356,10 +356,24 @@
         .aiSeatRow .aiDeckSel { flex: 1 1 40%; min-width: 0; }
         .aiSeatRow .aiDeckUrl { flex: 1 1 60%; min-width: 0; }
         #deckUrlInput { width: 100%; }
-        /* card picker: highlight the valid choices, dim the rest, mark the previewed selection */
+        /* card picker: highlight the valid choices, dim the rest, mark the chosen ones with a check */
+        .pickcount { font-size: 15px; font-weight: 800; color: #ffd166; margin: -4px 0 4px; }
+        /* fixed quick-target bar (target a player without scrolling up to their area) */
+        #targetBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 55;
+            display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: 94vw;
+            background: #1b2230ee; border: 1px solid #3a4658; border-radius: 12px; padding: 8px 10px;
+            box-shadow: 0 6px 20px #000a; }
+        #targetBar .tgtbtn { background: #7a2f2f; color: #ffe; border: 1px solid #b05; border-radius: 8px;
+            padding: 8px 12px; font-size: 14px; font-weight: 700; cursor: pointer; }
+        #targetBar .tgtbtn:hover { background: #9a3a3a; }
+        #targetBar .tgtlabel { color: #cbd5e2; font-size: 12px; align-self: center; margin-right: 2px; }
         #pickerCards .pickok { outline: 2px solid #3fae67; outline-offset: -2px; border-radius: 8px; cursor: pointer; }
         #pickerCards .pickdim { opacity: .4; pointer-events: none; filter: grayscale(.5); }
-        #pickerCards .picksel { outline: 3px solid #ffd166; outline-offset: -2px; box-shadow: 0 0 12px #ffd16688; }
+        #pickerCards .picksel { outline: 3px solid #ffd166; outline-offset: -2px; box-shadow: 0 0 14px #ffd166aa; cursor: pointer; }
+        #pickerCards .picksel::after { content: "✓"; position: absolute; top: 3px; right: 4px; z-index: 4;
+            width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+            background: #ffd166; color: #1b1e24; border-radius: 50%; font-weight: 900; font-size: 13px;
+            box-shadow: 0 1px 3px #000a; }
     </style>
 </head>
 <body>
@@ -478,9 +492,10 @@
 <div id="picker" class="overlay" style="display:none">
     <div class="panel" style="width:min(820px,94vw)">
         <h2 id="pickerMsg">Choose a card</h2>
-        <div class="hint" style="margin:-4px 0 6px">Tap a highlighted card to preview it, then <b>Choose</b>.</div>
-        <div id="pickerCards" class="zone" style="max-height:60vh;overflow:auto"></div>
-        <div style="margin-top:10px;display:flex;gap:8px"><button id="pickerChoose" disabled>Choose</button><button id="pickerDone" class="alt">Done / none</button></div>
+        <div id="pickerCount" class="pickcount" style="display:none"></div>
+        <div class="hint" id="pickerHint" style="margin:-2px 0 6px">Tap a highlighted card to select it (tap again to unselect). Hold to preview. Then tap Done.</div>
+        <div id="pickerCards" class="zone" style="max-height:56vh;overflow:auto"></div>
+        <div style="margin-top:10px;display:flex;gap:8px"><button id="pickerDone">✓ Done</button></div>
     </div>
 </div>
 
@@ -505,6 +520,8 @@
     <div id="skipbar"></div>
     <div id="me" class="player me"></div>
 </div>
+<!-- fixed quick-target bar: tappable buttons for targetable players (e.g. whom to attack) so you don't scroll up -->
+<div id="targetBar" style="display:none"></div>
 
 <div id="logBar">
     <div id="logHeader">▸ Log</div>
@@ -1995,7 +2012,29 @@ function renderBoard(gv) {
         stackZone.appendChild(rb);
     }
     renderReveals(gv);
+    updateTargetBar(gv);
     Nav.refresh(); // re-index focusable items after every board render
+}
+
+// Fixed bottom bar of buttons for any targetable PLAYER (e.g. choosing whom to attack), so you don't
+// have to scroll up to their area to click them. Mirrors the pheads' "targetable" highlight.
+function updateTargetBar(gv) {
+    const bar = document.getElementById('targetBar');
+    if (!bar) return;
+    const targets = ((gv && gv.players) || []).filter(p => validTargets.has(p.playerId));
+    if (!targets.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    bar.innerHTML = '';
+    const lab = document.createElement('span'); lab.className = 'tgtlabel';
+    lab.textContent = combatMode === 'attack' ? 'Attack player:' : 'Target player:';
+    bar.appendChild(lab);
+    targets.forEach(p => {
+        const b = document.createElement('button'); b.className = 'tgtbtn';
+        b.innerHTML = (combatMode === 'attack' ? '⚔ ' : '🎯 ') + esc(strip(p.name))
+            + ` <span style="opacity:.75">(${p.life})</span>`;
+        b.onclick = () => pickPlayer(p.playerId);
+        bar.appendChild(b);
+    });
+    bar.style.display = 'flex';
 }
 
 // Cards currently revealed to everyone (reveal top of library, etc.) or that I'm looking at (scry).
@@ -2024,10 +2063,10 @@ function renderReveals(gv) {
 const pickerEl = document.getElementById('picker');
 const pickerMsgEl = document.getElementById('pickerMsg');
 const pickerCardsEl = document.getElementById('pickerCards');
-const pickerChooseBtn = document.getElementById('pickerChoose');
-let pickerPick = null; // id of the card currently previewed/selected in the picker (not yet confirmed)
-document.getElementById('pickerDone').onclick = () => { pickerEl.style.display = 'none'; pickerPick = null; send('playerBoolean', false); };
-pickerChooseBtn.onclick = () => { if (pickerPick) { const id = pickerPick; pickerPick = null; pickerEl.style.display = 'none'; send('playerUUID', id); } };
+const pickerCountEl = document.getElementById('pickerCount');
+let pickerSelected = new Set(); // ids selected in the current picker (local, for instant feedback)
+let pickerSig = '';            // signature of the current card list, to reset selection on a new dialog
+document.getElementById('pickerDone').onclick = () => { pickerEl.style.display = 'none'; pickerSelected = new Set(); pickerSig = ''; send('playerBoolean', false); };
 // Are all these choices permanents/cards already visible and clickable on the main board (battlefield
 // or my hand)? If so we should NOT pop a full-screen modal over them — it would hide the highlighted
 // targets. The board highlights + prompt handle it instead.
@@ -2044,33 +2083,43 @@ function renderPicker(method, data) {
     // For on-board targeting, keep the board visible (don't cover the lit-up targets with the modal).
     const onBoard = method === 'GAME_TARGET' && cards.length && cardsReachableOnBoard(cards, lastGameView);
     if (isDialog && cards.length && !onBoard) {
-        pickerMsgEl.textContent = String(data.message || 'Choose a card').replace(/<[^>]+>/g, '');
+        const rawMsg = String(data.message || 'Choose a card');
+        // pull a "(selected X of Y)" count out of the message so we can show it as a clear badge
+        const cm = rawMsg.match(/selected\s+(\d+)\s+of\s+(\d+)/i);
+        const cleanMsg = rawMsg.replace(/\(?\s*selected\s+\d+\s+of\s+\d+\s*\)?/i, '').replace(/<[^>]+>/g, '').trim();
+        pickerMsgEl.textContent = cleanMsg || 'Choose';
+        if (cm) { pickerCountEl.textContent = `${cm[1]} of ${cm[2]} selected`; pickerCountEl.style.display = ''; }
+        else { pickerCountEl.style.display = 'none'; }
+        // a fresh dialog (different card set) resets the local selection tracking
+        const sig = cards.map(c => c.id).join(',');
+        if (sig !== pickerSig) { pickerSelected = new Set(); pickerSig = sig; }
         pickerCardsEl.innerHTML = '';
-        pickerPick = null;
-        pickerChooseBtn.disabled = true;
-        // only some cards may be legal picks — highlight those, dim the rest (null = all selectable)
-        const validSet = (Array.isArray(data.targets) && data.targets.length) ? new Set(data.targets) : null;
+        const targetSet = (Array.isArray(data.targets) && data.targets.length) ? new Set(data.targets) : null;
         cards.forEach(c => {
-            const el = cardEl(c, false); // not auto-committing; we select+preview first
+            const el = cardEl(c, false);
             el.classList.add('pickcard');
-            const selectable = !validSet || validSet.has(c.id);
-            if (selectable) {
-                el.classList.add('pickok');
-                el.onclick = () => {                       // click = preview + select, not commit
-                    pickerPick = c.id;
-                    [...pickerCardsEl.children].forEach(x => x.classList.remove('picksel'));
-                    el.classList.add('picksel');
+            // server-authoritative when present; fall back to local tracking / data.targets
+            const selected = (c.isSelected !== undefined) ? !!c.isSelected : pickerSelected.has(c.id);
+            const choosable = selected || (c.isChoosable !== undefined ? !!c.isChoosable
+                : (targetSet ? targetSet.has(c.id) : true));
+            if (selected) el.classList.add('picksel');
+            else if (choosable) el.classList.add('pickok');
+            else el.classList.add('pickdim');
+            if (choosable || selected) {
+                el.onclick = () => {                       // click = toggle this card's selection on the server
+                    if (pickerSelected.has(c.id)) pickerSelected.delete(c.id); else pickerSelected.add(c.id);
+                    el.classList.toggle('picksel');
+                    el.classList.toggle('pickok');
                     showCardViewer(c);
-                    pickerChooseBtn.disabled = false;
+                    send('playerUUID', c.id);              // server updates the count + re-sends the dialog
                 };
-            } else {
-                el.classList.add('pickdim');
             }
             pickerCardsEl.appendChild(el);
         });
         pickerEl.style.display = 'flex';
     } else if (onBoard || ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO') {
         pickerEl.style.display = 'none'; // targeting on the board, or moved past this choice
+        pickerSelected = new Set(); pickerSig = ''; // forget selection when the dialog closes
     }
     // close the searchable choice modal once we're past that choice
     if (method !== 'GAME_CHOOSE_CHOICE' && (ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO')) {
