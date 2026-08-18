@@ -16,6 +16,7 @@ import mage.cards.decks.DeckValidatorError;
 import mage.cards.decks.DeckValidatorFactory;
 import mage.constants.ManaType;
 import mage.constants.PlayerAction;
+import mage.players.net.SkipPrioritySteps;
 import mage.players.net.UserSkipPrioritySteps;
 import mage.interfaces.MageServer;
 import mage.server.DisconnectReason;
@@ -560,6 +561,18 @@ public class WebGatewayServer {
         }
     }
 
+    /** Stop at every phase step ({@code all}) or the default (main phases + combat only). */
+    private static void applyPhaseStops(SkipPrioritySteps sps, boolean all) {
+        sps.setUpkeep(all);
+        sps.setDraw(all);
+        sps.setMain1(true);        // always stop at main phases
+        sps.setBeforeCombat(all);
+        sps.setEndOfCombat(all);
+        sps.setMain2(true);
+        sps.setEndOfTurn(all);
+        // declare attackers/blockers, combat damage and cleanup always yield priority (engine default)
+    }
+
     /** Resolve a deck URL to {name, commander, cardCount} so the client can save/label it. */
     private void serveDeckInfo(io.javalin.http.Context ctx) {
         String url = ctx.queryParam("url");
@@ -1007,11 +1020,23 @@ public class WebGatewayServer {
                 if (userId != null) {
                     managerFactory.userManager().getUser(userId).ifPresent(u -> {
                         UserSkipPrioritySteps sk = u.getUserData().getUserSkipPrioritySteps();
+                        // These control where the F-key SKIP actions (Next turn / My next turn / …) stop.
                         if (msg.has("stopNewStack")) sk.setStopOnStackNewObjects(msg.get("stopNewStack").getAsBoolean());
                         if (msg.has("stopBlockers")) sk.setStopOnDeclareBlockersWithAnyPermanents(msg.get("stopBlockers").getAsBoolean());
                         if (msg.has("stopAttackers")) sk.setStopOnDeclareAttackersDuringSkipActions(msg.get("stopAttackers").getAsBoolean());
                         if (msg.has("stopMains")) sk.setStopOnAllMainPhases(msg.get("stopMains").getAsBoolean());
                         if (msg.has("stopEnds")) sk.setStopOnAllEndPhases(msg.get("stopEnds").getAsBoolean());
+                        // These control NORMAL per-phase priority (checkPassStep): which steps hand you
+                        // priority when you aren't skipping. Default only stops at main phases + combat,
+                        // so upkeep/draw/begin-combat/end-combat/end-step get auto-passed — this lets the
+                        // player also get priority at every phase (per turn side).
+                        if (msg.has("stepMode")) {
+                            String mode = msg.get("stepMode").getAsString();
+                            boolean myAll = "all".equals(mode);
+                            boolean oppAll = myAll || "oppAll".equals(mode);
+                            applyPhaseStops(sk.getYourTurn(), myAll);
+                            applyPhaseStops(sk.getOpponentTurn(), oppAll);
+                        }
                     });
                 }
             } catch (Exception e) {
