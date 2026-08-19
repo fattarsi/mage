@@ -2176,14 +2176,16 @@ function renderPicker(method, data) {
         cards.forEach(c => {
             const el = cardEl(c, false);
             el.classList.add('pickcard');
-            // server-authoritative when present; fall back to local tracking / data.targets
-            const selected = (c.isSelected !== undefined) ? !!c.isSelected : pickerSelected.has(c.id);
-            const choosable = selected || (c.isChoosable !== undefined ? !!c.isChoosable
-                : (targetSet ? targetSet.has(c.id) : true));
+            const selected = pickerSelected.has(c.id) || !!c.isSelected;
+            // Clickable = the game's listed targets when it provides them, otherwise EVERY shown card
+            // (reveal / scry / choose-from-pile don't send a targets list). Already-selected cards stay
+            // clickable so you can unselect. Do NOT gate on isChoosable — it's only set for on-board
+            // targeting and is false for these list dialogs, which would wrongly dim (and lock) everything.
+            const choosable = selected || !targetSet || targetSet.has(c.id);
             if (selected) el.classList.add('picksel');
             else if (choosable) el.classList.add('pickok');
             else el.classList.add('pickdim');
-            if (choosable || selected) {
+            if (choosable) {
                 el.onclick = () => {                       // click = toggle this card's selection on the server
                     if (pickerSelected.has(c.id)) pickerSelected.delete(c.id); else pickerSelected.add(c.id);
                     el.classList.toggle('picksel');
