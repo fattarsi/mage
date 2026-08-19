@@ -619,18 +619,19 @@ public class WebGatewayServer {
         try {
             DeckCardLists deck = DeckUrlImporter.fetch(url.trim());
             resolveToAvailablePrintings(deck);
-            java.util.List<String> unresolved = describeUnresolvedCards(deck);
             int count = deck.getCards().size() + deck.getSideboard().size();
             String commander = deck.getSideboard().isEmpty() ? null : deck.getSideboard().get(0).getCardName();
+            // Validate the way the game will (Archidekt imports are Commander decks): this catches not just
+            // unresolved cards but wrong count / singleton / colour-identity — the reasons a deck fails to join.
+            String problem = describeDeckProblems(deck, "Variant Magic - Commander");
             JsonObject entry = DeckStore.snapshot(deck);
             entry.addProperty("url", url.trim());
             entry.addProperty("cardCount", count);
             if (commander != null) entry.addProperty("commander", commander);
             entry.addProperty("label", commander != null ? commander : deck.getName());
             entry.addProperty("addedAt", String.valueOf(System.currentTimeMillis()));
-            boolean valid = unresolved.isEmpty();
-            entry.addProperty("valid", valid);
-            entry.addProperty("errors", valid ? "" : ("Cards XMage can't load: " + String.join("; ", unresolved)));
+            entry.addProperty("valid", problem == null);
+            entry.addProperty("errors", problem == null ? "" : problem.replaceAll("\\s+", " ").trim());
             JsonObject saved = deckStore.upsert(entry, url.trim());
             ctx.contentType("application/json");
             ctx.result(metaOf(saved).toString());
@@ -1304,10 +1305,17 @@ public class WebGatewayServer {
 
         // AI decks come from the same source and hit the same printing mismatches — repair them too, so
         // an otherwise-legal AI commander deck isn't rejected as incomplete (which would drop the seat).
+        // Also pre-validate each one so a bad AI deck reports WHY (the server's join otherwise just says
+        // "AI N failed to join" with no detail).
         if (aiDecks != null) {
-            for (DeckCardLists aiDeck : aiDecks) {
+            for (int i = 0; i < aiDecks.size(); i++) {
+                DeckCardLists aiDeck = aiDecks.get(i);
                 if (aiDeck != null) {
                     resolveToAvailablePrintings(aiDeck);
+                    String reason = describeDeckProblems(aiDeck, fmt.deckType);
+                    if (reason != null) {
+                        throw new IllegalStateException("AI " + (i + 1) + "'s deck can't be used — " + reason);
+                    }
                 }
             }
         }
@@ -1395,6 +1403,43 @@ public class WebGatewayServer {
      * XMage indexes such cards under the FRONT face only, so a deck that lists the joined name won't
      * resolve by name. Fall back to the front face (then the back) so those cards are found.
      */
+    /**
+     * Find a printing that genuinely represents the named card: it must be found by name AND its
+     * (set,collector) must resolve back to a same-named card. Returns null when XMage has no correct
+     * printing (unimplemented/disabled card, or one whose only printing collides with a different card,
+     * e.g. an unavailable MDFC whose collector number maps to its back face).
+     */
+    private mage.cards.repository.CardInfo findMatchingPrinting(String name) {
+        mage.cards.repository.CardInfo ci = findCardByName(name);
+        if (ci == null || !namesMatch(ci.getName(), name)) {
+            return null;
+        }
+        mage.cards.repository.CardInfo rt = mage.cards.repository.CardRepository.instance.findCard(ci.getSetCode(), ci.getCardNumber());
+        if (rt != null && namesMatch(rt.getName(), name)) {
+            return ci;
+        }
+        for (mage.cards.repository.CardInfo p : mage.cards.repository.CardRepository.instance.findCards(ci.getName())) {
+            mage.cards.repository.CardInfo prt = mage.cards.repository.CardRepository.instance.findCard(p.getSetCode(), p.getCardNumber());
+            if (prt != null && namesMatch(prt.getName(), name)) {
+                return p;
+            }
+        }
+        return null;
+    }
+
+    /** Do a DB card name and a deck-list card name refer to the same card (tolerating DFC "Front // Back")? */
+    private static boolean namesMatch(String dbName, String deckName) {
+        if (dbName == null || deckName == null) {
+            return false;
+        }
+        if (dbName.equalsIgnoreCase(deckName)) {
+            return true;
+        }
+        String dbFront = dbName.contains(" // ") ? dbName.split(" // ", 2)[0].trim() : dbName;
+        String deckFront = deckName.contains(" // ") ? deckName.split(" // ", 2)[0].trim() : deckName;
+        return dbFront.equalsIgnoreCase(deckFront) || dbFront.equalsIgnoreCase(deckName) || dbName.equalsIgnoreCase(deckFront);
+    }
+
     private mage.cards.repository.CardInfo findCardByName(String name) {
         if (name == null) {
             return null;
@@ -1416,19 +1461,11 @@ public class WebGatewayServer {
         all.addAll(list.getCards());
         all.addAll(list.getSideboard());
         for (mage.cards.decks.DeckCardInfo info : all) {
-            String set = info.getSetCode(), num = info.getCardNumber();
-            boolean hasExact = set != null && !set.isEmpty() && num != null && !num.isEmpty();
-            if (hasExact && mage.cards.repository.CardRepository.instance.findCard(set, num) != null) {
-                continue; // this printing resolved fine
+            if (findMatchingPrinting(info.getCardName()) != null) {
+                continue; // XMage has a correct printing for this card
             }
-            String where = hasExact ? (set + " #" + num) : "by name";
-            mage.cards.repository.CardInfo byName = findCardByName(info.getCardName());
-            if (byName != null) {
-                out.add(info.getCardName() + " (" + where + " not in DB; available as "
-                        + byName.getSetCode() + " — re-import or pick another printing)");
-            } else {
-                out.add(info.getCardName() + " (" + where + " — card not implemented in XMage)");
-            }
+            out.add(info.getCardName() + " — not available in XMage (unimplemented/disabled, or its "
+                    + "printing maps to a different card)");
             if (out.size() >= 12) {
                 out.add("…");
                 break;
@@ -1457,19 +1494,32 @@ public class WebGatewayServer {
                 mage.cards.decks.DeckCardInfo info = section.get(i);
                 String set = info.getSetCode(), num = info.getCardNumber();
                 boolean hasExact = set != null && !set.isEmpty() && num != null && !num.isEmpty();
-                if (hasExact && mage.cards.repository.CardRepository.instance.findCard(set, num) != null) {
-                    continue; // exact printing resolves — leave it
+                mage.cards.repository.CardInfo exact = hasExact
+                        ? mage.cards.repository.CardRepository.instance.findCard(set, num) : null;
+                // Keep the exact printing ONLY if it resolves to the SAME card. XMage's collector numbers
+                // don't always match Archidekt/Scryfall's, so a card's (set,num) can point at a DIFFERENT
+                // card in XMage's DB — which would silently load that other card (e.g. two "Rampant Growth"
+                // and a missing one). If the names don't match, fall through and repair by name.
+                if (exact != null && namesMatch(exact.getName(), info.getCardName())) {
+                    continue;
                 }
-                mage.cards.repository.CardInfo byName = findCardByName(info.getCardName());
-                if (byName == null) {
-                    continue; // genuinely unknown/un-implemented — let the problem reporter name it
+                // Find a printing that actually round-trips to THIS card's name (not a different card that
+                // shares a collector number — e.g. an unavailable MDFC whose printing maps to its back face).
+                mage.cards.repository.CardInfo byName = findMatchingPrinting(info.getCardName());
+                if (byName != null) {
+                    if (hasExact) { // a real printing swap worth reporting; name-only (variant) entries resolve silently
+                        notes.add(info.getCardName() + " (" + set + " #" + num
+                                + " → " + byName.getSetCode() + " #" + byName.getCardNumber() + ")");
+                    }
+                    section.set(i, new mage.cards.decks.DeckCardInfo(
+                            info.getCardName(), byName.getCardNumber(), byName.getSetCode(), info.getAmount()));
+                } else if (exact != null) {
+                    // The (set,num) resolves, but to a DIFFERENT card, and this card has no correct printing
+                    // (unimplemented / disabled). Blank the printing so it's NOT loaded as the wrong card —
+                    // describeDeckProblems then reports it as missing instead of silently duplicating another.
+                    section.set(i, new mage.cards.decks.DeckCardInfo(info.getCardName(), "", "", info.getAmount()));
                 }
-                if (hasExact) { // a real printing swap worth reporting; name-only (variant) entries resolve silently
-                    notes.add(info.getCardName() + " (" + set + " #" + num
-                            + " → " + byName.getSetCode() + " #" + byName.getCardNumber() + ")");
-                }
-                section.set(i, new mage.cards.decks.DeckCardInfo(
-                        info.getCardName(), byName.getCardNumber(), byName.getSetCode(), info.getAmount()));
+                // else: unresolved and harmless (findCard returned null) — leave it for the problem reporter
             }
         }
         return notes;
