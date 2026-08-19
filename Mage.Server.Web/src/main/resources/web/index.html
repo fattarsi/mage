@@ -423,6 +423,15 @@
             font-size: 9px; color: #9ab; background: #0e131b; border: 1px solid #2b3442; border-radius: 3px; }
         #oppPeek .opthumbs .pkthumb.tapped { transform: rotate(6deg); }
         #oppPeek .opthumbs .pkthumb .art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 3px; }
+        /* "working" indicator — shown while the engine/an AI is busy and it isn't your move yet */
+        #working { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 70; display: none;
+            align-items: center; gap: 9px; background: #1b2333f2; border: 1px solid #3a4a63; border-radius: 20px;
+            padding: 6px 15px 6px 11px; box-shadow: 0 4px 16px #000a; color: #dbe6f2; font-size: 13px; font-weight: 700; }
+        #working .spin { width: 15px; height: 15px; border: 2.5px solid #46506a; border-top-color: #7cc0ff;
+            border-radius: 50%; animation: workspin .7s linear infinite; }
+        @keyframes workspin { to { transform: rotate(360deg); } }
+        .player.thinking { box-shadow: 0 0 0 2px #7cc0ff99, 0 0 18px #7cc0ff55; }
+        .player.thinking .pname::after { content: ' 🤔'; }
         #pickerCards .pickok { outline: 2px solid #3fae67; outline-offset: -2px; border-radius: 8px; cursor: pointer; }
         #pickerCards .pickdim { opacity: .4; pointer-events: none; filter: grayscale(.5); }
         #pickerCards .picksel { outline: 3px solid #ffd166; outline-offset: -2px; box-shadow: 0 0 14px #ffd166aa; cursor: pointer; }
@@ -601,6 +610,8 @@
 <!-- off-screen peek bars: opponents (top) and your hand (bottom), shown only when scrolled out of view -->
 <div id="oppPeek"></div>
 <div id="handPeek"></div>
+<!-- "working" indicator: appears while the engine/an AI is busy and it isn't your move yet -->
+<div id="working"><span class="spin"></span><span id="workingText">Working…</span></div>
 
 <div id="logBar">
     <div id="logHeader">▸ Log</div>
@@ -934,11 +945,60 @@ function send(action, value, extra) {
     }
     ws.send(raw);
     logc('sent', '→ ' + action + (value !== undefined ? ' ' + value : ''));
+    // I just handed control back (a priority pass / decision / skip) — start watching for a slow response
+    // so I can show a "working…" spinner. Non-game control messages (ping/resync/setSkips/newGame) don't count.
+    if (action.indexOf('player') === 0) armWorkingTimer();
 }
 // players are valid targets/choices too (e.g. "select a starting player", "target player")
 window.pickPlayer = (playerId) => send('playerUUID', playerId);
 // inline "pass (resolve)" button on the action bar — passing priority lets the stack resolve
 window.passResolve = () => send('playerBoolean', false);
+
+// ---- "working" indicator: tell the player when the engine/an AI is busy and it isn't their move yet ----
+// The client can't watch an AI compute directly, but it CAN tell that it handed control back and hasn't
+// received an actionable frame. We show a small spinner after a short delay (so quick round-trips don't
+// flash it), labelled with the player we're most likely waiting on. It clears the moment it's your move.
+let waiting = false, waitTimer = null;
+const MY_MOVE = new Set([...ACTIONABLE, 'GAME_TARGET']); // frames that mean "it's your turn to act"
+function guessActor() {
+    const gv = lastGameView; if (!gv || !gv.players) return 'The game';
+    const me = gv.players.find(p => p.controlled);
+    const active = gv.players.find(p => p.playerId === gv.activePlayerId);
+    if (active && (!me || active.playerId !== me.playerId)) return strip(active.name); // opponent's turn
+    const opps = gv.players.filter(p => (!me || p.playerId !== me.playerId) && !p.hasLeft);
+    return opps.length === 1 ? strip(opps[0].name) : 'Opponents';
+}
+function markThinking() {
+    const gv = lastGameView;
+    document.querySelectorAll('#opponents .player').forEach(p => {
+        p.classList.toggle('thinking', waiting && !!gv && p.dataset.pid === gv.activePlayerId);
+    });
+}
+function showWorking() {
+    waiting = true;
+    const actor = guessActor();
+    const tx = document.getElementById('workingText');
+    if (tx) tx.textContent = (actor === 'Opponents' ? 'Opponents are' : actor + ' is') + ' thinking…';
+    const el = document.getElementById('working'); if (el) el.style.display = 'flex';
+    markThinking();
+}
+function hideWorking() {
+    waiting = false;
+    if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; }
+    const el = document.getElementById('working'); if (el) el.style.display = 'none';
+    markThinking();
+}
+function armWorkingTimer() { // show the spinner only if nothing actionable comes back within the delay
+    if (waitTimer) clearTimeout(waitTimer);
+    waitTimer = setTimeout(() => { waitTimer = null; showWorking(); }, 300);
+}
+// call on every inbound frame to keep the indicator in sync with whose move it is
+function updateWorking(method, gv) {
+    if (MY_MOVE.has(method)) { hideWorking(); return; }               // it's your move → stop waiting
+    if (method === 'GAME_OVER' || method === 'END_GAME_INFO') { hideWorking(); return; }
+    if (!gv) return;                                                  // chat/log/etc. — leave as-is
+    if (waiting) showWorking(); else armWorkingTimer();               // opponent progressed; keep/queue the spinner
+}
 
 // per-opponent UI state: which are zoomed open, and which have their commander expanded
 const oppZoomed = {};
@@ -1582,6 +1642,7 @@ function onSocketMessage(ev) {
         soundForFrame(msg.method, data, gv);
         if (gv) drawArrows(gv);
         lastMethod = msg.method; lastData = data;
+        updateWorking(msg.method, gv);              // keep the "working…" indicator in sync with whose move it is
         tryAdvance(msg.method, gv || lastGameView); // "run to breakpoint" auto-advance
         trySticky(msg.method, gv || lastGameView);  // sticky skip auto-resume
     } catch (e) {
@@ -2143,11 +2204,13 @@ function renderBoard(gv) {
     opponentsEl.className = opponents.length > 1 ? 'multi' : '';
     for (const opp of opponents) {
         const panel = document.createElement('div');
+        panel.dataset.pid = opp.playerId; // so markThinking() can find the active opponent's panel
         const zoomed = !!oppZoomed[opp.playerId];
         const out = !!opp.hasLeft; // eliminated / conceded — minimize to free up room
         panel.className = 'player' + (out ? ' eliminated' : '')
             + (!out && opponents.length > 1 && !zoomed ? ' compact' : '') + (!out && zoomed ? ' zoomed' : '')
-            + (gv.activePlayerId === opp.playerId ? ' activeturn' : '');
+            + (gv.activePlayerId === opp.playerId ? ' activeturn' : '')
+            + (waiting && gv.activePlayerId === opp.playerId ? ' thinking' : '');
         panel.innerHTML = pheadHtml(opp, gv.activePlayerId === opp.playerId, true);
         if (!out) {
             // battlefield + a collapsed commander section to its right
