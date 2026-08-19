@@ -287,6 +287,7 @@
                  font-size: 13px; cursor: pointer; }
         button:hover { background: #4767a0; }
         button.alt { background: #5a3a3a; } button.alt:hover { background: #784c4c; }
+        button:disabled { background: #2a3140; color: #6b7686; cursor: not-allowed; }
         #log { resize: vertical; overflow: auto; height: 150px; min-height: 40px; max-height: 60vh;
                font-size: 11px; color: #8a9; font-family: ui-monospace, monospace; border: 1px solid #2b313b;
                border-radius: 6px; padding: 6px; background: #14181e; }
@@ -368,14 +369,18 @@
         .mgrEmpty { color: #8fa3ba; font-size: 13px; padding: 8px; }
         /* card picker: highlight the valid choices, dim the rest, mark the chosen ones with a check */
         .pickcount { font-size: 15px; font-weight: 800; color: #ffd166; margin: -4px 0 4px; }
-        /* fixed quick-target bar (target a player without scrolling up to their area) */
-        #targetBar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 55;
-            display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; max-width: 94vw;
-            background: #1b2230ee; border: 1px solid #3a4658; border-radius: 12px; padding: 8px 10px;
-            box-shadow: 0 6px 20px #000a; }
+        /* quick-target buttons, sitting right by the stack so you can pick a player without scrolling.
+           Opponent buttons go on the top row in the same left→right order as their panels above; if you
+           yourself are a legal target, your button drops to a second row nearer your side of the screen. */
+        #targetBar { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 6px 0 2px; }
+        #targetBar .tgtrow { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; align-items: center;
+            background: #1b2230ee; border: 1px solid #3a4658; border-radius: 12px; padding: 7px 10px; max-width: 94vw; }
+        #targetBar .tgtrow-me { border-color: #4a6a3a; background: #182415ee; } /* your own row, toward your side */
         #targetBar .tgtbtn { background: #7a2f2f; color: #ffe; border: 1px solid #b05; border-radius: 8px;
             padding: 8px 12px; font-size: 14px; font-weight: 700; cursor: pointer; }
         #targetBar .tgtbtn:hover { background: #9a3a3a; }
+        #targetBar .tgtrow-me .tgtbtn { background: #3a5a2f; border-color: #6a5; }
+        #targetBar .tgtrow-me .tgtbtn:hover { background: #4a6a3a; }
         #targetBar .tgtlabel { color: #cbd5e2; font-size: 12px; align-self: center; margin-right: 2px; }
         #pickerCards .pickok { outline: 2px solid #3fae67; outline-offset: -2px; border-radius: 8px; cursor: pointer; }
         #pickerCards .pickdim { opacity: .4; pointer-events: none; filter: grayscale(.5); }
@@ -518,9 +523,13 @@
     <div class="panel" style="width:min(820px,94vw)">
         <h2 id="pickerMsg">Choose a card</h2>
         <div id="pickerCount" class="pickcount" style="display:none"></div>
-        <div class="hint" id="pickerHint" style="margin:-2px 0 6px">Tap a highlighted card to select it (tap again to unselect). Hold to preview. Then tap Done.</div>
+        <div class="hint" id="pickerHint" style="margin:-2px 0 6px">Tap a card to select it. Your pick is highlighted — nothing is submitted until you press the button below.</div>
         <div id="pickerCards" class="zone" style="max-height:56vh;overflow:auto"></div>
-        <div style="margin-top:10px;display:flex;gap:8px"><button id="pickerDone">✓ Done</button></div>
+        <div style="margin-top:10px;display:flex;gap:8px">
+            <button id="pickerConfirm" disabled>✓ Confirm</button>
+            <button id="pickerDone">✓ Done</button>
+            <button id="pickerNone" class="alt">Choose none</button>
+        </div>
     </div>
 </div>
 
@@ -540,13 +549,13 @@
     <div id="phasebar"></div>
     <div id="opponents"></div>
     <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div><div id="stackLastLog" title="most recent game-log entry"></div></div>
+    <!-- quick-target buttons for targetable players (e.g. whom to attack), placed by the stack -->
+    <div id="targetBar" style="display:none"></div>
     <div id="reveals"></div>
     <div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span><div id="hud"></div></div>
     <div id="skipbar"></div>
     <div id="me" class="player me"></div>
 </div>
-<!-- fixed quick-target bar: tappable buttons for targetable players (e.g. whom to attack) so you don't scroll up -->
-<div id="targetBar" style="display:none"></div>
 
 <div id="logBar">
     <div id="logHeader">▸ Log</div>
@@ -2090,28 +2099,45 @@ function renderBoard(gv) {
         stackZone.appendChild(rb);
     }
     renderReveals(gv);
-    updateTargetBar(gv);
+    updateTargetBar(gv, opponents, me);
     Nav.refresh(); // re-index focusable items after every board render
 }
 
-// Fixed bottom bar of buttons for any targetable PLAYER (e.g. choosing whom to attack), so you don't
-// have to scroll up to their area to click them. Mirrors the pheads' "targetable" highlight.
-function updateTargetBar(gv) {
+// Buttons for any targetable PLAYER (e.g. choosing whom to attack), placed by the stack so you don't
+// have to scroll up to their area. Opponents go on the top row in the SAME left→right order as their
+// panels above (passed in as `opponents`); if you yourself are a legal target, your button drops to a
+// second row nearer your side. Mirrors the pheads' "targetable" highlight.
+function updateTargetBar(gv, opponents, me) {
     const bar = document.getElementById('targetBar');
     if (!bar) return;
-    const targets = ((gv && gv.players) || []).filter(p => validTargets.has(p.playerId));
-    if (!targets.length) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    const isTgt = p => p && validTargets.has(p.playerId);
+    const oppTargets = (opponents || []).filter(isTgt);
+    const meTarget = isTgt(me) ? me : null;
+    if (!oppTargets.length && !meTarget) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
     bar.innerHTML = '';
-    const lab = document.createElement('span'); lab.className = 'tgtlabel';
-    lab.textContent = combatMode === 'attack' ? 'Attack player:' : 'Target player:';
-    bar.appendChild(lab);
-    targets.forEach(p => {
+    const mkBtn = p => {
         const b = document.createElement('button'); b.className = 'tgtbtn';
         b.innerHTML = (combatMode === 'attack' ? '⚔ ' : '🎯 ') + esc(strip(p.name))
             + ` <span style="opacity:.75">(${p.life})</span>`;
         b.onclick = () => pickPlayer(p.playerId);
-        bar.appendChild(b);
-    });
+        return b;
+    };
+    if (oppTargets.length) {
+        const row = document.createElement('div'); row.className = 'tgtrow';
+        const lab = document.createElement('span'); lab.className = 'tgtlabel';
+        lab.textContent = combatMode === 'attack' ? 'Attack player:' : 'Target player:';
+        row.appendChild(lab);
+        oppTargets.forEach(p => row.appendChild(mkBtn(p))); // left→right = on-screen seat order
+        bar.appendChild(row);
+    }
+    if (meTarget) {
+        const myRow = document.createElement('div'); myRow.className = 'tgtrow tgtrow-me';
+        const lab = document.createElement('span'); lab.className = 'tgtlabel';
+        lab.textContent = 'Target yourself:';
+        myRow.appendChild(lab);
+        myRow.appendChild(mkBtn(meTarget));
+        bar.appendChild(myRow);
+    }
     bar.style.display = 'flex';
 }
 
@@ -2144,7 +2170,32 @@ const pickerCardsEl = document.getElementById('pickerCards');
 const pickerCountEl = document.getElementById('pickerCount');
 let pickerSelected = new Set(); // ids selected in the current picker (local, for instant feedback)
 let pickerSig = '';            // signature of the current card list, to reset selection on a new dialog
-document.getElementById('pickerDone').onclick = () => { pickerEl.style.display = 'none'; pickerSelected = new Set(); pickerSig = ''; send('playerBoolean', false); };
+let pickerMulti = false;       // current dialog is a multi-count selection (live toggle + explicit Done)
+let pickerRequired = false;    // current dialog must be answered (no "choose none")
+function closePicker() { pickerEl.style.display = 'none'; pickerSelected = new Set(); pickerSig = ''; }
+// Reflect the LOCAL single-select pick onto the cards + Confirm button, without re-fetching the dialog.
+function markPickerSelection() {
+    pickerCardsEl.querySelectorAll('.pickcard').forEach(el => {
+        if (el.classList.contains('pickdim')) return; // not a choosable card
+        const sel = pickerSelected.has(el.dataset.cid);
+        el.classList.toggle('picksel', sel);
+        el.classList.toggle('pickok', !sel);
+    });
+    const confirm = document.getElementById('pickerConfirm');
+    if (confirm) confirm.disabled = pickerSelected.size === 0;
+}
+// Confirm a single-select pick — submit the chosen card (the server completes the choice on it). This
+// is the "view before it's accepted" step: tapping a card only highlights it; nothing is sent until here.
+document.getElementById('pickerConfirm').onclick = () => {
+    const id = [...pickerSelected][0];
+    if (!id) return;
+    closePicker();
+    send('playerUUID', id);
+};
+// Done — finish a multi-count selection with whatever is currently ticked (the server's "done" button).
+document.getElementById('pickerDone').onclick = () => { closePicker(); send('playerBoolean', false); };
+// Choose none — decline an optional single-select (the server's "cancel" button).
+document.getElementById('pickerNone').onclick = () => { closePicker(); send('playerBoolean', false); };
 // Are all these choices permanents/cards already visible and clickable on the main board (battlefield
 // or my hand)? If so we should NOT pop a full-screen modal over them — it would hide the highlighted
 // targets. The board highlights + prompt handle it instead.
@@ -2162,12 +2213,29 @@ function renderPicker(method, data) {
     const onBoard = method === 'GAME_TARGET' && cards.length && cardsReachableOnBoard(cards, lastGameView);
     if (isDialog && cards.length && !onBoard) {
         const rawMsg = String(data.message || 'Choose a card');
-        // pull a "(selected X of Y)" count out of the message so we can show it as a clear badge
+        // "(selected N of M)" / "(selected N)" appears ONLY for multi-count selections (max != 1). Those
+        // toggle live and finish with Done. Everything else is a single pick: select locally, then Confirm.
+        pickerMulti = /\(?\s*selected\s+\d+/i.test(rawMsg);
+        pickerRequired = !!data.flag;
         const cm = rawMsg.match(/selected\s+(\d+)\s+of\s+(\d+)/i);
-        const cleanMsg = rawMsg.replace(/\(?\s*selected\s+\d+\s+of\s+\d+\s*\)?/i, '').replace(/<[^>]+>/g, '').trim();
+        const cleanMsg = rawMsg.replace(/\(?\s*selected\s+\d+(?:\s+of\s+\d+)?(?:\s*,\s*min\s+\d+)?\s*\)?/i, '')
+                               .replace(/<[^>]+>/g, '').trim();
         pickerMsgEl.textContent = cleanMsg || 'Choose';
-        if (cm) { pickerCountEl.textContent = `${cm[1]} of ${cm[2]} selected`; pickerCountEl.style.display = ''; }
-        else { pickerCountEl.style.display = 'none'; }
+        // count badge: multi shows how many are ticked; single hides it (there's just one pick)
+        if (pickerMulti) {
+            const selCount = cm ? `${cm[1]} of ${cm[2]}` : `${cards.filter(c => c.isSelected).length}`;
+            pickerCountEl.textContent = `${selCount} selected`;
+            pickerCountEl.style.display = '';
+        } else {
+            pickerCountEl.style.display = 'none';
+        }
+        // footer buttons: multi -> Done; single -> Confirm (+ "Choose none" when the choice is optional)
+        document.getElementById('pickerConfirm').style.display = pickerMulti ? 'none' : '';
+        document.getElementById('pickerDone').style.display = pickerMulti ? '' : 'none';
+        document.getElementById('pickerNone').style.display = (!pickerMulti && !pickerRequired) ? '' : 'none';
+        document.getElementById('pickerHint').textContent = pickerMulti
+            ? 'Tap cards to select them (tap again to unselect), then tap Done.'
+            : 'Tap a card to select it — it stays highlighted. Nothing is submitted until you tap Confirm.';
         // a fresh dialog (different card set) resets the local selection tracking
         const sig = cards.map(c => c.id).join(',');
         if (sig !== pickerSig) { pickerSelected = new Set(); pickerSig = sig; }
@@ -2176,7 +2244,10 @@ function renderPicker(method, data) {
         cards.forEach(c => {
             const el = cardEl(c, false);
             el.classList.add('pickcard');
-            const selected = pickerSelected.has(c.id) || !!c.isSelected;
+            el.dataset.cid = c.id;
+            // multi: mirror the server's committed selection; single: local pick only
+            const selected = pickerSelected.has(c.id) || (pickerMulti && !!c.isSelected);
+            if (selected) pickerSelected.add(c.id);
             // Clickable = the game's listed targets when it provides them, otherwise EVERY shown card
             // (reveal / scry / choose-from-pile don't send a targets list). Already-selected cards stay
             // clickable so you can unselect. Do NOT gate on isChoosable — it's only set for on-board
@@ -2186,16 +2257,24 @@ function renderPicker(method, data) {
             else if (choosable) el.classList.add('pickok');
             else el.classList.add('pickdim');
             if (choosable) {
-                el.onclick = () => {                       // click = toggle this card's selection on the server
-                    if (pickerSelected.has(c.id)) pickerSelected.delete(c.id); else pickerSelected.add(c.id);
-                    el.classList.toggle('picksel');
-                    el.classList.toggle('pickok');
-                    showCardViewer(c);
-                    send('playerUUID', c.id);              // server updates the count + re-sends the dialog
+                el.onclick = () => {
+                    if (pickerMulti) {                     // live toggle on the server (re-fires with a new count)
+                        if (pickerSelected.has(c.id)) pickerSelected.delete(c.id); else pickerSelected.add(c.id);
+                        el.classList.toggle('picksel');
+                        el.classList.toggle('pickok');
+                        showCardViewer(c);
+                        send('playerUUID', c.id);
+                    } else {                               // single pick: local only, so you can SEE it first
+                        pickerSelected = new Set([c.id]);
+                        showCardViewer(c);
+                        markPickerSelection();
+                    }
                 };
             }
             pickerCardsEl.appendChild(el);
         });
+        const confirmBtn = document.getElementById('pickerConfirm');
+        if (confirmBtn) confirmBtn.disabled = pickerSelected.size === 0;
         pickerEl.style.display = 'flex';
     } else if (onBoard || ACTIONABLE.has(method) || method === 'GAME_OVER' || method === 'END_GAME_INFO') {
         pickerEl.style.display = 'none'; // targeting on the board, or moved past this choice
@@ -2558,7 +2637,12 @@ const Nav = (function () {
     function resolveAction() { const n = lastGameView && lastGameView.stack ? Object.keys(lastGameView.stack).length : 0; if (n) act('PASS_PRIORITY_UNTIL_STACK_RESOLVED'); }
     function cancelAction() {
         if (shown('choiceModal')) { const b = document.getElementById('choiceCancel'); if (b) b.click(); return; }
-        if (shown('picker')) { const b = document.getElementById('pickerDone'); if (b) b.click(); return; }
+        if (shown('picker')) { // cancel = "choose none" / "done" — whichever the current dialog shows
+            const none = document.getElementById('pickerNone'), done = document.getElementById('pickerDone');
+            const b = (none && none.style.display !== 'none') ? none : done;
+            if (b && b.style.display !== 'none') b.click();
+            return;
+        }
         if (sideView) { sideView = null; renderSide(); focusRegion({ kind: 'mybf' }); return; } // B backs out of commander/gy/exile
         if (priorityActive || validTargets.size) send('playerBoolean', false); // "done / cancel"
     }
