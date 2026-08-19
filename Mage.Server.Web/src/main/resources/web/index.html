@@ -16,7 +16,7 @@
     <link rel="apple-touch-icon" href="icon-180.png"/>
     <style>
         * { box-sizing: border-box; }
-        :root { --card-w: 104px; --bf-card-w: 78px; --opp-card-w: 78px; }
+        :root { --card-w: 104px; --bf-card-w: 78px; --opp-card-w: 78px; --peek-h: 46px; }
         body { font-family: system-ui, sans-serif; margin: 0; background: #14161a; color: #e7e7e7; }
         header { padding: 8px 14px; background: #1f242c; border-bottom: 1px solid #333;
                  display: flex; align-items: center; gap: 14px; }
@@ -260,6 +260,8 @@
         #stackLastLog { margin-top: 5px; padding-top: 4px; border-top: 1px solid #2b313b; font-size: 11px;
                         color: #8a9; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .stackitem { display: inline-flex; flex-direction: column; align-items: stretch; }
+        .stackitem.resolvesnext > .card { outline: 2px solid #4fae67; outline-offset: -2px; box-shadow: 0 0 12px #4fae6788; }
+        .resolvestag { font-size: 10px; font-weight: 700; color: #7fdc95; text-align: center; margin-top: 2px; }
         .stacktargets { font-size: 10px; color: #9cf; margin-top: 2px; max-width: var(--bf-card-w); }
         #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; align-self: center; margin-left: 6px; }
         #resolveStackBtn:hover { background: #3c8a54; }
@@ -348,10 +350,9 @@
             -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
             -webkit-user-drag: none; user-drag: none;
         }
-        /* touch-play mode: stop double-tap-zoom on cards (we use double-tap to select on the battlefield),
-           and let a hand card be dragged up to play it without the page scrolling instead */
+        /* touch-play mode: stop the browser's double-tap-zoom on cards so a quick tap registers cleanly
+           as an activate; manipulation still allows page scrolling and pinch-zoom */
         body.touchmode .card { touch-action: manipulation; }
-        body.touchmode .handcard { touch-action: none; }
         /* setup: AI seat row (site-deck picker + optional deck URL) */
         .aiSeatRow { display: flex; gap: 6px; margin: 4px 0; }
         .aiSeatRow .aiDeckSel { flex: 1 1 40%; min-width: 0; }
@@ -382,6 +383,44 @@
         #targetBar .tgtrow-me .tgtbtn { background: #3a5a2f; border-color: #6a5; }
         #targetBar .tgtrow-me .tgtbtn:hover { background: #4a6a3a; }
         #targetBar .tgtlabel { color: #cbd5e2; font-size: 12px; align-self: center; margin-right: 2px; }
+        /* ---- off-screen peek bars: keep your hand and opponents reachable without scrolling ---- */
+        /* Bottom: your hand as an overlapping fan showing just the card tops; hover/focus raises one into
+           view, tap plays it. Shown only while the real hand is scrolled below the viewport. */
+        #handPeek { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: none;
+            justify-content: center; pointer-events: none; }
+        /* overflow MUST stay visible on both axes so a raised card can rise above the bar — hence no
+           horizontal scroll here; renderHandPeek computes the overlap so the fan fits the screen width. */
+        #handPeek .peekrow { display: flex; align-items: flex-start; justify-content: center;
+            height: var(--peek-h); overflow: visible; pointer-events: auto; padding: 0 10px; }
+        #handPeek .peekgrad { position: absolute; left: 0; right: 0; bottom: 0; height: var(--peek-h);
+            background: linear-gradient(to top, #0b0e13f0, #0b0e1300); pointer-events: none; z-index: -1; }
+        #handPeek .card { flex: 0 0 auto; width: var(--card-w); height: calc(var(--card-w) * 1.4);
+            transition: transform .12s ease; cursor: pointer; box-shadow: 0 -5px 14px #000c; border-color: #4a5570; }
+        #handPeek .card:hover, #handPeek .card.raised {
+            transform: translateY(calc(var(--peek-h) - var(--card-w) * 1.4)); z-index: 20; }
+        #handPeek .peektab { position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
+            background: #1b2230ee; border: 1px solid #3a4658; border-bottom: 0; border-radius: 7px 7px 0 0;
+            color: #cbd5e2; font-size: 11px; padding: 1px 10px; pointer-events: none; }
+        /* Top: compact opponent chips (life, counts) + tiny board thumbnails; hover/hold a thumb to preview.
+           Shown only while the real opponents area is scrolled above the viewport. */
+        #oppPeek { position: fixed; left: 0; right: 0; z-index: 58; display: none; gap: 6px;
+            justify-content: center; flex-wrap: wrap; padding: 4px 8px;
+            background: #10151df2; border-bottom: 1px solid #2b3442; box-shadow: 0 4px 14px #0008; }
+        #oppPeek .opchip { display: flex; align-items: center; gap: 5px; background: #1a2230; border: 1px solid #333e4f;
+            border-radius: 9px; padding: 3px 7px; max-width: 46vw; }
+        #oppPeek .opchip.activeturn { border-color: #6a8; box-shadow: 0 0 8px #6a86; }
+        #oppPeek .opchip.targetable { border-color: #d55; box-shadow: 0 0 8px #d556; cursor: pointer; }
+        #oppPeek .opname { font-weight: 700; color: #e7ecf2; font-size: 12px; max-width: 90px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #oppPeek .oplife { color: #ff9a9a; font-weight: 700; font-size: 12px; }
+        #oppPeek .opmeta { color: #9ab; font-size: 11px; }
+        #oppPeek .opthumbs { display: flex; gap: 2px; overflow-x: auto; max-width: 40vw; scrollbar-width: none; }
+        #oppPeek .opthumbs::-webkit-scrollbar { display: none; }
+        #oppPeek .opthumbs .pkthumb { flex: 0 0 auto; width: 26px; height: 36px; min-height: 0; padding: 0;
+            position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center;
+            font-size: 9px; color: #9ab; background: #0e131b; border: 1px solid #2b3442; border-radius: 3px; }
+        #oppPeek .opthumbs .pkthumb.tapped { transform: rotate(6deg); }
+        #oppPeek .opthumbs .pkthumb .art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 3px; }
         #pickerCards .pickok { outline: 2px solid #3fae67; outline-offset: -2px; border-radius: 8px; cursor: pointer; }
         #pickerCards .pickdim { opacity: .4; pointer-events: none; filter: grayscale(.5); }
         #pickerCards .picksel { outline: 3px solid #ffd166; outline-offset: -2px; box-shadow: 0 0 14px #ffd166aa; cursor: pointer; }
@@ -441,15 +480,15 @@
     <div class="setrow"><label><input type="checkbox" id="soundToggle"> Sound effects</label></div>
     <div class="setrow"><label><input type="checkbox" id="animToggle" checked> Animations (attack swing &amp; destroy)</label></div>
     <div class="setrow"><label><input type="checkbox" id="touchToggle"> Touch play (tablet)</label>
-        <div class="hint" style="color:#9ab; margin-top:2px;">Tap a card to preview it. Swipe a hand card <b>up</b> to play it; <b>double-tap</b> a card on the battlefield to select it.</div></div>
+        <div class="hint" style="color:#9ab; margin-top:2px;"><b>Tap</b> a card to use it (play, tap for mana, attack, use ability). <b>Press &amp; hold</b> to preview — holding never plays anything.</div></div>
     <div class="setrow" style="border-top:1px solid #2c3340; padding-top:8px; margin-top:8px;">
         <label for="stepModeSel"><b style="color:#cde">Get priority at</b> — where the game pauses for you each turn</label>
         <select id="stepModeSel" style="width:100%; margin-top:3px;">
-            <option value="default">Main phases &amp; combat only</option>
-            <option value="oppAll">Every phase on opponents’ turns (respond anytime)</option>
-            <option value="all">Every phase on all turns (step through fully)</option>
+            <option value="all">Every step, both turns — never miss a response (recommended)</option>
+            <option value="oppAll">Every step on opponents’ turns + my main phases</option>
+            <option value="default">My main phases &amp; combat only (fastest, may skip responses)</option>
         </select>
-        <div class="hint" style="color:#9ab; margin-top:2px;">Stops the game so you can act at these steps. Use the skip buttons (Next turn, etc.) to jump ahead when you don’t need to respond.</div>
+        <div class="hint" style="color:#9ab; margin-top:2px;">Where the game hands you priority so you can act. “Every step” guarantees you can always respond; use the skip buttons (Next turn, Resolve stack, etc.) to jump ahead when you don’t need to. Declare-attackers/blockers always stop regardless.</div>
     </div>
     <div class="setrow" style="border-top:1px solid #2c3340; padding-top:8px; margin-top:8px;">
         <b style="color:#cde">When skipping (e.g. “My next turn”), stop if…</b>
@@ -556,6 +595,9 @@
     <div id="skipbar"></div>
     <div id="me" class="player me"></div>
 </div>
+<!-- off-screen peek bars: opponents (top) and your hand (bottom), shown only when scrolled out of view -->
+<div id="oppPeek"></div>
+<div id="handPeek"></div>
 
 <div id="logBar">
     <div id="logHeader">▸ Log</div>
@@ -868,8 +910,7 @@ let priorityActive = false;    // true while the server is asking us to act at p
 let myHandIds = new Set();      // ids of cards in our hand (to dim the un-castable ones at priority)
 let combatMode = null;         // 'attack' | 'block' while declaring attackers/blockers (to highlight creatures)
 let plannerPrintings = {};     // card name -> "set|num": the deck source's chosen printing (for matching board art)
-let touchMode = localStorage.getItem('touchMode') === '1'; // tap-to-preview / swipe-to-play (tablet-friendly)
-let swipeConsumed = false;      // set by a completed hand swipe so the trailing click doesn't double-fire
+let touchMode = localStorage.getItem('touchMode') === '1'; // tap=activate, press-and-hold=preview (tablet-friendly)
 
 // callbacks that START a fresh decision (so stale target highlights should clear)
 const ACTIONABLE = new Set(['GAME_SELECT','GAME_PLAY_MANA','GAME_ASK','GAME_GET_AMOUNT','GAME_GET_MULTI_AMOUNT',
@@ -1300,7 +1341,13 @@ const skipBoxes = ['stopNewStack','stopBlockers','stopAttackers','stopMains','st
 const stepModeSel = document.getElementById('stepModeSel');
 function loadSkips() {
     skipBoxes.forEach(id => { const v = localStorage.getItem('skip_'+id); if (v !== null) document.getElementById(id).checked = (v === '1'); });
-    stepModeSel.value = localStorage.getItem('stepMode') || 'oppAll'; // default: stop at every phase on opponents' turns
+    // Default: stop at EVERY step on BOTH turns, so you always get priority to respond (reliability first;
+    // dial it back below if the extra stops get tedious). One-time migration bumps anyone still on the old
+    // 'oppAll' default (which silently skipped all your own non-main steps) up to 'all'.
+    let sm = localStorage.getItem('stepMode');
+    if (sm === null || (sm === 'oppAll' && localStorage.getItem('stepModeV2') !== '1')) sm = 'all';
+    localStorage.setItem('stepModeV2', '1');
+    stepModeSel.value = sm;
 }
 function sendSkips() {
     const m = {};
@@ -2070,18 +2117,23 @@ function renderBoard(gv) {
     meEl.appendChild(myZones);
     // revealed top card of your library (Future Sight, Oracle of Mul Daya, etc.) — hover to read, click to play if able
     if (me.topCard) meEl.appendChild(zone('Top of library', { [me.topCard.id]: me.topCard }, true));
-    meEl.appendChild(zone('My hand (' + Object.keys(gv.myHand || {}).length + ')', gv.myHand, true));
+    const handZone = zone('My hand (' + Object.keys(gv.myHand || {}).length + ')', gv.myHand, true);
+    handZone.id = 'myHandZone';
+    meEl.appendChild(handZone);
 
     // right column: zone buttons (commander/graveyard/exile w/ counts) + my floating mana
     renderSide();
     renderSideMana(me.manaPool);
 
     stackZone.innerHTML = '';
-    const stack = gv.stack ? Object.values(gv.stack) : [];
+    // gv.stack arrives resolves-first → bottom. Render it REVERSED so the stack reads left→right with the
+    // oldest (bottom) on the left and the newest on the right, and the RIGHTMOST card resolves first (LIFO).
+    const stack = (gv.stack ? Object.values(gv.stack) : []).slice().reverse();
     if (!stack.length) { stackZone.innerHTML = '<span class="meta">empty</span>'; }
     else {
-        stack.forEach(c => {
+        stack.forEach((c, i) => {
             const item = document.createElement('div'); item.className = 'stackitem';
+            if (i === stack.length - 1) item.classList.add('resolvesnext'); // rightmost = resolves first
             item.appendChild(cardEl(c, false));
             // show what this spell/ability is targeting (so opponents' targets are visible)
             const names = (c.targets || []).map(id => resolveTargetName(gv, id)).filter(Boolean);
@@ -2089,10 +2141,14 @@ function renderBoard(gv) {
                 const t = document.createElement('div'); t.className = 'stacktargets';
                 t.textContent = '→ ' + names.join(', '); item.appendChild(t);
             }
+            if (i === stack.length - 1) {
+                const tag = document.createElement('div'); tag.className = 'resolvestag';
+                tag.textContent = 'resolves next ▸'; item.appendChild(tag);
+            }
             stackZone.appendChild(item);
         });
-        // resolve-stack action to the right of the stack, with a left-pointing arrow so it reads as
-        // pushing the stack through to resolution (only shown when the stack isn't empty)
+        // resolve-stack action to the right of the stack, arrow pointing left at the top card (which sits
+        // immediately to its left and resolves first)
         const rb = document.createElement('button'); rb.id = 'resolveStackBtn'; rb.textContent = '◂ Resolve stack';
         rb.title = 'Pass priority until the stack fully resolves (F9)';
         rb.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
@@ -2100,6 +2156,9 @@ function renderBoard(gv) {
     }
     renderReveals(gv);
     updateTargetBar(gv, opponents, me);
+    renderHandPeek(gv);
+    renderOppPeek(gv, opponents);
+    updatePeeks();
     Nav.refresh(); // re-index focusable items after every board render
 }
 
@@ -2140,6 +2199,108 @@ function updateTargetBar(gv, opponents, me) {
     }
     bar.style.display = 'flex';
 }
+
+// ---- Off-screen peek bars -------------------------------------------------------------------------
+// Bottom bar: your hand as an overlapping fan showing just the card tops. Hover (desktop) or focus raises
+// a card fully into view; a quick tap plays it; press-and-hold previews. Only shown when the real hand is
+// scrolled below the viewport (see updatePeeks). Cards are real cardEls, so playability/targeting all work.
+function renderHandPeek(gv) {
+    const peek = document.getElementById('handPeek');
+    if (!peek) return;
+    const cards = gv.myHand ? Object.values(gv.myHand) : [];
+    peek.innerHTML = '';
+    peek.dataset.has = cards.length ? '1' : '0';
+    if (!cards.length) return;
+    const grad = document.createElement('div'); grad.className = 'peekgrad'; peek.appendChild(grad);
+    const tab = document.createElement('div'); tab.className = 'peektab';
+    tab.textContent = 'Your hand (' + cards.length + ') — tap to play · hold to preview';
+    peek.appendChild(tab);
+    const row = document.createElement('div'); row.className = 'peekrow';
+    // compute the horizontal overlap so the whole fan fits the screen width (no horizontal scroll, which
+    // would clip the vertical overflow a raised card needs)
+    const cw = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--card-w')) || 104;
+    const maxW = Math.min(window.innerWidth - 28, 1100);
+    let step = cw * 0.5; // ideal per-card reveal
+    if (cards.length > 1) step = Math.max(16, Math.min(step, (maxW - cw) / (cards.length - 1)));
+    cards.forEach((c, i) => {
+        const el = cardEl(c, true);
+        el.removeAttribute('data-cid'); el._nav = false; // clone: don't shadow the real card for arrows/nav
+        el.style.marginLeft = i === 0 ? '0' : (-(cw - step)) + 'px';
+        row.appendChild(el);
+    });
+    peek.appendChild(row);
+}
+
+// Top bar: a compact chip per opponent (life, hand/graveyard counts) plus tiny board thumbnails you can
+// hover/hold to preview. Chips for a targetable player are clickable (target them). Only shown when the
+// real opponents area is scrolled above the viewport.
+function renderOppPeek(gv, opponents) {
+    const peek = document.getElementById('oppPeek');
+    if (!peek) return;
+    peek.innerHTML = '';
+    (opponents || []).forEach(p => {
+        if (p.hasLeft) return;
+        const chip = document.createElement('div');
+        chip.className = 'opchip' + (gv.activePlayerId === p.playerId ? ' activeturn' : '')
+            + (validTargets.has(p.playerId) ? ' targetable' : '');
+        if (validTargets.has(p.playerId)) chip.onclick = () => pickPlayer(p.playerId);
+        const name = document.createElement('span'); name.className = 'opname'; name.textContent = strip(p.name);
+        const life = document.createElement('span'); life.className = 'oplife'; life.textContent = '♥' + p.life;
+        const meta = document.createElement('span'); meta.className = 'opmeta';
+        meta.textContent = '✋' + p.handCount + ' ⚰' + Object.keys(p.graveyard || {}).length;
+        chip.appendChild(name); chip.appendChild(life); chip.appendChild(meta);
+        const bf = p.battlefield ? Object.values(p.battlefield) : [];
+        if (bf.length) {
+            const th = document.createElement('div'); th.className = 'opthumbs';
+            const CAP = 18;
+            bf.slice(0, CAP).forEach(c => th.appendChild(peekThumb(c))); // view-only; hover/hold previews
+            if (bf.length > CAP) { const m = document.createElement('span'); m.className = 'opmeta'; m.textContent = '+' + (bf.length - CAP); th.appendChild(m); }
+            chip.appendChild(th);
+        }
+        peek.appendChild(chip);
+    });
+}
+
+// A lightweight opponent-board thumbnail (just the art) — much cheaper than a full cardEl to build for
+// every permanent each frame. Carries `_card` so hover (desktop) and press-and-hold (touch) preview it.
+function peekThumb(card) {
+    const d = document.createElement('div'); d.className = 'card pkthumb' + (card.tapped ? ' tapped' : '');
+    d._card = card;
+    if (artCandidates(card).length) {
+        const img = document.createElement('img'); img.className = 'art'; img.loading = 'lazy';
+        img.alt = card.name || ''; setCardImage(img, card); d.appendChild(img);
+    } else {
+        d.textContent = strip(card.name || '?').slice(0, 2);
+    }
+    d.onmouseenter = () => showCardViewer(card);
+    d.title = strip((card.name || '?') + (card.tapped ? ' (tapped)' : ''));
+    return d;
+}
+
+// Toggle the peek bars based on scroll: hand peek appears once the real hand is (nearly) below the
+// viewport; opponent peek appears once the real opponents area is scrolled up past the sticky phase bar.
+function updatePeeks() {
+    const vh = window.innerHeight;
+    const handPeek = document.getElementById('handPeek');
+    if (handPeek) {
+        const hz = document.getElementById('myHandZone');
+        let show = false;
+        if (hz && handPeek.dataset.has === '1') show = hz.getBoundingClientRect().top > vh - 60;
+        handPeek.style.display = show ? 'flex' : 'none';
+    }
+    const oppPeek = document.getElementById('oppPeek');
+    if (oppPeek) {
+        const pb = document.getElementById('phasebar');
+        const pbH = pb ? pb.getBoundingClientRect().height : 0;
+        const op = document.getElementById('opponents');
+        let show = false;
+        if (op && oppPeek.children.length) show = op.getBoundingClientRect().bottom < pbH + 8;
+        oppPeek.style.top = pbH + 'px';
+        oppPeek.style.display = show ? 'flex' : 'none';
+    }
+}
+window.addEventListener('scroll', updatePeeks, true);
+window.addEventListener('resize', updatePeeks);
 
 // Cards currently revealed to everyone (reveal top of library, etc.) or that I'm looking at (scry).
 // This data rides along in the GameView; we just render it so the reveal is actually visible.
@@ -2917,51 +3078,17 @@ const Nav = (function () {
     document.addEventListener('webkitfullscreenchange', sync);
 })();
 
-// ---- Card click dispatch: classic (click plays) vs touch (tap previews, swipe/double-tap acts) --
+// ---- Card click dispatch --------------------------------------------------------------------------
+// A quick tap ALWAYS activates the card (play it / tap for mana / declare attacker / use ability /
+// pick a target). Previewing is a separate gesture: on touch, press-and-hold pops the big preview and
+// swallows the tap (see the long-press handler), so a hold NEVER acts. On desktop, hover drives the
+// side viewer. This makes tapping (especially paying mana) fast — no double-tap, no swipe needed.
 function onCardClick(e, card, d) {
-    if (swipeConsumed) { swipeConsumed = false; return; }        // a swipe already played this card
-    if (!touchMode) { if (d._activate) d._activate(); return; }   // classic: click = play/select
-    // A choice the game is actively asking for (target, declare attacker/blocker, pick a card) is
-    // reversible and expected — take it on a single tap. Only proactively activating a permanent's
-    // ability needs the double-tap guard (so a stray tap can't fire something you didn't mean to).
-    const isChoice = (typeof validTargets !== 'undefined' && validTargets.has(card.id)) || !!combatMode;
-    if (isChoice) { if (d._activate) d._activate(); return; }
-    if (myHandIds.has(card.id)) { showCardViewer(card); return; } // hand: tap previews (swipe up to play)
-    // battlefield: first tap previews, a second tap within the window selects (like a classic click)
-    const now = performance.now();
-    if (d._lastTap && (now - d._lastTap) < 550) { d._lastTap = 0; if (d._activate) d._activate(); }
-    else { d._lastTap = now; showCardViewer(card); }
+    if (d._activate) d._activate();
 }
 
-// ---- Touch play: swipe a hand card up to play it (pointer events cover both touch and mouse) ----
-(function () {
-    let start = null, el = null, moved = false;
-    const THRESH = 60; // px upward to count as "play"
-    const isHand = (c) => c && c._card && myHandIds.has(c._card.id);
-    document.addEventListener('pointerdown', (e) => {
-        if (!touchMode) return;
-        const c = e.target.closest && e.target.closest('.card.handcard');
-        if (!isHand(c)) return;
-        el = c; start = { x: e.clientX, y: e.clientY }; moved = false;
-    }, true);
-    document.addEventListener('pointermove', (e) => {
-        if (!el || !start) return;
-        const dy = e.clientY - start.y, dx = e.clientX - start.x;
-        if (!moved && (Math.abs(dy) > 8 || Math.abs(dx) > 8)) moved = true;
-        if (moved && dy < 0) { el.style.transform = `translateY(${Math.max(dy, -170)}px)`; el.style.zIndex = '200'; el.style.opacity = '0.9'; }
-    }, true);
-    function end(e, cancel) {
-        if (!el || !start) { el = null; start = null; return; }
-        const dy = e.clientY - start.y;
-        const target = el;
-        target.style.transform = ''; target.style.zIndex = ''; target.style.opacity = '';
-        el = null; start = null;
-        if (!cancel && moved && dy < -THRESH && target._activate) { swipeConsumed = true; target._activate(); }
-        moved = false;
-    }
-    document.addEventListener('pointerup', (e) => end(e, false), true);
-    document.addEventListener('pointercancel', (e) => end(e, true), true);
-})();
+// (Swipe-to-play was removed: a quick tap now plays a hand card directly, and keeping hand cards
+// free of touch-action:none lets you scroll the page by dragging on them — needed for the hand peek.)
 
 // ---- Long-press to zoom a card (touch) --------------------------------------------------------
 // On a tablet there's no hover to drive the side viewer, and full-screen disables the browser's
