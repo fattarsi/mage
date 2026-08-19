@@ -54,6 +54,11 @@ public final class DeckStore {
     private synchronized void persist() {
         try {
             file.getParentFile().mkdirs();
+            // keep a rolling backup of the previous state so an accidental delete is recoverable
+            if (file.isFile() && file.length() > 2) {
+                java.nio.file.Files.copy(file.toPath(), new File(file.getParentFile(), "decks.json.bak").toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
             Files.write(file.toPath(), GSON.toJson(decks).getBytes(StandardCharsets.UTF_8));
         } catch (Exception e) {
             logger.warn("web gateway: could not save decks", e);
@@ -99,12 +104,31 @@ public final class DeckStore {
     public synchronized boolean removeById(String id) {
         for (int i = 0; i < decks.size(); i++) {
             if (id.equals(optString(decks.get(i).getAsJsonObject(), "id"))) {
+                trash(decks.get(i).getAsJsonObject()); // keep a copy so a delete is never permanent
                 decks.remove(i);
                 persist();
                 return true;
             }
         }
         return false;
+    }
+
+    /** Append a deleted deck to a trash file (capped) so it can always be recovered. */
+    private void trash(JsonObject removed) {
+        try {
+            File tf = new File(file.getParentFile(), "decks.json.trash");
+            JsonArray t = new JsonArray();
+            if (tf.isFile() && tf.length() > 0) {
+                JsonElement el = JsonParser.parseString(new String(Files.readAllBytes(tf.toPath()), StandardCharsets.UTF_8));
+                if (el.isJsonArray()) t = el.getAsJsonArray();
+            }
+            t.add(removed);
+            while (t.size() > 100) t.remove(0);
+            file.getParentFile().mkdirs();
+            Files.write(tf.toPath(), GSON.toJson(t).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            logger.warn("web gateway: could not write deck trash", e);
+        }
     }
 
     public synchronized boolean rename(String id, String label) {
