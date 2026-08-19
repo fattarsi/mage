@@ -975,15 +975,26 @@ const SKIPS = [
     {label:'My next turn (F7)', key:'F7', action:'PASS_PRIORITY_UNTIL_MY_NEXT_TURN', title:'Keep skipping to your next turn — pauses for responses, then resumes'},
     {label:'Stop skipping (F3)', key:'F3', fn:stopSticky, title:'Cancel any armed skip / Run to breakpoint and stop here now'},
 ];
+let stickyBypassBP = false; // let a freshly-armed skip leave the breakpoint it's currently sitting on
 function setSticky(action) {
     if (stickySkip && stickySkip.action === action) { stopSticky(); return; } // click again = toggle off
     advancing = false; updateAdvanceBtn();                                     // mutually exclusive with Run to breakpoint
     const gv = lastGameView || {};
     stickySkip = { action, turn: gv.turn, step: gv.step };
-    act(action); updateSkipUI();
+    updateSkipUI();
+    if (breakpoints.size) {
+        // Breakpoints must be HARD stops. The server-side skip (passedAllTurns/…) auto-passes every step
+        // without handing us a frame, so it would sail past a breakpoint. Drive the skip client-side instead
+        // (one pass per frame), so we can check for a breakpoint before each pass. Allow leaving the current
+        // frame even if it's a breakpoint (you deliberately chose to skip from here).
+        stickyBypassBP = true;
+        trySticky(lastMethod, lastGameView);
+    } else {
+        act(action); // no breakpoints: fast server-side skip
+    }
 }
 function stopSticky() {
-    stickySkip = null; advancing = false; updateAdvanceBtn();
+    stickySkip = null; advancing = false; stickyBypassBP = false; updateAdvanceBtn();
     act('PASS_PRIORITY_CANCEL_ALL_ACTIONS'); updateSkipUI();
 }
 function updateSkipUI() { for (const a in skipBtns) skipBtns[a].classList.toggle('armed', !!stickySkip && stickySkip.action === a); }
@@ -1001,12 +1012,21 @@ function stickyReached(gv) {
 }
 function trySticky(method, gv) {
     if (!stickySkip || method !== 'GAME_SELECT' || !gv) return;
+    // HARD STOP: a breakpoint always wins over any armed skip (unless we just armed on this very frame).
+    if (atBreakpoint(gv) && !stickyBypassBP) {
+        stopSkippingWithNotice('⏸ Stopped at your breakpoint — ' + stepLabel(gv.step) + '. Resume the skip when ready.');
+        return;
+    }
+    stickyBypassBP = false;
     if (stickyReached(gv)) { stickySkip = null; updateSkipUI(); return; }      // arrived at the target — stop & disarm
     const raw = String((lastData && lastData.message) || '').toLowerCase();
     if (/select attackers|select blockers/.test(raw)) return;                  // your combat — handle it; skip stays armed
     const stackSize = gv.stack ? Object.keys(gv.stack).length : 0;
     if (stackSize > 0) return;                                                 // interrupt on the stack — respond; resumes when it clears
-    act(stickySkip.action);                                                    // empty stack, not the target → resume skipping
+    // With breakpoints set the skip is client-driven (single pass) so we can hard-stop; otherwise resume
+    // the fast server-side skip.
+    if (breakpoints.size) send('playerBoolean', false);
+    else act(stickySkip.action);
 }
 const skipbar = document.getElementById('skipbar');
 // "run to breakpoint" button (shown only when breakpoints are set), then the standard skip buttons
@@ -1521,7 +1541,8 @@ function watchMyLosses(prev, gv) {
 }
 let skipNoticeTimer = null;
 function stopSkippingWithNotice(text) {
-    stickySkip = null; advancing = false; updateSkipUI(); updateAdvanceBtn();
+    stickySkip = null; advancing = false; stickyBypassBP = false; updateSkipUI(); updateAdvanceBtn();
+    act('PASS_PRIORITY_CANCEL_ALL_ACTIONS'); // also cancel any server-side skip so the stop is real
     showBanner(text);
     if (skipNoticeTimer) clearTimeout(skipNoticeTimer);
     skipNoticeTimer = setTimeout(hideBanner, 8000); // informational — clear itself after a bit
@@ -1697,9 +1718,11 @@ function toggleBreakpoint(pid, key) {
     if (breakpoints.has(k)) { breakpoints.delete(k); }
     else {
         breakpoints.add(k);
-        // ensure the engine will actually give us priority at this phase, else we'd skip right past it
-        const cb = document.getElementById(PHASE_TO_STOP[key]);
-        if (cb && !cb.checked) { cb.checked = true; sendSkips(); }
+        // Make the breakpoint a real HARD stop: (1) ensure the engine hands us priority at every phase so
+        // a client-side breakpoint can actually fire (not get auto-passed), and (2) if a fast server-side
+        // skip is currently running, cancel it so skipping becomes client-driven and stops at breakpoints.
+        if (stepModeSel.value !== 'all') { stepModeSel.value = 'all'; localStorage.setItem('stepMode','all'); sendSkips(); }
+        if (stickySkip) act('PASS_PRIORITY_CANCEL_ALL_ACTIONS');
     }
     if (lastGameView) renderPhaseBar(lastGameView);
     updateAdvanceBtn();
@@ -1707,6 +1730,11 @@ function toggleBreakpoint(pid, key) {
 function atBreakpoint(gv) {
     let s = gv.step || ''; if (s === 'FIRST_COMBAT_DAMAGE') s = 'COMBAT_DAMAGE';
     return breakpoints.has(bpKey(gv.activePlayerId, s));
+}
+function stepLabel(step) {
+    let s = step || ''; if (s === 'FIRST_COMBAT_DAMAGE') s = 'COMBAT_DAMAGE';
+    const m = PHASE_STEPS.find(p => p[0] === s);
+    return m ? m[1] : (s || 'this step');
 }
 // Looped, per-player phase bar: starts at the active player and goes around back to you. Your turn is
 // expanded; opponents collapse to a pill you can click to expand. Click ANY phase cell to toggle a
