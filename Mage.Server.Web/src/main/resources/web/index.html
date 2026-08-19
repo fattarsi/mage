@@ -28,9 +28,9 @@
         #status { font-size: 12px; color: #8bd; }
         #turn { font-size: 12px; color: #fc9; margin-left: auto; }
         #board { padding: 10px 14px; }
-        /* phase progress bar (sticky at top while scrolling) */
-        #phasebar { position: sticky; top: 0; z-index: 35; overflow-x: auto; white-space: nowrap;
-                    background: #14161a; margin: -10px -14px 10px; padding: 8px 14px; border-bottom: 1px solid #262d38; }
+        /* phase/turn timeline — sits in-flow just above the stack (the action area) */
+        #phasebar { position: static; z-index: 35; overflow-x: auto; white-space: nowrap;
+                    background: #14161a; margin: 6px 0 6px; padding: 6px 10px; border: 1px solid #262d38; border-radius: 8px; }
         /* single horizontal timeline: current phase at the left, runs forward through the turn loop */
         #phasebar .phaserow { display: flex; align-items: center; gap: 2px; width: max-content; }
         #phasebar .pchip { font-size: 10px; font-weight: 700; color: #8aa; white-space: nowrap; padding: 0 4px 0 8px;
@@ -395,12 +395,14 @@
         #handPeek .peekgrad { position: absolute; left: 0; right: 0; bottom: 0; height: var(--peek-h);
             background: linear-gradient(to top, #0b0e13f0, #0b0e1300); pointer-events: none; z-index: -1; }
         #handPeek .card { flex: 0 0 auto; width: var(--card-w); height: calc(var(--card-w) * 1.4);
-            transition: transform .12s ease; cursor: pointer; box-shadow: 0 -5px 14px #000c; border-color: #4a5570; }
+            transition: transform .12s ease; cursor: pointer; box-shadow: 0 -5px 14px #000c;
+            background: #232a33; border: 1px solid #4a5570; }
+        /* keep fan cards fully opaque so overlapping tops don't blur together; show playability by a
+           highlight, not by fading unplayable cards out */
+        #handPeek .card.dim { opacity: 1; filter: none; }
+        #handPeek .card.playable { box-shadow: 0 0 0 2px #5fd08a, 0 -5px 16px #000c; border-color: #5fd08a; }
         #handPeek .card:hover, #handPeek .card.raised {
             transform: translateY(calc(var(--peek-h) - var(--card-w) * 1.4)); z-index: 20; }
-        #handPeek .peektab { position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
-            background: #1b2230ee; border: 1px solid #3a4658; border-bottom: 0; border-radius: 7px 7px 0 0;
-            color: #cbd5e2; font-size: 11px; padding: 1px 10px; pointer-events: none; }
         /* Top: compact opponent chips (life, counts) + tiny board thumbnails; hover/hold a thumb to preview.
            Shown only while the real opponents area is scrolled above the viewport. */
         #oppPeek { position: fixed; left: 0; right: 0; z-index: 58; display: none; gap: 6px;
@@ -585,8 +587,9 @@
 
 <div id="banner"></div>
 <div id="board">
-    <div id="phasebar"></div>
     <div id="opponents"></div>
+    <!-- phase/turn timeline sits by the stack (the action area), not pinned to the top of the page -->
+    <div id="phasebar"></div>
     <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div><div id="stackLastLog" title="most recent game-log entry"></div></div>
     <!-- quick-target buttons for targetable players (e.g. whom to attack), placed by the stack -->
     <div id="targetBar" style="display:none"></div>
@@ -753,7 +756,7 @@ function renderSide() {
     zpTitleEl.textContent = ZONE_TITLE[sideView] + ' (' + cards.length + ')';
     zpCardsEl.innerHTML = '';
     if (!cards.length) zpCardsEl.innerHTML = '<span class="meta">— empty —</span>';
-    else cards.forEach(c => zpCardsEl.appendChild(cardEl(c, true))); // clickable: cast commander, or target a card in gy/exile (e.g. reanimate)
+    else cards.forEach(c => zpCardsEl.appendChild(cardEl(c, true, {noCache:true}))); // clickable: cast commander, or target a card in gy/exile (e.g. reanimate)
     zonePopupEl.classList.add('open');
     Nav.refresh(); // index the side-zone cards so the controller can move into them
 }
@@ -965,6 +968,7 @@ let stickySkip = null;   // { action, turn, step }
 const skipBtns = {};     // action -> button element (for the armed highlight)
 const SKIPS = [
     {label:'Pass (F2)', key:'F2', fn:()=>send('playerBoolean', false), title:'Pass priority once'},
+    {label:'▸ Resolve stack (F9)', fn:()=>act('PASS_PRIORITY_UNTIL_STACK_RESOLVED'), title:'Pass priority until the ENTIRE stack resolves'},
     {label:'Next main (F5)', key:'F5', action:'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE', title:'Keep skipping to the next main phase — pauses for responses, then resumes (click again to cancel)'},
     {label:'End of turn (F6)', key:'F6', action:'PASS_PRIORITY_UNTIL_TURN_END_STEP', title:'Keep skipping to this turn’s end step'},
     {label:'Next turn (F4)', key:'F4', action:'PASS_PRIORITY_UNTIL_NEXT_TURN', title:'Keep skipping to the next turn'},
@@ -1582,31 +1586,64 @@ function computePlayable(gv) {
     scan(cpo);
 }
 
-function cardEl(card, clickable) {
-    const d = document.createElement('div');
-    const isTarget = validTargets.has(card.id);
-    // at priority, dim hand cards we can't play right now (wrong phase / not enough mana / not our turn)
-    const dim = priorityActive && myHandIds.has(card.id) && !playableIds.has(card.id) && !isTarget;
-    // during combat, highlight my untapped creatures (eligible attackers/blockers)
-    const eligible = combatMode && card.controlled && (card.cardTypes||[]).includes('CREATURE') && !card.tapped;
-    d.className = 'card' + (clickable ? ' clickable' : '')
-        + (playableIds.has(card.id) ? ' playable' : '')
-        + (isTarget ? ' targetable' : '')
-        + (eligible ? ' eligible' : '')
-        + (dim ? ' dim' : '')
-        + (card.tapped ? ' tapped' : '');
+// --- Card-tile reuse cache: the board is rebuilt on every game frame, and recreating each <img> made the
+// whole board flicker as decoded art was thrown away and re-fetched. Instead we cache the built tile by
+// card id + a signature of its STATIC content (name/art/PT/counters/…); when unchanged, we reuse the exact
+// same DOM node (moving a node preserves its decoded image → no flash) and only re-apply the per-frame
+// highlight state. Only board/hand cards are cached; transient views (stack, reveals, picker, peeks) opt out.
+const cardElCache = new Map();     // cardId -> { el, sig }
+let cardRenderUsed = new Set();     // ids already produced in the current render (avoid reusing one twice)
+function beginCardRender() { cardRenderUsed = new Set(); }
+function pruneCardCache() { for (const k of cardElCache.keys()) if (!cardRenderUsed.has(k)) cardElCache.delete(k); }
+function cardSig(card) {
     const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
     const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
     const isCreature = (card.cardTypes||[]).includes('CREATURE');
     const pt = (card.power !== undefined && isCreature) ? `${card.power}/${card.toughness}` : '';
-    // counters (e.g. +1/+1, charge, loyalty) — list of {name, count}
+    const counters = (Array.isArray(card.counters) ? card.counters.filter(c => c && c.count) : []).map(c => c.name+':'+c.count).join(',');
+    return [card.name, cost, types, pt, card.loyalty||'', counters, isCreature && card.summoningSickness ? 's':'',
+        card.isAbility?'a':'', (card.rules||[]).join('|'), card.faceDown?'f':'', artUrlFor(card)||''].join('~');
+}
+// per-frame highlight/handlers — safe to re-apply to a reused node without disturbing its static content
+function applyCardState(d, card, clickable) {
+    const isTarget = validTargets.has(card.id);
+    const dim = priorityActive && myHandIds.has(card.id) && !playableIds.has(card.id) && !isTarget;
+    const eligible = combatMode && card.controlled && (card.cardTypes||[]).includes('CREATURE') && !card.tapped;
+    d.classList.toggle('clickable', !!clickable);
+    d.classList.toggle('playable', playableIds.has(card.id));
+    d.classList.toggle('targetable', isTarget);
+    d.classList.toggle('eligible', !!eligible);
+    d.classList.toggle('dim', !!dim);
+    d.classList.toggle('tapped', !!card.tapped);
+    d.classList.toggle('handcard', myHandIds.has(card.id));
+    d.classList.remove('attached'); // caller (battlefieldEl) re-adds if this card is an attachment this frame
+    d._card = card;
+    d._nav = true;
+    d._navAct = !!(clickable || playableIds.has(card.id) || isTarget || eligible);
+    if (clickable) { d._activate = () => send('playerUUID', card.id); d.onclick = (e) => onCardClick(e, card, d); }
+    else { d._activate = null; d.onclick = null; }
+}
+function cardEl(card, clickable, opts) {
+    opts = opts || {};
+    const id = card.id;
+    const cacheable = id && !opts.noCache && !cardRenderUsed.has(id);
+    const sig = cardSig(card);
+    if (cacheable) {
+        const c = cardElCache.get(id);
+        if (c && c.sig === sig) { cardRenderUsed.add(id); applyCardState(c.el, card, clickable); return c.el; }
+    }
+    const d = document.createElement('div');
+    d.className = 'card';
+    if (id) d.dataset.cid = id; // for combat arrows
+    const cost = card.manaCostStr || (Array.isArray(card.manaCost) ? card.manaCost.join('') : '') || '';
+    const types = [].concat(card.superTypes||[], card.cardTypes||[], card.subTypes||[]).join(' ');
+    const isCreature = (card.cardTypes||[]).includes('CREATURE');
+    const pt = (card.power !== undefined && isCreature) ? `${card.power}/${card.toughness}` : '';
     const counters = Array.isArray(card.counters) ? card.counters.filter(c => c && c.count) : [];
-    if (card.id) d.dataset.cid = card.id; // for combat arrows
     // overlays drawn ON TOP of the art so they stay visible: P/T (or loyalty) bottom-right, counters bottom-left
     const ptBadge = pt ? `${pt}` : (card.loyalty ? `◆${card.loyalty}` : '');
     const counterBadges = counters.map(c =>
         `<span class="ctr" title="${esc(c.name)} counters">${msg(c.name)}${c.count>1?' ×'+c.count:''}</span>`).join('');
-    // summoning sickness: a creature that came under control this turn can't attack/tap for abilities
     const sick = isCreature && card.summoningSickness;
     d.innerHTML = `<span class="cc">${manaPips(cost)}</span><span class="cn">${card.isAbility?'⚡ ':''}${msg(card.name||'?')}</span>`
         + `<div class="ct">${esc(types)}</div>`
@@ -1620,20 +1657,14 @@ function cardEl(card, clickable) {
     // real card art (tokens looked up by name, with fallback); on failure the text card shows through
     if (artCandidates(card).length) {
         const img = document.createElement('img');
-        img.className = 'art'; img.loading = 'lazy'; img.alt = card.name || '';
+        img.className = 'art'; img.alt = card.name || '';
         setCardImage(img, card);
         d.appendChild(img);
     }
-    d.onmouseenter = () => showCardViewer(card);
+    d.onmouseenter = () => showCardViewer(d._card);
     d.onmouseleave = () => scheduleHideViewer();
-    if (myHandIds.has(card.id)) d.classList.add('handcard'); // for touch-mode swipe-to-play
-    if (clickable) {
-        d._activate = () => send('playerUUID', card.id); // the real "play/select this card" action
-        d.onclick = (e) => onCardClick(e, card, d);
-    }
-    d._card = card;          // for keyboard/controller focus preview
-    d._nav = true;           // mark as a navigable item
-    if (clickable || playableIds.has(card.id) || isTarget || eligible) d._navAct = true; // has a confirm action
+    applyCardState(d, card, clickable);
+    if (cacheable) { cardRenderUsed.add(id); cardElCache.set(id, { el: d, sig }); }
     return d;
 }
 
@@ -1991,6 +2022,7 @@ function zone(label, cardsMap, clickable) {
 }
 
 function renderBoard(gv) {
+    beginCardRender(); // start a fresh card-reuse pass (see cardElCache)
     renderPhaseBar(gv);
     const me = gv.players.find(p => p.controlled) || gv.players[0];
     myHandIds = new Set(Object.keys(gv.myHand || {}));
@@ -2134,7 +2166,7 @@ function renderBoard(gv) {
         stack.forEach((c, i) => {
             const item = document.createElement('div'); item.className = 'stackitem';
             if (i === stack.length - 1) item.classList.add('resolvesnext'); // rightmost = resolves first
-            item.appendChild(cardEl(c, false));
+            item.appendChild(cardEl(c, false, {noCache:true}));
             // show what this spell/ability is targeting (so opponents' targets are visible)
             const names = (c.targets || []).map(id => resolveTargetName(gv, id)).filter(Boolean);
             if (names.length) {
@@ -2147,11 +2179,11 @@ function renderBoard(gv) {
             }
             stackZone.appendChild(item);
         });
-        // resolve-stack action to the right of the stack, arrow pointing left at the top card (which sits
-        // immediately to its left and resolves first)
-        const rb = document.createElement('button'); rb.id = 'resolveStackBtn'; rb.textContent = '◂ Resolve stack';
-        rb.title = 'Pass priority until the stack fully resolves (F9)';
-        rb.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
+        // "Resolve next": a single pass so ONLY the top (rightmost) item resolves — opponents may still
+        // respond. Arrow points left at that top card, which sits immediately to its left.
+        const rb = document.createElement('button'); rb.id = 'resolveStackBtn'; rb.textContent = '◂ Resolve next';
+        rb.title = 'Pass priority once so the next (rightmost) item resolves — opponents can still respond. (Use “Resolve stack” below to run the whole stack.)';
+        rb.onclick = () => send('playerBoolean', false);
         stackZone.appendChild(rb);
     }
     renderReveals(gv);
@@ -2159,6 +2191,7 @@ function renderBoard(gv) {
     renderHandPeek(gv);
     renderOppPeek(gv, opponents);
     updatePeeks();
+    pruneCardCache(); // drop cached tiles for cards that left the board
     Nav.refresh(); // re-index focusable items after every board render
 }
 
@@ -2212,9 +2245,6 @@ function renderHandPeek(gv) {
     peek.dataset.has = cards.length ? '1' : '0';
     if (!cards.length) return;
     const grad = document.createElement('div'); grad.className = 'peekgrad'; peek.appendChild(grad);
-    const tab = document.createElement('div'); tab.className = 'peektab';
-    tab.textContent = 'Your hand (' + cards.length + ') — tap to play · hold to preview';
-    peek.appendChild(tab);
     const row = document.createElement('div'); row.className = 'peekrow';
     // compute the horizontal overlap so the whole fan fits the screen width (no horizontal scroll, which
     // would clip the vertical overflow a raised card needs)
@@ -2223,7 +2253,7 @@ function renderHandPeek(gv) {
     let step = cw * 0.5; // ideal per-card reveal
     if (cards.length > 1) step = Math.max(16, Math.min(step, (maxW - cw) / (cards.length - 1)));
     cards.forEach((c, i) => {
-        const el = cardEl(c, true);
+        const el = cardEl(c, true, {noCache:true});
         el.removeAttribute('data-cid'); el._nav = false; // clone: don't shadow the real card for arrows/nav
         el.style.marginLeft = i === 0 ? '0' : (-(cw - step)) + 'px';
         row.appendChild(el);
@@ -2290,12 +2320,11 @@ function updatePeeks() {
     }
     const oppPeek = document.getElementById('oppPeek');
     if (oppPeek) {
-        const pb = document.getElementById('phasebar');
-        const pbH = pb ? pb.getBoundingClientRect().height : 0;
+        // phase bar no longer lives at the top, so the opponent peek pins to the very top of the viewport
         const op = document.getElementById('opponents');
         let show = false;
-        if (op && oppPeek.children.length) show = op.getBoundingClientRect().bottom < pbH + 8;
-        oppPeek.style.top = pbH + 'px';
+        if (op && oppPeek.children.length) show = op.getBoundingClientRect().bottom < 6;
+        oppPeek.style.top = '0px';
         oppPeek.style.display = show ? 'flex' : 'none';
     }
 }
@@ -2317,7 +2346,7 @@ function renderReveals(gv) {
         const lbl = document.createElement('div'); lbl.className = 'rvname';
         lbl.textContent = strip(g.name || 'Revealed'); wrap.appendChild(lbl);
         const z = document.createElement('div'); z.className = 'zone';
-        cards.forEach(c => z.appendChild(cardEl(c, false)));
+        cards.forEach(c => z.appendChild(cardEl(c, false, {noCache:true})));
         wrap.appendChild(z); box.appendChild(wrap);
     }
     box.classList.toggle('on', any);
@@ -2403,7 +2432,7 @@ function renderPicker(method, data) {
         pickerCardsEl.innerHTML = '';
         const targetSet = (Array.isArray(data.targets) && data.targets.length) ? new Set(data.targets) : null;
         cards.forEach(c => {
-            const el = cardEl(c, false);
+            const el = cardEl(c, false, {noCache:true});
             el.classList.add('pickcard');
             el.dataset.cid = c.id;
             // multi: mirror the server's committed selection; single: local pick only
