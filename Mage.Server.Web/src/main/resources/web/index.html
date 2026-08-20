@@ -16,7 +16,7 @@
     <link rel="apple-touch-icon" href="icon-180.png"/>
     <style>
         * { box-sizing: border-box; }
-        :root { --card-w: 104px; --bf-card-w: 78px; --opp-card-w: 78px; --peek-h: 46px; }
+        :root { --card-w: 104px; --bf-card-w: 78px; --opp-card-w: 78px; --peek-h: calc(var(--card-w) * 1.4 * 0.6); } /* hand fan shows ~60% of each card */
         body { font-family: system-ui, sans-serif; margin: 0; background: #14161a; color: #e7e7e7; }
         header { padding: 8px 14px; background: #1f242c; border-bottom: 1px solid #333;
                  display: flex; align-items: center; gap: 14px; }
