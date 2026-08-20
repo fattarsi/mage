@@ -190,7 +190,7 @@
                 position: relative; line-height: 1.3; overflow: hidden; transition: width .12s, min-height .12s; }
         .card .cn { display: block; white-space: normal; word-break: break-word; }
         .card img.art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
-                        border-radius: 5px; }
+                        border-radius: 5px; pointer-events: none; } /* long-press hits the card, not the <img> menu */
         .card.clickable { cursor: pointer; border-color: #5a6b86; }
         .card.clickable:hover { border-color: #9cf; background: #2b3340; }
         .card.playable { box-shadow: 0 0 0 2px #4a7; }
@@ -263,10 +263,11 @@
         .stackitem.resolvesnext > .card { outline: 2px solid #4fae67; outline-offset: -2px; box-shadow: 0 0 12px #4fae6788; }
         .resolvestag { font-size: 10px; font-weight: 700; color: #7fdc95; text-align: center; margin-top: 2px; }
         .stacktargets { font-size: 10px; color: #9cf; margin-top: 2px; max-width: var(--bf-card-w); }
-        .resolveCol { display: flex; flex-direction: column; gap: 5px; align-self: center; margin-left: 6px; }
-        #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; }
+        #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; align-self: center; margin-left: 6px; }
         #resolveStackBtn:hover { background: #3c8a54; }
-        #resolveAllBtn { background: #26543a; font-size: 12px; padding: 6px 12px; }
+        /* "Resolve stack" sits on its own row at the bottom of the stack box, clearly separated */
+        #resolveAllBtn { display: block; width: 100%; box-sizing: border-box; margin-top: 10px; background: #26543a;
+            font-size: 12px; padding: 8px 12px; }
         #resolveAllBtn:hover { background: #327049; }
         /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
         #skipbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 4px; margin: -2px 0 4px; }
@@ -346,7 +347,7 @@
            own pinch-zoom is disabled). Sits above everything, including the fullscreen element. */
         #cardPeek { display: none; position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,.82);
                     align-items: center; justify-content: center; padding: 3vh 3vw; }
-        #cardPeek img { max-height: 94vh; max-width: 94vw; border-radius: 14px; box-shadow: 0 10px 40px #000; }
+        #cardPeek img { max-height: 94vh; max-width: 94vw; border-radius: 14px; box-shadow: 0 10px 40px #000; pointer-events: none; }
         #cardPeek .peektext { color: #cde; font-size: 16px; }
         /* stop the browser's long-press callout (open-in-new-tab / save-image / copy) game-wide; press-and-
            hold is our card-preview gesture. Text fields re-enable selection below so decklists still work. */
@@ -439,6 +440,14 @@
         @keyframes workspin { to { transform: rotate(360deg); } }
         .player.thinking { box-shadow: 0 0 0 2px #7cc0ff99, 0 0 18px #7cc0ff55; }
         .player.thinking .pname::after { content: ' 🤔'; }
+        /* bottom action bar (pass/resolve + mana cost when the real controls are scrolled out of view) */
+        #actionPeek { position: fixed; left: 0; right: 0; bottom: 0; z-index: 62; display: none;
+            align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
+            background: #141c28f7; border-top: 1px solid #3a4a63; box-shadow: 0 -4px 16px #000a; padding: 7px 12px; }
+        #actionPeek .apStatus { color: #dbe6f2; font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
+        #actionPeek .apLabel { color: #9fb3c8; font-weight: 600; }
+        #actionPeek .apBtns { display: flex; gap: 8px; flex-wrap: wrap; }
+        #actionPeek .apBtns button { font-size: 14px; font-weight: 700; padding: 8px 15px; }
         #pickerCards .pickok { outline: 2px solid #3fae67; outline-offset: -2px; border-radius: 8px; cursor: pointer; }
         #pickerCards .pickdim { opacity: .4; pointer-events: none; filter: grayscale(.5); }
         #pickerCards .picksel { outline: 3px solid #ffd166; outline-offset: -2px; box-shadow: 0 0 14px #ffd166aa; cursor: pointer; }
@@ -606,7 +615,7 @@
     <div id="opponents"></div>
     <!-- phase/turn timeline sits by the stack (the action area), not pinned to the top of the page -->
     <div id="phasebar"></div>
-    <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div><div id="stackLastLog" title="most recent game-log entry"></div></div>
+    <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div><div id="stackLastLog" title="most recent game-log entry"></div><button id="resolveAllBtn" style="display:none" title="Pass priority until the ENTIRE stack resolves (F9)">Resolve stack ▾</button></div>
     <!-- quick-target buttons for targetable players (e.g. whom to attack), placed by the stack -->
     <div id="targetBar" style="display:none"></div>
     <div id="reveals"></div>
@@ -619,6 +628,9 @@
 <div id="handPeek"></div>
 <!-- "working" indicator: appears while the engine/an AI is busy and it isn't your move yet -->
 <div id="working"><span class="spin"></span><span id="workingText">Working…</span></div>
+<!-- bottom action bar: pass/resolve controls + the mana cost you're paying, shown when the real controls
+     (stack/prompt/skip bar) are scrolled up out of view (e.g. while you're down looking at your lands) -->
+<div id="actionPeek"></div>
 
 <div id="logBar">
     <div id="logHeader">▸ Log</div>
@@ -658,8 +670,20 @@
     <div class="zphdr"><span id="zpTitle"></span><button id="zpClose" title="Close">✕</button></div>
     <div id="zpCards" class="zone"></div>
 </div>
+<!-- full-screen card preview target (press-and-hold). MUST exist before the script runs, or the
+     long-press / context-menu handlers below bail out and the browser's own long-press menu shows. -->
+<div id="cardPeek"></div>
 
 <script>
+// Kill the browser's long-press context menu / image callout game-wide (press-and-hold is our card
+// preview). Registered up front so it runs no matter what else happens; text fields keep their menu.
+document.addEventListener('contextmenu', (e) => {
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    e.preventDefault();
+}, { capture: true });
+document.addEventListener('dragstart', (e) => { if (e.target && e.target.tagName === 'IMG') e.preventDefault(); });
+
 const statusEl = document.getElementById('status');
 const turnInfoEl = document.getElementById('turninfo');
 const opponentsEl = document.getElementById('opponents');
@@ -930,6 +954,8 @@ let validTargets = new Set();  // ids the server is currently asking us to pick 
 let priorityActive = false;    // true while the server is asking us to act at priority (GAME_SELECT)
 let myHandIds = new Set();      // ids of cards in our hand (to dim the un-castable ones at priority)
 let combatMode = null;         // 'attack' | 'block' while declaring attackers/blockers (to highlight creatures)
+let manaMode = false;          // true while paying a mana cost (GAME_PLAY_MANA)
+let manaCostHtml = '';         // the still-needed cost as pips, mirrored into the bottom action bar
 let plannerPrintings = {};     // card name -> "set|num": the deck source's chosen printing (for matching board art)
 let touchMode = localStorage.getItem('touchMode') === '1'; // tap=activate, press-and-hold=preview (tablet-friendly)
 
@@ -960,6 +986,8 @@ function send(action, value, extra) {
 window.pickPlayer = (playerId) => send('playerUUID', playerId);
 // inline "pass (resolve)" button on the action bar — passing priority lets the stack resolve
 window.passResolve = () => send('playerBoolean', false);
+// "Resolve stack" (bottom of the stack box): pass priority until the whole stack resolves
+document.getElementById('resolveAllBtn').onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
 
 // ---- "working" indicator: tell the player when the engine/an AI is busy and it isn't their move yet ----
 // The client can't watch an AI compute directly, but it CAN tell that it handed control back and hasn't
@@ -1628,6 +1656,8 @@ function onSocketMessage(ev) {
         if (msg.method === 'GAME_SELECT' && /select attackers/i.test(rawMsg)) combatMode = 'attack';
         else if (msg.method === 'GAME_SELECT' && /select blockers/i.test(rawMsg)) combatMode = 'block';
         else if (ACTIONABLE.has(msg.method)) combatMode = null;
+        manaMode = (msg.method === 'GAME_PLAY_MANA');     // for the bottom action bar's cost reminder
+        manaCostHtml = manaMode ? manaPips(rawMsg) : '';
         const gv = data.gameView || (data.players ? data : null);
         if (gv) {
             const prev = lastGameView;
@@ -2276,22 +2306,19 @@ function renderBoard(gv) {
             }
             stackZone.appendChild(item);
         });
-        // Resolve buttons, stacked: "Resolve next" (single pass → only the top/rightmost item resolves,
-        // opponents may still respond) on top, "Resolve stack" (run the whole stack) below it.
-        const rbCol = document.createElement('div'); rbCol.className = 'resolveCol';
+        // "Resolve next": a single pass so ONLY the top/rightmost item resolves (opponents may still
+        // respond). Sits by the cards; "Resolve stack" (whole stack) lives at the bottom of the stack box.
         const rb = document.createElement('button'); rb.id = 'resolveStackBtn'; rb.textContent = '◂ Resolve next';
         rb.title = 'Pass priority once so the next (rightmost) item resolves — opponents can still respond.';
         rb.onclick = () => send('playerBoolean', false);
-        const rall = document.createElement('button'); rall.id = 'resolveAllBtn'; rall.textContent = 'Resolve stack ▾';
-        rall.title = 'Pass priority until the ENTIRE stack resolves (F9)';
-        rall.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
-        rbCol.appendChild(rb); rbCol.appendChild(rall);
-        stackZone.appendChild(rbCol);
+        stackZone.appendChild(rb);
     }
+    document.getElementById('resolveAllBtn').style.display = stack.length ? '' : 'none';
     renderReveals(gv);
     updateTargetBar(gv, opponents, me);
     renderHandPeek(gv);
     renderOppPeek(gv, opponents);
+    renderActionPeek();
     updatePeeks();
     pruneCardCache(); // drop cached tiles for cards that left the board
     Nav.refresh(); // re-index focusable items after every board render
@@ -2411,13 +2438,57 @@ function peekThumb(card) {
 
 // Toggle the peek bars based on scroll: hand peek appears once the real hand is (nearly) below the
 // viewport; opponent peek appears once the real opponents area is scrolled up past the sticky phase bar.
+// Build the bottom action bar (pass/resolve + mana cost). Marks dataset.relevant so updatePeeks knows
+// whether there's anything worth showing. Only rendered content; visibility is scroll-driven.
+function renderActionPeek() {
+    const bar = document.getElementById('actionPeek');
+    if (!bar) return;
+    const gv = lastGameView || {};
+    const stack = gv.stack ? Object.values(gv.stack) : [];
+    bar.innerHTML = '';
+    const status = document.createElement('div'); status.className = 'apStatus';
+    const btns = document.createElement('div'); btns.className = 'apBtns';
+    const mk = (label, alt, fn) => { const b = document.createElement('button'); b.innerHTML = label; if (alt) b.className = 'alt'; b.onclick = fn; return b; };
+    let relevant = true;
+    if (manaMode) {
+        status.innerHTML = '<span class="apLabel">Paying:</span> ' + (manaCostHtml || '—');
+        btns.appendChild(mk('Cancel cast', true, () => send('playerBoolean', false)));
+    } else if (combatMode === 'attack') {
+        status.innerHTML = '<span class="apLabel">Declaring attackers</span>';
+        btns.appendChild(mk('⚔ Attack all', true, () => send('playerString', 'special')));
+        btns.appendChild(mk('Done attacking ▸', false, () => send('playerBoolean', false)));
+    } else if (combatMode === 'block') {
+        status.innerHTML = '<span class="apLabel">Declaring blockers</span>';
+        btns.appendChild(mk('Done blocking ▸', false, () => send('playerBoolean', false)));
+    } else if (priorityActive && stack.length) {
+        status.innerHTML = '<span class="apLabel">On the stack:</span> ' + stack.length;
+        btns.appendChild(mk('◂ Resolve next', false, () => send('playerBoolean', false)));
+        btns.appendChild(mk('Resolve stack', true, () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED')));
+    } else if (priorityActive) {
+        status.innerHTML = '<span class="apLabel">Your priority</span>';
+        btns.appendChild(mk('Pass ▸', false, () => send('playerBoolean', false)));
+    } else {
+        relevant = false;
+    }
+    bar.dataset.relevant = relevant ? '1' : '0';
+    if (relevant) { bar.appendChild(status); bar.appendChild(btns); }
+}
 function updatePeeks() {
     const vh = window.innerHeight;
+    // bottom action bar: show when there's a live decision AND the real controls are scrolled off the top
+    const actionPeek = document.getElementById('actionPeek');
+    let showAction = false;
+    if (actionPeek && actionPeek.dataset.relevant === '1') {
+        const sb = document.getElementById('skipbar');
+        if (sb) showAction = sb.getBoundingClientRect().bottom < 8; // controls scrolled above the viewport
+    }
+    if (actionPeek) actionPeek.style.display = showAction ? 'flex' : 'none';
     const handPeek = document.getElementById('handPeek');
     if (handPeek) {
         const hz = document.getElementById('myHandZone');
         let show = false;
-        if (hz && handPeek.dataset.has === '1') show = hz.getBoundingClientRect().top > vh - 60;
+        // don't fight the action bar for the bottom of the screen
+        if (!showAction && hz && handPeek.dataset.has === '1') show = hz.getBoundingClientRect().top > vh - 60;
         handPeek.style.display = show ? 'flex' : 'none';
     }
     const oppPeek = document.getElementById('oppPeek');
@@ -2425,7 +2496,8 @@ function updatePeeks() {
         // phase bar no longer lives at the top, so the opponent peek pins to the very top of the viewport
         const op = document.getElementById('opponents');
         let show = false;
-        if (op && oppPeek.children.length) show = op.getBoundingClientRect().bottom < 6;
+        // kick in sooner: show once the opponents' area is mostly scrolled off (only ~130px left at the top)
+        if (op && oppPeek.children.length) show = op.getBoundingClientRect().bottom < 130;
         oppPeek.style.top = '0px';
         oppPeek.style.display = show ? 'flex' : 'none';
     }
@@ -3271,17 +3343,8 @@ function onCardClick(e, card, d) {
         if (longFired) { longFired = false; e.stopPropagation(); e.preventDefault(); }
     }, true);
 
-    // Stop the browser's own long-press menu (open in new tab / save image / copy / selection callout)
-    // everywhere in the game — we use press-and-hold for card preview. Still allow it inside text fields.
-    document.addEventListener('contextmenu', (e) => {
-        const t = e.target;
-        if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
-        e.preventDefault();
-    }, { capture: true });
-    // and block the image-drag "ghost"/menu a long-press can start
-    document.addEventListener('dragstart', (e) => { if (e.target && e.target.tagName === 'IMG') e.preventDefault(); });
+    // (context-menu / drag suppression is registered up top so it always runs)
 })();
 </script>
-<div id="cardPeek"></div>
 </body>
 </html>
