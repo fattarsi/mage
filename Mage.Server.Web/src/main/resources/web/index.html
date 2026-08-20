@@ -263,8 +263,11 @@
         .stackitem.resolvesnext > .card { outline: 2px solid #4fae67; outline-offset: -2px; box-shadow: 0 0 12px #4fae6788; }
         .resolvestag { font-size: 10px; font-weight: 700; color: #7fdc95; text-align: center; margin-top: 2px; }
         .stacktargets { font-size: 10px; color: #9cf; margin-top: 2px; max-width: var(--bf-card-w); }
-        #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; align-self: center; margin-left: 6px; }
+        .resolveCol { display: flex; flex-direction: column; gap: 5px; align-self: center; margin-left: 6px; }
+        #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; }
         #resolveStackBtn:hover { background: #3c8a54; }
+        #resolveAllBtn { background: #26543a; font-size: 12px; padding: 6px 12px; }
+        #resolveAllBtn:hover { background: #327049; }
         /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
         #skipbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 4px; margin: -2px 0 4px; }
         #skipbar button { background: #2e3a4a; font-size: 11px; padding: 3px 8px; border-radius: 4px; }
@@ -345,11 +348,15 @@
                     align-items: center; justify-content: center; padding: 3vh 3vw; }
         #cardPeek img { max-height: 94vh; max-width: 94vw; border-radius: 14px; box-shadow: 0 10px 40px #000; }
         #cardPeek .peektext { color: #cde; font-size: 16px; }
-        /* stop the browser's long-press callout (open-in-new-tab / save-image / copy) on cards */
-        .card, .card img, #cardPeek img {
+        /* stop the browser's long-press callout (open-in-new-tab / save-image / copy) game-wide; press-and-
+           hold is our card-preview gesture. Text fields re-enable selection below so decklists still work. */
+        body { -webkit-touch-callout: none; }
+        #board, #board * { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+        .card, .card img, #cardPeek img, #handPeek, #oppPeek, #cardPeek {
             -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
             -webkit-user-drag: none; user-drag: none;
         }
+        input, textarea, [contenteditable="true"] { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
         /* touch-play mode: stop the browser's double-tap-zoom on cards so a quick tap registers cleanly
            as an activate; manipulation still allows page scrolling and pinch-zoom */
         body.touchmode .card { touch-action: manipulation; }
@@ -1028,7 +1035,6 @@ let stickySkip = null;   // { action, turn, step }
 const skipBtns = {};     // action -> button element (for the armed highlight)
 const SKIPS = [
     {label:'Pass (F2)', key:'F2', fn:()=>send('playerBoolean', false), title:'Pass priority once'},
-    {label:'▸ Resolve stack (F9)', fn:()=>act('PASS_PRIORITY_UNTIL_STACK_RESOLVED'), title:'Pass priority until the ENTIRE stack resolves'},
     {label:'Next main (F5)', key:'F5', action:'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE', title:'Keep skipping to the next main phase — pauses for responses, then resumes (click again to cancel)'},
     {label:'End of turn (F6)', key:'F6', action:'PASS_PRIORITY_UNTIL_TURN_END_STEP', title:'Keep skipping to this turn’s end step'},
     {label:'Next turn (F4)', key:'F4', action:'PASS_PRIORITY_UNTIL_NEXT_TURN', title:'Keep skipping to the next turn'},
@@ -2270,12 +2276,17 @@ function renderBoard(gv) {
             }
             stackZone.appendChild(item);
         });
-        // "Resolve next": a single pass so ONLY the top (rightmost) item resolves — opponents may still
-        // respond. Arrow points left at that top card, which sits immediately to its left.
+        // Resolve buttons, stacked: "Resolve next" (single pass → only the top/rightmost item resolves,
+        // opponents may still respond) on top, "Resolve stack" (run the whole stack) below it.
+        const rbCol = document.createElement('div'); rbCol.className = 'resolveCol';
         const rb = document.createElement('button'); rb.id = 'resolveStackBtn'; rb.textContent = '◂ Resolve next';
-        rb.title = 'Pass priority once so the next (rightmost) item resolves — opponents can still respond. (Use “Resolve stack” below to run the whole stack.)';
+        rb.title = 'Pass priority once so the next (rightmost) item resolves — opponents can still respond.';
         rb.onclick = () => send('playerBoolean', false);
-        stackZone.appendChild(rb);
+        const rall = document.createElement('button'); rall.id = 'resolveAllBtn'; rall.textContent = 'Resolve stack ▾';
+        rall.title = 'Pass priority until the ENTIRE stack resolves (F9)';
+        rall.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
+        rbCol.appendChild(rb); rbCol.appendChild(rall);
+        stackZone.appendChild(rbCol);
     }
     renderReveals(gv);
     updateTargetBar(gv, opponents, me);
@@ -3260,12 +3271,15 @@ function onCardClick(e, card, d) {
         if (longFired) { longFired = false; e.stopPropagation(); e.preventDefault(); }
     }, true);
 
-    // stop the browser's own long-press menu (open in new tab / save image / copy) on cards + the overlay
+    // Stop the browser's own long-press menu (open in new tab / save image / copy / selection callout)
+    // everywhere in the game — we use press-and-hold for card preview. Still allow it inside text fields.
     document.addEventListener('contextmenu', (e) => {
-        if (peek.style.display === 'flex' || (e.target.closest && e.target.closest('.card'))) {
-            e.preventDefault();
-        }
-    });
+        const t = e.target;
+        if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"]')) return;
+        e.preventDefault();
+    }, { capture: true });
+    // and block the image-drag "ghost"/menu a long-press can start
+    document.addEventListener('dragstart', (e) => { if (e.target && e.target.tagName === 'IMG') e.preventDefault(); });
 })();
 </script>
 <div id="cardPeek"></div>
