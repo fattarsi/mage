@@ -16,7 +16,8 @@
     <link rel="apple-touch-icon" href="icon-180.png"/>
     <style>
         * { box-sizing: border-box; }
-        :root { --card-w: 104px; --bf-card-w: 78px; --opp-card-w: 78px; --peek-h: calc(var(--card-w) * 1.4 * 0.6); } /* hand fan shows ~60% of each card */
+        :root { --card-w: 104px; --bf-card-w: 78px; --opp-card-w: 78px; --peek-h: calc(var(--card-w) * 1.4 * 0.6); --dock-h: 0px; } /* hand fan shows ~60% of each card; --dock-h set at runtime */
+        body { padding-bottom: var(--dock-h); } /* keep content above the fixed control dock */
         body { font-family: system-ui, sans-serif; margin: 0; background: #14161a; color: #e7e7e7; }
         header { padding: 8px 14px; background: #1f242c; border-bottom: 1px solid #333;
                  display: flex; align-items: center; gap: 14px; }
@@ -28,9 +29,9 @@
         #status { font-size: 12px; color: #8bd; }
         #turn { font-size: 12px; color: #fc9; margin-left: auto; }
         #board { padding: 10px 14px; }
-        /* phase/turn timeline — sits in-flow just above the stack (the action area) */
-        #phasebar { position: static; z-index: 35; overflow-x: auto; white-space: nowrap;
-                    background: #14161a; margin: 6px 0 6px; padding: 6px 10px; border: 1px solid #262d38; border-radius: 8px; }
+        /* phase/turn timeline — lives inside the control dock now (compact, scrolls horizontally) */
+        #phasebar { position: static; overflow-x: auto; white-space: nowrap; background: transparent;
+                    margin: 0; padding: 2px 0; border: 0; }
         /* single horizontal timeline: current phase at the left, runs forward through the turn loop */
         #phasebar .phaserow { display: flex; align-items: center; gap: 2px; width: max-content; }
         #phasebar .pchip { font-size: 10px; font-weight: 700; color: #8aa; white-space: nowrap; padding: 0 4px 0 8px;
@@ -263,15 +264,9 @@
         .stackitem.resolvesnext > .card { outline: 2px solid #4fae67; outline-offset: -2px; box-shadow: 0 0 12px #4fae6788; }
         .resolvestag { font-size: 10px; font-weight: 700; color: #7fdc95; text-align: center; margin-top: 2px; }
         .stacktargets { font-size: 10px; color: #9cf; margin-top: 2px; max-width: var(--bf-card-w); }
-        #resolveStackBtn { background: #2e6a40; font-size: 12px; padding: 6px 12px; align-self: center; margin-left: 6px; }
-        #resolveStackBtn:hover { background: #3c8a54; }
-        /* "Resolve stack" sits on its own row at the bottom of the stack box, clearly separated */
-        #resolveAllBtn { display: block; width: 100%; box-sizing: border-box; margin-top: 10px; background: #26543a;
-            font-size: 12px; padding: 8px 12px; }
-        #resolveAllBtn:hover { background: #327049; }
         /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
-        #skipbar { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 0 4px; margin: -2px 0 4px; }
-        #skipbar button { background: #2e3a4a; font-size: 11px; padding: 3px 8px; border-radius: 4px; }
+        #skipbar { display: flex; gap: 5px; flex-wrap: wrap; padding: 0; margin: 0; }
+        #skipbar button { background: #2e3a4a; font-size: 12px; padding: 5px 10px; border-radius: 4px; }
         #skipbar button:hover { background: #3d4d63; }
         #skipbar button.armed { background: #7a5a20; box-shadow: 0 0 0 1px #c79a40; } /* sticky skip is running */
         /* compact action bar sitting directly under the stack */
@@ -394,7 +389,7 @@
         /* ---- off-screen peek bars: keep your hand and opponents reachable without scrolling ---- */
         /* Bottom: your hand as an overlapping fan showing just the card tops; hover/focus raises one into
            view, tap plays it. Shown only while the real hand is scrolled below the viewport. */
-        #handPeek { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; display: none;
+        #handPeek { position: fixed; left: 0; right: 0; bottom: var(--dock-h); z-index: 60; display: none;
             justify-content: center; pointer-events: none; }
         /* overflow MUST stay visible on both axes so a raised card can rise above the bar — hence no
            horizontal scroll here; renderHandPeek computes the overlap so the fan fits the screen width. */
@@ -440,14 +435,26 @@
         @keyframes workspin { to { transform: rotate(360deg); } }
         .player.thinking { box-shadow: 0 0 0 2px #7cc0ff99, 0 0 18px #7cc0ff55; }
         .player.thinking .pname::after { content: ' 🤔'; }
-        /* bottom action bar (pass/resolve + mana cost when the real controls are scrolled out of view) */
-        #actionPeek { position: fixed; left: 0; right: 0; bottom: 0; z-index: 62; display: none;
-            align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap;
-            background: #141c28f7; border-top: 1px solid #3a4a63; box-shadow: 0 -4px 16px #000a; padding: 7px 12px; }
-        #actionPeek .apStatus { color: #dbe6f2; font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 6px; }
-        #actionPeek .apLabel { color: #9fb3c8; font-weight: 600; }
-        #actionPeek .apBtns { display: flex; gap: 8px; flex-wrap: wrap; }
-        #actionPeek .apBtns button { font-size: 14px; font-weight: 700; padding: 8px 15px; }
+        /* ---- persistent control dock (always-visible bottom bar) ---- */
+        /* z-index 45: above the board + side column (40), but BELOW modal overlays (50) so a picker/choice
+           dialog covers the dock instead of the dock poking through it. */
+        #ctrlDock { position: fixed; left: 0; right: var(--sidecol-w); bottom: 0; z-index: 45;
+            background: #10151df5; border-top: 1px solid #3a4a63; box-shadow: 0 -5px 18px #000b;
+            padding: 4px 10px 6px; }
+        #dockBody { display: flex; flex-direction: column; gap: 4px; }
+        #ctrlDock.collapsed #dockBody { display: none; }
+        #dockToggle { position: absolute; top: -18px; right: 12px; z-index: 1; background: #1b2230;
+            border: 1px solid #3a4a63; border-bottom: 0; border-radius: 7px 7px 0 0; color: #cbd5e2;
+            font-size: 12px; padding: 1px 12px; cursor: pointer; }
+        #dockTop { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        #dockStatus { font-size: 13px; font-weight: 700; color: #dbe6f2; display: flex; align-items: center;
+            gap: 8px; flex-wrap: wrap; }
+        #dockStatus .dsPhase { color: #7fdc95; }
+        #dockStatus .dsTurnMe { color: #7f7; } #dockStatus .dsTurnOpp { color: #fa8; }
+        #dockStatus .dsPay { color: #ffd166; display: inline-flex; align-items: center; gap: 4px; }
+        #dockActions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+        #dockActions button { font-size: 14px; font-weight: 700; padding: 7px 14px; }
+        #dockActions button.prim { background: #2e6a40; } #dockActions button.prim:hover { background: #3c8a54; }
         #pickerCards .pickok { outline: 2px solid #3fae67; outline-offset: -2px; border-radius: 8px; cursor: pointer; }
         #pickerCards .pickdim { opacity: .4; pointer-events: none; filter: grayscale(.5); }
         #pickerCards .picksel { outline: 3px solid #ffd166; outline-offset: -2px; box-shadow: 0 0 14px #ffd166aa; cursor: pointer; }
@@ -613,14 +620,11 @@
 <div id="banner"></div>
 <div id="board">
     <div id="opponents"></div>
-    <!-- phase/turn timeline sits by the stack (the action area), not pinned to the top of the page -->
-    <div id="phasebar"></div>
-    <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div><div id="stackLastLog" title="most recent game-log entry"></div><button id="resolveAllBtn" style="display:none" title="Pass priority until the ENTIRE stack resolves (F9)">Resolve stack ▾</button></div>
+    <div id="stack"><div class="zone-label">Stack</div><div id="stackZone" class="zone"></div><div id="stackLastLog" title="most recent game-log entry"></div></div>
     <!-- quick-target buttons for targetable players (e.g. whom to attack), placed by the stack -->
     <div id="targetBar" style="display:none"></div>
     <div id="reveals"></div>
     <div id="prompt"><span id="turninfo"></span><span id="promptmain"><span class="msg">waiting…</span></span><div id="hud"></div></div>
-    <div id="skipbar"></div>
     <div id="me" class="player me"></div>
 </div>
 <!-- off-screen peek bars: opponents (top) and your hand (bottom), shown only when scrolled out of view -->
@@ -628,9 +632,16 @@
 <div id="handPeek"></div>
 <!-- "working" indicator: appears while the engine/an AI is busy and it isn't your move yet -->
 <div id="working"><span class="spin"></span><span id="workingText">Working…</span></div>
-<!-- bottom action bar: pass/resolve controls + the mana cost you're paying, shown when the real controls
-     (stack/prompt/skip bar) are scrolled up out of view (e.g. while you're down looking at your lands) -->
-<div id="actionPeek"></div>
+<!-- persistent control dock (always visible, pinned to the bottom): status + primary actions, the phase
+     timeline, and the skip toggles. This is the single home for controls — the hand fan stacks above it. -->
+<div id="ctrlDock">
+    <button id="dockToggle" title="Collapse / expand the control dock">▾</button>
+    <div id="dockBody">
+        <div id="dockTop"><span id="dockStatus"></span><div id="dockActions"></div></div>
+        <div id="phasebar"></div>
+        <div id="skipbar"></div>
+    </div>
+</div>
 
 <div id="logBar">
     <div id="logHeader">▸ Log</div>
@@ -984,10 +995,8 @@ function send(action, value, extra) {
 }
 // players are valid targets/choices too (e.g. "select a starting player", "target player")
 window.pickPlayer = (playerId) => send('playerUUID', playerId);
-// inline "pass (resolve)" button on the action bar — passing priority lets the stack resolve
+// pass priority (used by a few call sites); the control dock's Pass/Resolve buttons also call send()
 window.passResolve = () => send('playerBoolean', false);
-// "Resolve stack" (bottom of the stack box): pass priority until the whole stack resolves
-document.getElementById('resolveAllBtn').onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
 
 // ---- "working" indicator: tell the player when the engine/an AI is busy and it isn't their move yet ----
 // The client can't watch an AI compute directly, but it CAN tell that it handed control back and hasn't
@@ -2171,17 +2180,11 @@ function renderBoard(gv) {
     const me = gv.players.find(p => p.controlled) || gv.players[0];
     myHandIds = new Set(Object.keys(gv.myHand || {}));
     const myTurn = gv.activePlayerId === me.playerId;
-    // inline pass(resolve) button: shown whenever we hold plain priority (not mid combat-declaration),
-    // so it's a one-click way to move the game along right next to the stack.
-    const stackSize = gv.stack ? Object.keys(gv.stack).length : 0;
-    const showPass = priorityActive && !combatMode;
-    const passBtn = showPass
-        ? `<button type="button" class="passbtn" onclick="passResolve()">${stackSize ? 'pass (resolve) ▸' : 'pass ▸'}</button> · `
-        : '';
+    // (pass/resolve now lives in the always-visible control dock — see renderDock)
     // total life all opponents have lost this turn (Rakdos, Lord of Riots cost reduction, etc.)
     const oppLost = (gv.players || []).filter(p => p !== me)
         .reduce((s, p) => s + ((gv.lifeLostThisTurn && gv.lifeLostThisTurn[p.playerId]) || 0), 0);
-    turnInfoEl.innerHTML = `T${gv.turn} · ${esc(gv.step||gv.phase||'')} · ` + passBtn
+    turnInfoEl.innerHTML = `T${gv.turn} · ${esc(gv.step||gv.phase||'')} · `
         + (myTurn ? '<span style="color:#7f7">YOUR TURN</span>' : '<span style="color:#fa8">opp turn</span>')
         + (oppLost ? ` · <span class="opplost" title="total life your opponents have lost this turn">💔 opponents lost ${oppLost}</span>` : '');
 
@@ -2325,19 +2328,14 @@ function renderBoard(gv) {
             }
             stackZone.appendChild(item);
         });
-        // "Resolve next": a single pass so ONLY the top/rightmost item resolves (opponents may still
-        // respond). Sits by the cards; "Resolve stack" (whole stack) lives at the bottom of the stack box.
-        const rb = document.createElement('button'); rb.id = 'resolveStackBtn'; rb.textContent = '◂ Resolve next';
-        rb.title = 'Pass priority once so the next (rightmost) item resolves — opponents can still respond.';
-        rb.onclick = () => send('playerBoolean', false);
-        stackZone.appendChild(rb);
+        // Resolve actions live in the always-visible control dock now (Resolve next / Resolve stack).
     }
-    document.getElementById('resolveAllBtn').style.display = stack.length ? '' : 'none';
     renderReveals(gv);
     updateTargetBar(gv, opponents, me);
     renderHandPeek(gv);
     renderOppPeek(gv, opponents);
-    renderActionPeek();
+    renderDock();       // status + primary actions in the always-visible control dock
+    updateDockOffset(); // reflect the dock height into --dock-h (content/hand-fan sit above it)
     updatePeeks();
     pruneCardCache(); // drop cached tiles for cards that left the board
     Nav.refresh(); // re-index focusable items after every board render
@@ -2459,60 +2457,72 @@ function peekThumb(card) {
 // viewport; opponent peek appears once the real opponents area is scrolled up past the sticky phase bar.
 // Build the bottom action bar (pass/resolve + mana cost). Marks dataset.relevant so updatePeeks knows
 // whether there's anything worth showing. Only rendered content; visibility is scroll-driven.
-function renderActionPeek() {
-    const bar = document.getElementById('actionPeek');
-    if (!bar) return;
+// Populate the always-visible control dock: a compact status (turn / whose turn / phase / mana being
+// paid) and the contextual primary actions (pass / resolve / combat done / cancel). The skip toggles and
+// phase timeline are separate, permanent children of the dock.
+function renderDock() {
     const gv = lastGameView || {};
+    const statusEl = document.getElementById('dockStatus');
+    const actEl = document.getElementById('dockActions');
+    if (!statusEl || !actEl) return;
+    const me = (gv.players || []).find(p => p.controlled);
+    const myTurn = me && gv.activePlayerId === me.playerId;
     const stack = gv.stack ? Object.values(gv.stack) : [];
-    bar.innerHTML = '';
-    const status = document.createElement('div'); status.className = 'apStatus';
-    const btns = document.createElement('div'); btns.className = 'apBtns';
-    const mk = (label, alt, fn) => { const b = document.createElement('button'); b.innerHTML = label; if (alt) b.className = 'alt'; b.onclick = fn; return b; };
-    let relevant = true;
+    // status: T# · YOUR TURN/opp turn · Phase  (+ paying pips when relevant)
+    let s = `T${gv.turn || '—'} `;
+    s += myTurn ? '<span class="dsTurnMe">· YOUR TURN</span>' : '<span class="dsTurnOpp">· opp turn</span>';
+    if (gv.step || gv.phase) s += ' · <span class="dsPhase">' + esc(stepLabel(gv.step) || gv.phase) + '</span>';
+    if (manaMode) s += ' · <span class="dsPay">Paying: ' + (manaCostHtml || '—') + '</span>';
+    statusEl.innerHTML = s;
+    // contextual primary actions
+    actEl.innerHTML = '';
+    const mk = (label, prim, title, fn) => { const b = document.createElement('button');
+        b.innerHTML = label; if (prim) b.className = 'prim'; else b.className = 'alt'; if (title) b.title = title;
+        b.onclick = fn; return b; };
     if (manaMode) {
-        status.innerHTML = '<span class="apLabel">Paying:</span> ' + (manaCostHtml || '—');
-        btns.appendChild(mk('Cancel cast', true, () => send('playerBoolean', false)));
+        actEl.appendChild(mk('Cancel cast', false, 'Stop paying and cancel this spell/ability', () => send('playerBoolean', false)));
     } else if (combatMode === 'attack') {
-        status.innerHTML = '<span class="apLabel">Declaring attackers</span>';
-        btns.appendChild(mk('⚔ Attack all', true, () => send('playerString', 'special')));
-        btns.appendChild(mk('Done attacking ▸', false, () => send('playerBoolean', false)));
+        actEl.appendChild(mk('⚔ Attack all', false, 'Send every eligible creature to attack, then pick targets', () => send('playerString', 'special')));
+        actEl.appendChild(mk('Done attacking ▸', true, 'Finish declaring attackers', () => send('playerBoolean', false)));
     } else if (combatMode === 'block') {
-        status.innerHTML = '<span class="apLabel">Declaring blockers</span>';
-        btns.appendChild(mk('Done blocking ▸', false, () => send('playerBoolean', false)));
+        actEl.appendChild(mk('Done blocking ▸', true, 'Finish declaring blockers', () => send('playerBoolean', false)));
     } else if (priorityActive && stack.length) {
-        status.innerHTML = '<span class="apLabel">On the stack:</span> ' + stack.length;
-        btns.appendChild(mk('◂ Resolve next', false, () => send('playerBoolean', false)));
-        btns.appendChild(mk('Resolve stack', true, () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED')));
+        actEl.appendChild(mk('◂ Resolve next', true, 'Pass once so the top (rightmost) item resolves — opponents can still respond', () => send('playerBoolean', false)));
+        actEl.appendChild(mk('Resolve stack', false, 'Pass until the ENTIRE stack resolves (F9)', () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED')));
     } else if (priorityActive) {
-        status.innerHTML = '<span class="apLabel">Your priority</span>';
-        btns.appendChild(mk('Pass ▸', false, () => send('playerBoolean', false)));
-    } else {
-        relevant = false;
+        actEl.appendChild(mk('Pass ▸', true, 'Pass priority (F2)', () => send('playerBoolean', false)));
     }
-    bar.dataset.relevant = relevant ? '1' : '0';
-    if (relevant) { bar.appendChild(status); bar.appendChild(btns); }
+    // else: not our decision — leave actions empty (status shows whose turn; the top spinner shows waiting)
 }
+// keep the fixed dock's height reflected in --dock-h so page content + the hand fan sit above it
+function updateDockOffset() {
+    const dock = document.getElementById('ctrlDock');
+    if (!dock) return;
+    const h = dock.getBoundingClientRect().height;
+    document.documentElement.style.setProperty('--dock-h', Math.round(h) + 'px');
+}
+// collapse/expand the dock (persisted). Collapsed = just the toggle handle, to reclaim screen space.
+document.getElementById('dockToggle').onclick = () => {
+    const dock = document.getElementById('ctrlDock');
+    const collapsed = dock.classList.toggle('collapsed');
+    document.getElementById('dockToggle').textContent = collapsed ? '▴' : '▾';
+    localStorage.setItem('dockCollapsed', collapsed ? '1' : '0');
+    updateDockOffset();
+};
+if (localStorage.getItem('dockCollapsed') === '1') { document.getElementById('ctrlDock').classList.add('collapsed'); document.getElementById('dockToggle').textContent = '▴'; }
+updateDockOffset(); // initial height (skip toggles are present from load, even before a game starts)
 function updatePeeks() {
     const vh = window.innerHeight;
-    // bottom action bar: show when there's a live decision AND the real controls are scrolled off the top
-    const actionPeek = document.getElementById('actionPeek');
-    let showAction = false;
-    if (actionPeek && actionPeek.dataset.relevant === '1') {
-        const sb = document.getElementById('skipbar');
-        if (sb) showAction = sb.getBoundingClientRect().bottom < 8; // controls scrolled above the viewport
-    }
-    if (actionPeek) actionPeek.style.display = showAction ? 'flex' : 'none';
     const handPeek = document.getElementById('handPeek');
     if (handPeek) {
         const hz = document.getElementById('myHandZone');
+        const dockH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--dock-h')) || 0;
         let show = false;
-        // don't fight the action bar for the bottom of the screen
-        if (!showAction && hz && handPeek.dataset.has === '1') show = hz.getBoundingClientRect().top > vh - 60;
+        if (hz && handPeek.dataset.has === '1') show = hz.getBoundingClientRect().top > vh - dockH - 60;
         handPeek.style.display = show ? 'flex' : 'none';
     }
     const oppPeek = document.getElementById('oppPeek');
     if (oppPeek) {
-        // phase bar no longer lives at the top, so the opponent peek pins to the very top of the viewport
         const op = document.getElementById('opponents');
         let show = false;
         // kick in sooner: show once the opponents' area is mostly scrolled off (only ~130px left at the top)
@@ -2522,7 +2532,7 @@ function updatePeeks() {
     }
 }
 window.addEventListener('scroll', updatePeeks, true);
-window.addEventListener('resize', updatePeeks);
+window.addEventListener('resize', () => { updateDockOffset(); updatePeeks(); });
 
 // Cards currently revealed to everyone (reveal top of library, etc.) or that I'm looking at (scry).
 // This data rides along in the GameView; we just render it so the reveal is actually visible.
@@ -2939,7 +2949,7 @@ const Nav = (function () {
         if (el.closest('#zonePopup')) return 'command';
         if (el.closest('#stackZone')) return 'stack';
         if (el.closest('#opponents')) return 'opp';
-        if (el.closest('#prompt') || el.closest('#skipbar') || el.closest('header')) return 'actions';
+        if (el.closest('#prompt') || el.closest('#ctrlDock') || el.closest('header')) return 'actions';
         if (el.closest('#picker') || el.closest('#choiceModal')) return 'actions';
         if (el.closest('#me')) return el.closest('.bf') ? 'mybf' : 'hand';
         return 'other';
@@ -2953,7 +2963,7 @@ const Nav = (function () {
         else if (shown('picker')) els = [...document.querySelectorAll('#picker .card, #picker button')];
         else if (shown('setup')) els = []; // let the setup form use normal typing/focus
         else {
-            els = [...document.querySelectorAll('#board .card, #board .phead, #board button, header button')];
+            els = [...document.querySelectorAll('#board .card, #board .phead, #board button, #ctrlDock button, header button')];
             if (popupOpen()) els.push(...document.querySelectorAll('#zpCards .card, #zpClose')); // side zone open
         }
         return els.filter(vis);
