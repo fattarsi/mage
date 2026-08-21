@@ -1666,7 +1666,7 @@ function onSocketMessage(ev) {
             const leaving = captureLeaving(prev, gv); // snapshot cards about to leave (before re-render)
             lastGameView = gv; computePlayable(gv); renderBoard(gv);
             playDissolve(leaving);     // burn away the ghosts of destroyed/bounced permanents
-            playAttacks(gv);           // swing attackers toward their defender
+            playAttacks(gv);           // swing attackers at combat-damage time (coincides with life loss)
         }
         // Some decision frames (e.g. the London mulligan "put a card on the bottom" target, or any
         // "choose a target" that picks from hand/battlefield) carry NO gameView but DO update the set
@@ -2050,35 +2050,54 @@ function spawnEmbers(rect) {
             { duration: 620 + Math.random() * 320, easing: 'ease-out' }).onfinish = () => e.remove();
     }
 }
-// attackers "swing" toward their defender when combat is declared (once per new attacker set)
-let lastCombatSig = '';
+// Attackers "swing" at COMBAT-DAMAGE time (coinciding with the life reduction), NOT at declaration.
+// Declaring/undeclaring an attacker only draws the arrow (drawArrows). When damage is dealt we lunge the
+// creatures that actually dealt it: first-strikers/double-strikers in the FIRST_COMBAT_DAMAGE step, and
+// normal creatures (plus double-strikers again) in the COMBAT_DAMAGE step. A blocked creature swings at
+// its blocker; an unblocked one swings at the defending player.
+let combatDamageAnimated = new Set(); // keys `${step}|${atkSig}` already swung for the current combat
+function hasKeyword(card, re) { return (card && Array.isArray(card.rules) && card.rules.some(r => re.test(r))); }
+function swingEl(el, tgtC) {
+    const ac = centerOfRect(el.getBoundingClientRect());
+    let dx = tgtC.x - ac.x, dy = tgtC.y - ac.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const reach = Math.min(dist * 0.62, 200); // reach a bit further so it visibly connects with the target
+    dx = dx / dist * reach; dy = dy / dist * reach;
+    el.style.zIndex = '20';
+    el.animate([
+        { transform: 'translate(0,0)' },
+        { transform: `translate(${-dx * .12}px,${-dy * .12}px)`, offset: .18 }, // anticipation
+        { transform: `translate(${dx}px,${dy}px)`, offset: .5 },                 // lunge (impact = life drops)
+        { transform: 'translate(0,0)' }                                          // return
+    ], { duration: 620, easing: 'ease-in-out' }).onfinish = () => { el.style.zIndex = ''; };
+}
 function playAttacks(gv) {
     if (!animEnabled) return;
+    const step = (gv && gv.step) || '';
     const groups = (gv && gv.combat) || [];
-    const atkIds = [];
-    groups.forEach(g => Object.keys(g.attackers || {}).forEach(id => atkIds.push(id)));
-    const sig = atkIds.sort().join(',');
-    if (!sig || sig === lastCombatSig) { lastCombatSig = sig; return; }
-    lastCombatSig = sig;
+    if (!groups.length) { combatDamageAnimated.clear(); return; } // combat over → reset for the next combat
+    const firstStrikeStep = (step === 'FIRST_COMBAT_DAMAGE');
+    const regularStep = (step === 'COMBAT_DAMAGE');
+    if (!firstStrikeStep && !regularStep) return;                 // declaration/begin/end → arrows only, no swing
+    const atkSig = groups.flatMap(g => Object.keys(g.attackers || {})).sort().join(',');
+    const key = step + '|' + atkSig;
+    if (combatDamageAnimated.has(key)) return;                    // already swung for this damage step
+    combatDamageAnimated.add(key);
     for (const g of groups) {
-        const defEl = document.querySelector(`[data-cid="${g.defenderId}"]`) || document.querySelector(`[data-pid="${g.defenderId}"]`);
-        if (!defEl) continue;
-        const defC = centerOfRect(defEl.getBoundingClientRect());
-        for (const aid of Object.keys(g.attackers || {})) {
+        const blkIds = Object.keys(g.blockers || {});
+        // swing target: the (first) blocker if blocked, else the defending player
+        const tgtEl = (blkIds.length && document.querySelector(`[data-cid="${blkIds[0]}"]`))
+            || document.querySelector(`[data-cid="${g.defenderId}"]`)
+            || document.querySelector(`[data-pid="${g.defenderId}"]`);
+        if (!tgtEl) continue;
+        const tgtC = centerOfRect(tgtEl.getBoundingClientRect());
+        for (const [aid, atk] of Object.entries(g.attackers || {})) {
+            const fs = hasKeyword(atk, /first strike/i), ds = hasKeyword(atk, /double strike/i);
+            // first-strike step: first/double strikers deal damage; regular step: everyone except pure first-strikers
+            const dealsNow = firstStrikeStep ? (fs || ds) : (ds || !fs);
+            if (!dealsNow) continue;
             const el = document.querySelector(`.card[data-cid="${aid}"]`);
-            if (!el) continue;
-            const ac = centerOfRect(el.getBoundingClientRect());
-            let dx = defC.x - ac.x, dy = defC.y - ac.y;
-            const dist = Math.hypot(dx, dy) || 1;
-            const reach = Math.min(dist * 0.45, 150);
-            dx = dx / dist * reach; dy = dy / dist * reach;
-            el.style.zIndex = '20';
-            el.animate([
-                { transform: 'translate(0,0)' },
-                { transform: `translate(${-dx * .12}px,${-dy * .12}px)`, offset: .18 }, // anticipation
-                { transform: `translate(${dx}px,${dy}px)`, offset: .5 },                 // lunge
-                { transform: 'translate(0,0)' }                                          // return
-            ], { duration: 640, easing: 'ease-in-out' }).onfinish = () => { el.style.zIndex = ''; };
+            if (el) swingEl(el, tgtC);
         }
     }
 }
