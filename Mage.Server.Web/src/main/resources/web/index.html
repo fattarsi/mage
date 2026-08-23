@@ -462,6 +462,9 @@
             width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
             background: #ffd166; color: #1b1e24; border-radius: 50%; font-weight: 900; font-size: 13px;
             box-shadow: 0 1px 3px #000a; }
+        /* ×N badge on a grouped trigger (how many identical copies this group represents) */
+        #pickerCards .trigcount { position: absolute; top: 3px; left: 4px; z-index: 4; background: #2e6a40;
+            color: #fff; border-radius: 10px; padding: 1px 7px; font-weight: 800; font-size: 12px; box-shadow: 0 1px 3px #000a; }
     </style>
 </head>
 <body>
@@ -1691,7 +1694,10 @@ function onSocketMessage(ev) {
         // of valid targets. Re-render the last board so those targets get highlighted/clickable —
         // otherwise the player sees a prompt with nothing visibly actionable.
         else if (lastGameView && (msg.method === 'GAME_TARGET' || ACTIONABLE.has(msg.method))) { renderBoard(lastGameView); }
-        renderPicker(msg.method, data);
+        // "Order your triggers" dialog: collapse identical copies so you only choose between DISTINCT
+        // triggers (and never re-pick a duplicate). Falls back to the normal picker when appropriate.
+        if (isTriggerOrderDialog(msg.method, data)) { handleTriggerOrder(data); }
+        else { trigAutoKey = null; renderPicker(msg.method, data); }
         handle(msg.method, data);
         soundForFrame(msg.method, data, gv);
         if (gv) drawArrows(gv);
@@ -2575,6 +2581,55 @@ let pickerSig = '';            // signature of the current card list, to reset s
 let pickerMulti = false;       // current dialog is a multi-count selection (live toggle + explicit Done)
 let pickerRequired = false;    // current dialog must be answered (no "choose none")
 function closePicker() { pickerEl.style.display = 'none'; pickerSelected = new Set(); pickerSig = ''; }
+
+// ---- "Order your triggers" convenience --------------------------------------------------------------
+// When several triggered abilities go on the stack at once, the engine asks you to order them one at a
+// time ("goes to the stack first"). Copies of the SAME trigger are interchangeable, so clicking through
+// them is a pointless slog. We group identical triggers (by name + rules) so you only ever choose
+// between DISTINCT ones; once you pick a group, the rest of that group is ordered automatically.
+let trigAutoKey = null; // the group currently being auto-flushed (null = none)
+function trigKey(c) { return strip(c && c.name || '') + '|' + ((c && c.rules || []).join(' ')); }
+function isTriggerOrderDialog(method, data) {
+    return method === 'GAME_TARGET'
+        && /triggered abilit/i.test(String(data && data.message || ''))
+        && data && data.cardsView1 && Object.keys(data.cardsView1).length > 0;
+}
+function handleTriggerOrder(data) {
+    const cards = Object.values(data.cardsView1 || {});
+    const auto = localStorage.getItem('autoOrderTriggers') !== '0'; // same toggle as the engine-side setting
+    if (!auto || cards.length <= 1) { renderPicker('GAME_TARGET', data); return; } // disabled → normal picker
+    // continue flushing the group the user already chose (order within a group doesn't matter)
+    if (trigAutoKey) {
+        const m = cards.find(c => trigKey(c) === trigAutoKey);
+        if (m) { pickerEl.style.display = 'none'; send('playerUUID', m.id); return; }
+        trigAutoKey = null; // that group is exhausted
+    }
+    // group the remaining triggers by identity
+    const groups = new Map();
+    cards.forEach(c => { const k = trigKey(c); if (!groups.has(k)) groups.set(k, { rep: c, count: 0 }); groups.get(k).count++; });
+    if (groups.size === 1) { pickerEl.style.display = 'none'; send('playerUUID', cards[0].id); return; } // all identical → order irrelevant
+    showTriggerGroupModal([...groups.values()]);
+}
+// modal showing one representative per distinct trigger (with an ×N badge); tap = order that group next
+function showTriggerGroupModal(groups) {
+    pickerMulti = false; pickerRequired = true;
+    pickerMsgEl.textContent = 'Order triggers — tap which goes on the stack first';
+    pickerCountEl.style.display = 'none';
+    document.getElementById('pickerConfirm').style.display = 'none';
+    document.getElementById('pickerDone').style.display = 'none';
+    document.getElementById('pickerNone').style.display = 'none';
+    document.getElementById('pickerHint').textContent = 'Copies of the same trigger are grouped — tap a group and the rest order automatically.';
+    pickerCardsEl.innerHTML = '';
+    groups.forEach(g => {
+        const el = cardEl(g.rep, false, {noCache:true});
+        el.classList.add('pickcard', 'pickok');
+        if (g.count > 1) { const b = document.createElement('div'); b.className = 'trigcount'; b.textContent = '×' + g.count; el.appendChild(b); }
+        el.onclick = () => { trigAutoKey = trigKey(g.rep); pickerEl.style.display = 'none'; showCardViewer(g.rep); send('playerUUID', g.rep.id); };
+        pickerCardsEl.appendChild(el);
+    });
+    pickerEl.style.display = 'flex';
+    Nav.refresh();
+}
 // Reflect the LOCAL single-select pick onto the cards + Confirm button, without re-fetching the dialog.
 function markPickerSelection() {
     pickerCardsEl.querySelectorAll('.pickcard').forEach(el => {
