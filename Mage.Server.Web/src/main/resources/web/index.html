@@ -532,6 +532,10 @@
     <div class="setrow"><label><input type="checkbox" id="stopAttackers" checked> …I can declare attackers</label></div>
     <div class="setrow"><label><input type="checkbox" id="stopMains" checked> …at my main phases</label></div>
     <div class="setrow"><label><input type="checkbox" id="stopEnds" checked> …at end steps</label></div>
+    <div class="setrow" style="border-top:1px solid #2c3340; padding-top:8px; margin-top:8px;">
+        <label><input type="checkbox" id="autoOrderTriggers" checked> Auto-order identical triggers</label>
+        <div class="hint" style="color:#9ab; margin-top:2px;">When several of the SAME trigger (same text &amp; targets) go on the stack at once, order them automatically instead of asking you to pick one at a time. Different triggers still ask.</div>
+    </div>
 </div>
 
 
@@ -1466,6 +1470,7 @@ function soundForFrame(method, data, gv) {
 // skip/stop preference toggles (sent live to the server's UserSkipPrioritySteps)
 const skipBoxes = ['stopNewStack','stopBlockers','stopAttackers','stopMains','stopEnds'];
 const stepModeSel = document.getElementById('stepModeSel');
+const autoOrderBox = document.getElementById('autoOrderTriggers');
 function loadSkips() {
     skipBoxes.forEach(id => { const v = localStorage.getItem('skip_'+id); if (v !== null) document.getElementById(id).checked = (v === '1'); });
     // Default: stop at EVERY step on BOTH turns, so you always get priority to respond (reliability first;
@@ -1475,16 +1480,20 @@ function loadSkips() {
     if (sm === null || (sm === 'oppAll' && localStorage.getItem('stepModeV2') !== '1')) sm = 'all';
     localStorage.setItem('stepModeV2', '1');
     stepModeSel.value = sm;
+    const ao = localStorage.getItem('autoOrderTriggers'); // default ON
+    autoOrderBox.checked = (ao === null) ? true : (ao === '1');
 }
 function sendSkips() {
     const m = {};
     skipBoxes.forEach(id => { const c = document.getElementById(id).checked; m[id] = c; localStorage.setItem('skip_'+id, c?'1':'0'); });
     m.stepMode = stepModeSel.value; localStorage.setItem('stepMode', stepModeSel.value);
+    m.autoOrderTriggers = autoOrderBox.checked; localStorage.setItem('autoOrderTriggers', autoOrderBox.checked ? '1' : '0');
     send('setSkips', undefined, m);
 }
 loadSkips();
 skipBoxes.forEach(id => document.getElementById(id).onchange = sendSkips);
 stepModeSel.onchange = sendSkips;
+autoOrderBox.onchange = sendSkips;
 function log(s) { logc('', s); }
 function logc(cls, s) {
     s = String(s).replace(/<[^>]+>/g, ''); // strip XMage's embedded <font> markup

@@ -1105,6 +1105,11 @@ public class WebGatewayServer {
                             applyPhaseStops(sk.getYourTurn(), myAll);
                             applyPhaseStops(sk.getOpponentTurn(), oppAll);
                         }
+                        // Auto-order identical triggers (same rule text + same targets) instead of making
+                        // the player click through a "which goes first" dialog for interchangeable triggers.
+                        if (msg.has("autoOrderTriggers")) {
+                            u.getUserData().setAutoOrderTrigger(msg.get("autoOrderTriggers").getAsBoolean());
+                        }
                     });
                 }
             } catch (Exception e) {
