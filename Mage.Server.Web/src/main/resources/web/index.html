@@ -258,8 +258,11 @@
         #reveals .rvgroup { margin-bottom: 4px; }
         #reveals .rvname { font-size: 11px; color: #e7c86a; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 3px; }
         #stackZone { align-items: flex-end; }
+        /* "what just happened" event feed under the stack — last few gameplay lines, newest highlighted */
         #stackLastLog { margin-top: 5px; padding-top: 4px; border-top: 1px solid #2b313b; font-size: 11px;
-                        color: #8a9; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                        color: #8a9; max-height: 92px; overflow-y: auto; cursor: pointer; scrollbar-width: thin; }
+        #stackLastLog .evline { line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .72; }
+        #stackLastLog .evline.evnew { opacity: 1; color: #cfe3cf; font-weight: 600; }
         .stackitem { display: inline-flex; flex-direction: column; align-items: stretch; }
         .stackitem.resolvesnext > .card { outline: 2px solid #4fae67; outline-offset: -2px; box-shadow: 0 0 12px #4fae6788; }
         .resolvestag { font-size: 10px; font-weight: 700; color: #7fdc95; text-align: center; margin-top: 2px; }
@@ -282,6 +285,8 @@
         #skipbar button.stopskip:hover { background: #9a3a3a; }
         #skipbar button.undoctl { background: #4a3a5a; font-size: 12px; padding: 8px 11px; }
         #skipbar button.undoctl:hover { background: #5e4a72; }
+        #skipbar button.holdctl { background: #2e3a4a; font-size: 12px; padding: 8px 11px; }
+        #skipbar button.holdctl.on { background: #b0791f; box-shadow: 0 0 0 1px #e0b050; } /* holding priority */
         /* compact action bar sitting directly under the stack */
         #prompt { background: #232a36; border: 1px solid #3a587e; border-radius: 6px;
                   padding: 5px 10px; margin: 6px 0; display: flex; flex-direction: column; gap: 3px; }
@@ -760,6 +765,9 @@ function renderLogHeader() {
     logSearchWrap.style.display = logExpanded ? 'flex' : 'none';
 }
 logHeader.onclick = () => { logExpanded = !logExpanded; localStorage.setItem('logOpen', logExpanded ? '1' : '0'); renderLogHeader(); };
+// tap the event feed to open the full log and jump to it
+const _feed = document.getElementById('stackLastLog');
+if (_feed) _feed.onclick = () => { if (!logExpanded) { logExpanded = true; localStorage.setItem('logOpen', '1'); renderLogHeader(); } document.getElementById('logBar').scrollIntoView({ behavior: 'smooth', block: 'end' }); };
 logSearch.oninput = applyLogFilter;
 renderLogHeader();
 
@@ -1011,6 +1019,7 @@ let priorityActive = false;    // true while the server is asking us to act at p
 let myHandIds = new Set();      // ids of cards in our hand (to dim the un-castable ones at priority)
 let combatMode = null;         // 'attack' | 'block' while declaring attackers/blockers (to highlight creatures)
 let manaMode = false;          // true while paying a mana cost (GAME_PLAY_MANA)
+let holdPriority = false;      // when on, keep priority after casting (stack multiple spells before passing)
 let manaCostHtml = '';         // the still-needed cost as pips, mirrored into the bottom action bar
 // card name -> "set|num": the deck's chosen printing (for matching board art). Persisted so a page
 // reload keeps the SAME card art (the server only sends this once, at game start, not on reconnect).
@@ -1038,7 +1047,7 @@ function send(action, value, extra) {
     logc('sent', '→ ' + action + (value !== undefined ? ' ' + value : ''));
     // I just handed control back (a priority pass / decision / skip) — start watching for a slow response
     // so I can show a "working…" spinner. Non-game control messages (ping/resync/setSkips/newGame) don't count.
-    if (action.indexOf('player') === 0) armWorkingTimer();
+    if (action.indexOf('player') === 0 && value !== 'HOLD_PRIORITY' && value !== 'UNHOLD_PRIORITY') armWorkingTimer();
 }
 // players are valid targets/choices too (e.g. "select a starting player", "target player")
 window.pickPlayer = (playerId) => send('playerUUID', playerId);
@@ -1214,6 +1223,17 @@ rollbackBtn.title = 'Roll the game back to the start of the previous turn (up to
 rollbackBtn.onclick = () => { if (confirm('Roll the game back to the start of the previous turn?')) send('playerAction', 'ROLLBACK_TURNS', { amount: 1 }); };
 rollbackBtn.style.display = 'none';
 skipbar.appendChild(rollbackBtn);
+// Hold priority toggle — keep priority after casting so you can double-spell / respond at instant speed.
+const holdBtn = document.createElement('button');
+holdBtn.id = 'holdBtn'; holdBtn.className = 'holdctl'; holdBtn.textContent = '⏸ Hold priority';
+holdBtn.title = 'Keep priority after you cast (so you can stack multiple spells/responses before passing). Toggle off, then pass, when done.';
+holdBtn.onclick = () => {
+    holdPriority = !holdPriority;
+    holdBtn.classList.toggle('on', holdPriority);
+    if (holdPriority) { if (priorityActive) send('playerAction', 'HOLD_PRIORITY'); }
+    else send('playerAction', 'UNHOLD_PRIORITY');
+};
+skipbar.appendChild(holdBtn);
 document.addEventListener('keydown', (e) => {
     if (document.getElementById('setup').style.display !== 'none') return; // don't skip while typing a deck
     const s = SKIPS.find(x => x.key === e.key);
@@ -1563,15 +1583,26 @@ skipBoxes.forEach(id => document.getElementById(id).onchange = sendSkips);
 stepModeSel.onchange = sendSkips;
 autoOrderBox.onchange = sendSkips;
 function log(s) { logc('', s); }
+const recentEvents = []; // last few gameplay lines, mirrored into the event feed under the stack
 function logc(cls, s) {
     s = String(s).replace(/<[^>]+>/g, ''); // strip XMage's embedded <font> markup
     const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = s;
     logEl.appendChild(d);
-    // mirror the latest gameplay line under the stack (skip our own sent/echo lines)
-    if (cls !== 'sent' && cls !== 'recv') { const ll = document.getElementById('stackLastLog'); if (ll) ll.textContent = s; }
+    // "what just happened" feed under the stack — the last few gameplay lines (skip our own echo lines)
+    if (cls !== 'sent' && cls !== 'recv') { recentEvents.push(s); while (recentEvents.length > 6) recentEvents.shift(); renderEventFeed(); }
     if (logSearch && logSearch.value.trim()) { filterLogLine(d); updateLogCount(); } // honor active search
     logEl.scrollTop = logEl.scrollHeight;
     while (logEl.childNodes.length > 500) logEl.removeChild(logEl.firstChild);
+}
+function renderEventFeed() {
+    const box = document.getElementById('stackLastLog');
+    if (!box) return;
+    box.innerHTML = '';
+    recentEvents.forEach((line, i) => {
+        const el = document.createElement('div'); el.className = 'evline' + (i === recentEvents.length - 1 ? ' evnew' : '');
+        el.textContent = line; box.appendChild(el);
+    });
+    box.scrollTop = box.scrollHeight;
 }
 // --- log search: filter to matching lines, highlight the match, jump to the first ---
 function filterLogLine(d) {
@@ -1744,6 +1775,10 @@ function onSocketMessage(ev) {
         else if (ACTIONABLE.has(msg.method)) combatMode = null;
         manaMode = (msg.method === 'GAME_PLAY_MANA');     // for the bottom action bar's cost reminder
         manaCostHtml = manaMode ? manaPips(rawMsg) : '';
+        // Hold priority: the engine resets the hold flag each time it hands you priority, so re-assert it
+        // on every plain-priority frame while the toggle is on — that keeps priority after you cast, letting
+        // you stack multiple spells/responses before passing. (Not during combat declaration or mana pay.)
+        if (holdPriority && priorityActive && !combatMode && !manaMode) send('playerAction', 'HOLD_PRIORITY');
         const gv = data.gameView || (data.players ? data : null);
         if (gv) {
             const prev = lastGameView;
@@ -2928,7 +2963,8 @@ function handle(method, data) {
             setPrompt('<span class="over">Couldn\'t start — see the message in the dialog.</span>');
             break; }
         case 'START_GAME': case 'GAME_INIT':
-            setupEl.style.display = 'none'; log('Game started'); setGameActive(true); resetCycle();
+            setupEl.style.display = 'none'; recentEvents.length = 0; renderEventFeed(); log('Game started'); setGameActive(true); resetCycle();
+            holdPriority = false; { const hb = document.getElementById('holdBtn'); if (hb) hb.classList.remove('on'); }
             setPrompt('Game started — waiting for the first decision…'); break;
 
         case 'GAME_SELECT': { // priority: play a card / declare attackers or blockers / pass
