@@ -265,13 +265,9 @@
         #stackLastLog .evline.evnew { opacity: 1; color: #cfe3cf; font-weight: 600; }
         .stackitem { display: inline-flex; flex-direction: column; align-items: stretch; }
         .stackitem.resolvesnext > .card { outline: 2px solid #4fae67; outline-offset: -2px; box-shadow: 0 0 12px #4fae6788; }
+        .stackitem.resolvable > .card:hover { outline-color: #7fdc95; box-shadow: 0 0 16px #7fdc95cc; } /* tap to resolve */
         .resolvestag { font-size: 10px; font-weight: 700; color: #7fdc95; text-align: center; margin-top: 2px; }
         .stacktargets { font-size: 10px; color: #9cf; margin-top: 2px; max-width: var(--bf-card-w); }
-        /* resolve buttons in the stack area (shown while you hold priority) */
-        .stackResolve { display: inline-flex; flex-direction: column; gap: 5px; align-self: center; margin-left: 8px; }
-        .stackResolve button { font-size: 12px; font-weight: 700; padding: 8px 12px; white-space: nowrap; }
-        #stackResolveNext { background: #2e6a40; } #stackResolveNext:hover { background: #3c8a54; }
-        #stackResolveAll { background: #26543a; } #stackResolveAll:hover { background: #327049; }
         /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
         #skipbar { display: flex; gap: 5px; flex-wrap: wrap; padding: 0; margin: 0; }
         #skipbar button { background: #2e3a4a; font-size: 12px; padding: 5px 10px; border-radius: 4px; }
@@ -447,7 +443,7 @@
         #oppPeek .opthumbs .pkthumb.tapped { transform: rotate(6deg); }
         #oppPeek .opthumbs .pkthumb .art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 3px; }
         /* "working" indicator — shown while the engine/an AI is busy and it isn't your move yet */
-        #working { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 70; display: none;
+        #working { position: fixed; top: 8px; left: 8px; z-index: 70; display: none;
             align-items: center; gap: 9px; background: #1b2333f2; border: 1px solid #3a4a63; border-radius: 20px;
             padding: 6px 15px 6px 11px; box-shadow: 0 4px 16px #000a; color: #dbe6f2; font-size: 13px; font-weight: 700; }
         #working .spin { width: 15px; height: 15px; border: 2.5px solid #46506a; border-top-color: #7cc0ff;
@@ -1131,9 +1127,9 @@ const SKIPS = [
     {label:'Pass (F2)', key:'F2', fn:()=>send('playerBoolean', false), title:'Pass priority once', hide:true},
     {label:'Next main (F5)', key:'F5', action:'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE', title:'Keep skipping to the next main phase', hide:true},
     // the three skip-ahead buttons you actually use — big, left-hand (thumb) reachable
-    {label:'End of turn', key:'F6', action:'PASS_PRIORITY_UNTIL_TURN_END_STEP', title:'Keep skipping to this turn’s end step (F6)', big:true},
     {label:'Next turn', key:'F4', action:'PASS_PRIORITY_UNTIL_NEXT_TURN', title:'Keep skipping to the next turn (F4)', big:true},
     {label:'My next turn', key:'F7', action:'PASS_PRIORITY_UNTIL_MY_NEXT_TURN', title:'Keep skipping to your next turn — pauses for responses, then resumes (F7)', big:true},
+    {label:'End of turn', key:'F6', action:'PASS_PRIORITY_UNTIL_TURN_END_STEP', title:'Keep skipping to this turn’s end step (F6)', big:true},
     // Stop only appears while a skip is armed
     {label:'✕ Stop', key:'F3', fn:stopSticky, title:'Cancel the armed skip / stop here now (F3)', stopBtn:true},
 ];
@@ -2431,33 +2427,29 @@ function renderBoard(gv) {
     else {
         stack.forEach((c, i) => {
             const item = document.createElement('div'); item.className = 'stackitem';
-            if (i === stack.length - 1) item.classList.add('resolvesnext'); // rightmost = resolves first
-            item.appendChild(cardEl(c, false, {noCache:true}));
+            const isNext = i === stack.length - 1; // rightmost = resolves first
+            if (isNext) item.classList.add('resolvesnext');
+            const cel = cardEl(c, false, {noCache:true});
+            // Click the next-to-resolve card to resolve it (pass once). Only while you hold priority.
+            if (isNext && priorityActive) {
+                item.classList.add('resolvable');
+                cel.style.cursor = 'pointer';
+                cel.onclick = () => send('playerBoolean', false);
+                cel.title = 'Click to resolve this — opponents can still respond first';
+            }
+            item.appendChild(cel);
             // show what this spell/ability is targeting (so opponents' targets are visible)
             const names = (c.targets || []).map(id => resolveTargetName(gv, id)).filter(Boolean);
             if (names.length) {
                 const t = document.createElement('div'); t.className = 'stacktargets';
                 t.textContent = '→ ' + names.join(', '); item.appendChild(t);
             }
-            if (i === stack.length - 1) {
+            if (isNext) {
                 const tag = document.createElement('div'); tag.className = 'resolvestag';
-                tag.textContent = 'resolves next ▸'; item.appendChild(tag);
+                tag.textContent = priorityActive ? 'tap to resolve ▸' : 'resolves next ▸'; item.appendChild(tag);
             }
             stackZone.appendChild(item);
         });
-        // Resolve buttons right in the stack area (handy when you're looking at the stack). Only shown
-        // when you actually hold priority; the dock has the same actions for when the stack is off-screen.
-        if (priorityActive) {
-            const col = document.createElement('div'); col.className = 'stackResolve';
-            const rb = document.createElement('button'); rb.id = 'stackResolveNext'; rb.textContent = '◂ Resolve next';
-            rb.title = 'Pass once so the top (rightmost) item resolves — opponents can still respond';
-            rb.onclick = () => send('playerBoolean', false);
-            const ra = document.createElement('button'); ra.id = 'stackResolveAll'; ra.textContent = 'Resolve stack';
-            ra.title = 'Pass until the ENTIRE stack resolves (F9)';
-            ra.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
-            col.appendChild(rb); col.appendChild(ra);
-            stackZone.appendChild(col);
-        }
     }
     renderReveals(gv);
     updateTargetBar(gv, opponents, me);
@@ -2932,7 +2924,7 @@ function setPrompt(message, buttons) {
     const m = document.createElement('span'); m.className = 'msg'; m.innerHTML = message; promptMain.appendChild(m);
     (buttons || []).forEach(b => {
         const btn = document.createElement('button');
-        btn.textContent = b.label; if (b.alt) btn.className = 'alt';
+        btn.textContent = b.label; if (b.alt) btn.className = 'alt'; else if (b.primary) btn.className = 'passbtn';
         btn.onclick = b.onClick; promptMain.appendChild(btn);
     });
     Nav.refresh(); // re-index so new prompt buttons (mulligan keep/skip, targeting Done, …) are reachable
@@ -3103,10 +3095,13 @@ function handle(method, data) {
         }
         case 'GAME_CHOOSE_ABILITY': {
             const choices = data.choices || {};
-            const btns = [];
-            for (const id in choices) btns.push({label: strip(choices[id]), onClick:()=>send('playerUUID', id)});
+            // Put any "Play …" (e.g. play a land / cast) option FIRST and mark it primary, so on a card
+            // that can be played OR has an ability (cycling lands, etc.) you don't tap Cycling by mistake.
+            const entries = Object.keys(choices).map(id => ({ id, label: strip(choices[id]) }));
+            entries.sort((a, b) => (/^play\b/i.test(b.label) ? 1 : 0) - (/^play\b/i.test(a.label) ? 1 : 0));
+            const btns = entries.map(e => ({ label: e.label, primary: /^play\b/i.test(e.label), onClick: () => send('playerUUID', e.id) }));
             btns.push({label:'Cancel', alt:true, onClick:()=>send('playerBoolean', false)});
-            setPrompt(msg(data.message || 'Choose an ability'), btns);
+            setPrompt(msg(data.message || 'Choose what to do with this card'), btns);
             break;
         }
         case 'GAME_OVER': case 'END_GAME_INFO':
