@@ -102,7 +102,7 @@
         /* fixed right column (always present, never overlaps content): viewer + mana + zone buttons + sliders */
         :root { --sidecol-w: 340px; }
         #sidecol { position: fixed; right: 0; top: 52px; bottom: 0; width: var(--sidecol-w); z-index: 40;
-                   display: flex; flex-direction: column; gap: 8px; padding: 10px; overflow-y: auto;
+                   display: flex; flex-direction: column; gap: 8px; padding: 10px 10px calc(10px + var(--dock-h)); overflow-y: auto;
                    background: #14171c; border-left: 1px solid #2b313b; }
         #board, #logBar { margin-right: var(--sidecol-w); }   /* reserve room so nothing hides under the column */
         #viewer { width: 100%; background: #1b212b; border: 1px solid #3a4658; border-radius: 9px; padding: 9px; }
@@ -389,7 +389,9 @@
         /* ---- off-screen peek bars: keep your hand and opponents reachable without scrolling ---- */
         /* Bottom: your hand as an overlapping fan showing just the card tops; hover/focus raises one into
            view, tap plays it. Shown only while the real hand is scrolled below the viewport. */
-        #handPeek { position: fixed; left: 0; right: 0; bottom: var(--dock-h); z-index: 60; display: none;
+        /* z-index 44 (just BELOW the dock at 45): the hand fan sits above the dock, and each card's hidden
+           lower portion tucks BEHIND the opaque dock instead of covering its buttons. */
+        #handPeek { position: fixed; left: 0; right: var(--sidecol-w); bottom: var(--dock-h); z-index: 44; display: none;
             justify-content: center; pointer-events: none; }
         /* overflow MUST stay visible on both axes so a raised card can rise above the bar — hence no
            horizontal scroll here; renderHandPeek computes the overlap so the fan fits the screen width. */
@@ -436,25 +438,39 @@
         .player.thinking { box-shadow: 0 0 0 2px #7cc0ff99, 0 0 18px #7cc0ff55; }
         .player.thinking .pname::after { content: ' 🤔'; }
         /* ---- persistent control dock (always-visible bottom bar) ---- */
-        /* z-index 45: above the board + side column (40), but BELOW modal overlays (50) so a picker/choice
+        /* full-width so its left/right ends land in the bottom corners (thumb zones on a tablet).
+           z-index 45: above the board + side column (40), but BELOW modal overlays (50) so a picker/choice
            dialog covers the dock instead of the dock poking through it. */
-        #ctrlDock { position: fixed; left: 0; right: var(--sidecol-w); bottom: 0; z-index: 45;
+        #ctrlDock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 45;
             background: #10151df5; border-top: 1px solid #3a4a63; box-shadow: 0 -5px 18px #000b;
-            padding: 4px 10px 6px; }
+            padding: 4px 8px 6px; }
         #dockBody { display: flex; flex-direction: column; gap: 4px; }
         #ctrlDock.collapsed #dockBody { display: none; }
         #dockToggle { position: absolute; top: -18px; right: 12px; z-index: 1; background: #1b2230;
             border: 1px solid #3a4a63; border-bottom: 0; border-radius: 7px 7px 0 0; color: #cbd5e2;
             font-size: 12px; padding: 1px 12px; cursor: pointer; }
-        #dockTop { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        #dockTop { display: flex; align-items: stretch; gap: 8px; }
+        #dockCenter { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center;
+            gap: 3px; overflow: hidden; }
         #dockStatus { font-size: 13px; font-weight: 700; color: #dbe6f2; display: flex; align-items: center;
             gap: 8px; flex-wrap: wrap; }
         #dockStatus .dsPhase { color: #7fdc95; }
         #dockStatus .dsTurnMe { color: #7f7; } #dockStatus .dsTurnOpp { color: #fa8; }
         #dockStatus .dsPay { color: #ffd166; display: inline-flex; align-items: center; gap: 4px; }
-        #dockActions { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
-        #dockActions button { font-size: 14px; font-weight: 700; padding: 7px 14px; }
-        #dockActions button.prim { background: #2e6a40; } #dockActions button.prim:hover { background: #3c8a54; }
+        /* mini stack: small card thumbnails so you can see what's on the stack while it's scrolled away */
+        #dockMiniStack { display: none; align-items: center; gap: 3px; overflow-x: auto; scrollbar-width: none; cursor: pointer; }
+        #dockMiniStack::-webkit-scrollbar { display: none; }
+        #dockMiniStack.on { display: flex; }
+        #dockMiniStack .msLabel { color: #9fb3c8; font-size: 11px; font-weight: 700; white-space: nowrap; }
+        #dockMiniStack .pkthumb { flex: 0 0 auto; width: 24px; height: 33px; min-height: 0; padding: 0; position: relative;
+            overflow: hidden; border: 1px solid #4fae67; border-radius: 3px; background: #0e131b; }
+        #dockMiniStack .pkthumb.msnext { outline: 2px solid #7fdc95; outline-offset: -2px; }
+        #dockMiniStack .pkthumb .art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+        /* big thumb-reachable action buttons at the dock corners */
+        .dockActs { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+        .dockActs button { font-size: 15px; font-weight: 800; padding: 12px 16px; border-radius: 9px; }
+        .dockActs button.prim { background: #2e6a40; } .dockActs button.prim:hover { background: #3c8a54; }
+        .dockActs:empty { display: none; }
         #pickerCards .pickok { outline: 2px solid #3fae67; outline-offset: -2px; border-radius: 8px; cursor: pointer; }
         #pickerCards .pickdim { opacity: .4; pointer-events: none; filter: grayscale(.5); }
         #pickerCards .picksel { outline: 3px solid #ffd166; outline-offset: -2px; box-shadow: 0 0 14px #ffd166aa; cursor: pointer; }
@@ -644,7 +660,13 @@
 <div id="ctrlDock">
     <button id="dockToggle" title="Collapse / expand the control dock">▾</button>
     <div id="dockBody">
-        <div id="dockTop"><span id="dockStatus"></span><div id="dockActions"></div></div>
+        <!-- top row: primary actions sit at the far LEFT and far RIGHT (thumb corners when holding a
+             tablet); the middle shows status + a mini view of the stack (so you see it while scrolled). -->
+        <div id="dockTop">
+            <div id="dockLeft" class="dockActs"></div>
+            <div id="dockCenter"><span id="dockStatus"></span><div id="dockMiniStack" title="what's on the stack — tap to jump to it"></div></div>
+            <div id="dockRight" class="dockActs"></div>
+        </div>
         <div id="phasebar"></div>
         <div id="skipbar"></div>
     </div>
@@ -2478,8 +2500,9 @@ function peekThumb(card) {
 function renderDock() {
     const gv = lastGameView || {};
     const statusEl = document.getElementById('dockStatus');
-    const actEl = document.getElementById('dockActions');
-    if (!statusEl || !actEl) return;
+    const leftEl = document.getElementById('dockLeft');
+    const rightEl = document.getElementById('dockRight');
+    if (!statusEl || !leftEl || !rightEl) return;
     const me = (gv.players || []).find(p => p.controlled);
     const myTurn = me && gv.activePlayerId === me.playerId;
     const stack = gv.stack ? Object.values(gv.stack) : [];
@@ -2489,25 +2512,40 @@ function renderDock() {
     if (gv.step || gv.phase) s += ' · <span class="dsPhase">' + esc(stepLabel(gv.step) || gv.phase) + '</span>';
     if (manaMode) s += ' · <span class="dsPay">Paying: ' + (manaCostHtml || '—') + '</span>';
     statusEl.innerHTML = s;
-    // contextual primary actions
-    actEl.innerHTML = '';
+    // mini stack view (so you can see what's on the stack while it's scrolled off screen)
+    renderMiniStack(gv, stack);
+    // Contextual actions split to the corners: primary on the RIGHT (dominant thumb), secondary on the LEFT.
+    leftEl.innerHTML = ''; rightEl.innerHTML = '';
     const mk = (label, prim, title, fn) => { const b = document.createElement('button');
-        b.innerHTML = label; if (prim) b.className = 'prim'; else b.className = 'alt'; if (title) b.title = title;
-        b.onclick = fn; return b; };
+        b.innerHTML = label; b.className = prim ? 'prim' : 'alt'; if (title) b.title = title; b.onclick = fn; return b; };
     if (manaMode) {
-        actEl.appendChild(mk('Cancel cast', false, 'Stop paying and cancel this spell/ability', () => send('playerBoolean', false)));
+        rightEl.appendChild(mk('Cancel', false, 'Stop paying and cancel this spell/ability', () => send('playerBoolean', false)));
     } else if (combatMode === 'attack') {
-        actEl.appendChild(mk('⚔ Attack all', false, 'Send every eligible creature to attack, then pick targets', () => send('playerString', 'special')));
-        actEl.appendChild(mk('Done attacking ▸', true, 'Finish declaring attackers', () => send('playerBoolean', false)));
+        leftEl.appendChild(mk('⚔ All', false, 'Send every eligible creature to attack, then pick targets', () => send('playerString', 'special')));
+        rightEl.appendChild(mk('Done ▸', true, 'Finish declaring attackers', () => send('playerBoolean', false)));
     } else if (combatMode === 'block') {
-        actEl.appendChild(mk('Done blocking ▸', true, 'Finish declaring blockers', () => send('playerBoolean', false)));
+        rightEl.appendChild(mk('Done ▸', true, 'Finish declaring blockers', () => send('playerBoolean', false)));
     } else if (priorityActive && stack.length) {
-        actEl.appendChild(mk('◂ Resolve next', true, 'Pass once so the top (rightmost) item resolves — opponents can still respond', () => send('playerBoolean', false)));
-        actEl.appendChild(mk('Resolve stack', false, 'Pass until the ENTIRE stack resolves (F9)', () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED')));
+        leftEl.appendChild(mk('Resolve all', false, 'Pass until the ENTIRE stack resolves (F9)', () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED')));
+        rightEl.appendChild(mk('Resolve ▸', true, 'Pass once so the top (rightmost) item resolves — opponents can still respond', () => send('playerBoolean', false)));
     } else if (priorityActive) {
-        actEl.appendChild(mk('Pass ▸', true, 'Pass priority (F2)', () => send('playerBoolean', false)));
+        rightEl.appendChild(mk('Pass ▸', true, 'Pass priority (F2)', () => send('playerBoolean', false)));
     }
     // else: not our decision — leave actions empty (status shows whose turn; the top spinner shows waiting)
+}
+// small thumbnails of the stack, newest (resolves next) highlighted; tap to scroll to the real stack
+function renderMiniStack(gv, stack) {
+    const el = document.getElementById('dockMiniStack');
+    if (!el) return;
+    el.innerHTML = '';
+    if (!stack.length) { el.classList.remove('on'); return; }
+    el.classList.add('on');
+    const lab = document.createElement('span'); lab.className = 'msLabel'; lab.textContent = 'Stack ' + stack.length + ':';
+    el.appendChild(lab);
+    // gv.stack is resolves-first→bottom; show oldest→newest so the RIGHTMOST resolves next (matches the board)
+    const ordered = stack.slice().reverse();
+    ordered.forEach((c, i) => { const t = peekThumb(c); if (i === ordered.length - 1) t.classList.add('msnext'); el.appendChild(t); });
+    el.onclick = () => { const sz = document.getElementById('stack'); if (sz) sz.scrollIntoView({ behavior: 'smooth', block: 'center' }); };
 }
 // keep the fixed dock's height reflected in --dock-h so page content + the hand fan sit above it
 function updateDockOffset() {
