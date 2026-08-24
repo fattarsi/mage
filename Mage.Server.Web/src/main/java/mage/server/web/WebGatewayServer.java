@@ -245,13 +245,13 @@ public class WebGatewayServer {
 
     public void start(int port) {
         app = Javalin.create(config -> {
-            // serve the minimal browser client from classpath:/web. Force revalidation ("no-cache" =
-            // the browser may cache but must re-check with the server via ETag before using) so a redeploy
-            // is picked up immediately instead of a stale index.html/JS lingering until a hard refresh.
+            // serve the minimal browser client from classpath:/web. "no-store" = never cache the app shell
+            // or the service worker, so a redeploy is picked up on the next load instead of a stale
+            // index.html / sw.js lingering (art/cardinfo have their own long cache headers on /img, /cardinfo).
             config.staticFiles.add(staticFiles -> {
                 staticFiles.directory = "/web";
                 staticFiles.location = Location.CLASSPATH;
-                staticFiles.headers = Map.of("Cache-Control", "no-cache");
+                staticFiles.headers = Map.of("Cache-Control", "no-store");
             });
         });
 
@@ -1284,6 +1284,9 @@ public class WebGatewayServer {
                     }
                 }
             }
+            // track saved-deck ids already handed out (incl. the human's) so auto AI seats vary their decks
+            java.util.Set<String> usedSavedIds = new java.util.HashSet<>();
+            if (!savedDeckId.isEmpty()) usedSavedIds.add(savedDeckId);
             aiDecks = new java.util.ArrayList<>();
             for (int i = 0; i < fmt.aiSeats; i++) {
                 String saved = i < aiSavedDeckIds.size() ? aiSavedDeckIds.get(i).trim() : "";
@@ -1292,16 +1295,24 @@ public class WebGatewayServer {
                 if (!saved.isEmpty()) {
                     DeckCardLists sd = deckStore.toDeck(saved);
                     if (sd == null) throw new IllegalStateException("A saved deck for AI " + (i + 1) + " was not found.");
+                    usedSavedIds.add(saved);
                     aiDecks.add(sd);
                 } else if (!url.isEmpty()) {
                     aiDecks.add(DeckUrlImporter.fetch(url));
                 } else if (!chosen.isEmpty() && deckSource != null) {
                     aiDecks.add(deckSource.fetchDeck(chosen));
                 } else if (isCommander) {
-                    if (deckSource == null || autoIds.isEmpty()) {
-                        throw new IllegalStateException("Commander vs AI needs a deck source or an Archidekt URL for each AI seat.");
+                    // Auto seat: prefer a RANDOM saved (Archidekt) deck from the manager; fall back to the
+                    // configured deck source; only then give up with a clear message.
+                    DeckCardLists rnd = pickRandomSavedDeck(usedSavedIds);
+                    if (rnd != null) {
+                        aiDecks.add(rnd);
+                    } else if (deckSource != null && !autoIds.isEmpty()) {
+                        aiDecks.add(deckSource.fetchDeck(autoIds.get(i % autoIds.size())));
+                    } else {
+                        throw new IllegalStateException("Commander vs AI needs at least one valid saved deck "
+                                + "(add one via 🗂 Manage) or an Archidekt URL for each AI seat.");
                     }
-                    aiDecks.add(deckSource.fetchDeck(autoIds.get(i % autoIds.size())));
                 } else {
                     aiDecks.add(null); // non-commander seat left on auto -> random deck
                 }
@@ -1343,6 +1354,27 @@ public class WebGatewayServer {
             wsToGameId.put(ctx.getSessionId(), newId);
         }
         logger.info("web gateway: started " + fmt.gameType + " for " + humanName + " -> " + newId);
+    }
+
+    /**
+     * Pick a random VALID saved (Archidekt) deck from the manager for an auto AI seat, preferring one not
+     * already handed out this game (so opponents vary). Returns null if there are no usable saved decks.
+     */
+    private DeckCardLists pickRandomSavedDeck(java.util.Set<String> avoid) {
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        for (com.google.gson.JsonElement e : deckStore.listMeta()) {
+            com.google.gson.JsonObject d = e.getAsJsonObject();
+            boolean valid = d.has("valid") && !d.get("valid").isJsonNull() && d.get("valid").getAsBoolean();
+            String id = d.has("id") && !d.get("id").isJsonNull() ? d.get("id").getAsString() : null;
+            if (valid && id != null) ids.add(id);
+        }
+        if (ids.isEmpty()) return null;
+        java.util.List<String> pool = new java.util.ArrayList<>();
+        for (String id : ids) if (!avoid.contains(id)) pool.add(id);
+        if (pool.isEmpty()) pool = ids; // fewer decks than seats — allow repeats
+        String id = pool.get((int) (Math.random() * pool.size()));
+        avoid.add(id);
+        return deckStore.toDeck(id);
     }
 
     /**
