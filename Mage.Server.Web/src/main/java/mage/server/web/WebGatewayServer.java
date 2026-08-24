@@ -1284,9 +1284,19 @@ public class WebGatewayServer {
                     }
                 }
             }
-            // track saved-deck ids already handed out (incl. the human's) so auto AI seats vary their decks
-            java.util.Set<String> usedSavedIds = new java.util.HashSet<>();
-            if (!savedDeckId.isEmpty()) usedSavedIds.add(savedDeckId);
+            // Combined random pool for auto Commander AI seats: BOTH your saved (manager) decks AND the
+            // deck-source ("architect") decks, so an auto opponent can be any of them. Tokens: "saved:<id>"
+            // or "src:<id>". Exclude the human's own deck so the AI doesn't mirror you.
+            java.util.List<String> autoPool = new java.util.ArrayList<>();
+            for (com.google.gson.JsonElement e : deckStore.listMeta()) {
+                com.google.gson.JsonObject d = e.getAsJsonObject();
+                boolean valid = d.has("valid") && !d.get("valid").isJsonNull() && d.get("valid").getAsBoolean();
+                String id = d.has("id") && !d.get("id").isJsonNull() ? d.get("id").getAsString() : null;
+                if (valid && id != null && !id.equals(savedDeckId)) autoPool.add("saved:" + id);
+            }
+            for (String sid : autoIds) autoPool.add("src:" + sid); // autoIds already excludes the human's site deck
+            java.util.Collections.shuffle(autoPool);               // random order; drawn without repeats until exhausted
+            int poolCursor = 0;
             aiDecks = new java.util.ArrayList<>();
             for (int i = 0; i < fmt.aiSeats; i++) {
                 String saved = i < aiSavedDeckIds.size() ? aiSavedDeckIds.get(i).trim() : "";
@@ -1295,24 +1305,20 @@ public class WebGatewayServer {
                 if (!saved.isEmpty()) {
                     DeckCardLists sd = deckStore.toDeck(saved);
                     if (sd == null) throw new IllegalStateException("A saved deck for AI " + (i + 1) + " was not found.");
-                    usedSavedIds.add(saved);
                     aiDecks.add(sd);
                 } else if (!url.isEmpty()) {
                     aiDecks.add(DeckUrlImporter.fetch(url));
                 } else if (!chosen.isEmpty() && deckSource != null) {
                     aiDecks.add(deckSource.fetchDeck(chosen));
                 } else if (isCommander) {
-                    // Auto seat: prefer a RANDOM saved (Archidekt) deck from the manager; fall back to the
-                    // configured deck source; only then give up with a clear message.
-                    DeckCardLists rnd = pickRandomSavedDeck(usedSavedIds);
-                    if (rnd != null) {
-                        aiDecks.add(rnd);
-                    } else if (deckSource != null && !autoIds.isEmpty()) {
-                        aiDecks.add(deckSource.fetchDeck(autoIds.get(i % autoIds.size())));
-                    } else {
-                        throw new IllegalStateException("Commander vs AI needs at least one valid saved deck "
-                                + "(add one via 🗂 Manage) or an Archidekt URL for each AI seat.");
+                    // Auto seat: draw the next deck from the combined random pool (saved + source).
+                    if (autoPool.isEmpty()) {
+                        throw new IllegalStateException("Commander vs AI needs at least one deck to draw from — "
+                                + "add a saved deck via 🗂 Manage or an Archidekt URL for each AI seat.");
                     }
+                    String token = autoPool.get(poolCursor % autoPool.size()); // wraps → repeats only if seats > decks
+                    poolCursor++;
+                    aiDecks.add(resolvePoolToken(token));
                 } else {
                     aiDecks.add(null); // non-commander seat left on auto -> random deck
                 }
@@ -1356,25 +1362,17 @@ public class WebGatewayServer {
         logger.info("web gateway: started " + fmt.gameType + " for " + humanName + " -> " + newId);
     }
 
-    /**
-     * Pick a random VALID saved (Archidekt) deck from the manager for an auto AI seat, preferring one not
-     * already handed out this game (so opponents vary). Returns null if there are no usable saved decks.
-     */
-    private DeckCardLists pickRandomSavedDeck(java.util.Set<String> avoid) {
-        java.util.List<String> ids = new java.util.ArrayList<>();
-        for (com.google.gson.JsonElement e : deckStore.listMeta()) {
-            com.google.gson.JsonObject d = e.getAsJsonObject();
-            boolean valid = d.has("valid") && !d.get("valid").isJsonNull() && d.get("valid").getAsBoolean();
-            String id = d.has("id") && !d.get("id").isJsonNull() ? d.get("id").getAsString() : null;
-            if (valid && id != null) ids.add(id);
+    /** Resolve an auto-pool token ("saved:&lt;id&gt;" = manager snapshot, "src:&lt;id&gt;" = deck source) to a deck. */
+    private DeckCardLists resolvePoolToken(String token) throws Exception {
+        if (token.startsWith("saved:")) {
+            DeckCardLists d = deckStore.toDeck(token.substring(6));
+            if (d == null) throw new IllegalStateException("A saved deck picked for an AI seat was not found.");
+            return d;
         }
-        if (ids.isEmpty()) return null;
-        java.util.List<String> pool = new java.util.ArrayList<>();
-        for (String id : ids) if (!avoid.contains(id)) pool.add(id);
-        if (pool.isEmpty()) pool = ids; // fewer decks than seats — allow repeats
-        String id = pool.get((int) (Math.random() * pool.size()));
-        avoid.add(id);
-        return deckStore.toDeck(id);
+        if (token.startsWith("src:") && deckSource != null) {
+            return deckSource.fetchDeck(token.substring(4));
+        }
+        throw new IllegalStateException("Could not load an AI deck (" + token + ").");
     }
 
     /**

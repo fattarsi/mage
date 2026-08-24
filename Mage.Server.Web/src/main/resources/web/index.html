@@ -897,8 +897,8 @@ function playabilityNote(card) {
         return { ok:false, text:`✗ Likely not enough mana — needs ${card.manaValue}, you have ~${avail} (untapped lands + floating; rocks/dorks not counted).` };
     return { ok:false, text:"✗ Can't play right now — a timing rule or effect is preventing it." };
 }
-function showCardViewer(card) {
-    if (!viewerToggle.checked || !card) return;
+function showCardViewer(card, force) {
+    if ((!viewerToggle.checked && !force) || !card) return; // `force` = an explicit gesture (press-and-hold)
     // A stack ability (triggered/activated) isn't a printed card — it carries its source card as
     // `sourceCard`. Show the SOURCE card's art + name/cost/types (so you get a real card preview), and
     // surface the specific ability that's on the stack (card.rules) in a highlighted box above the
@@ -3456,41 +3456,19 @@ function onCardClick(e, card, d) {
 // (Swipe-to-play was removed: a quick tap now plays a hand card directly, and keeping hand cards
 // free of touch-action:none lets you scroll the page by dragging on them — needed for the hand peek.)
 
-// ---- Long-press to zoom a card (touch) --------------------------------------------------------
-// On a tablet there's no hover to drive the side viewer, and full-screen disables the browser's
-// pinch-zoom — so press-and-hold any card to see it big, tap anywhere to dismiss. The long-press
-// also swallows the tap that would otherwise play/select the card.
+// ---- Press-and-hold to preview (touch) --------------------------------------------------------
+// On a tablet there's no hover, so press-and-hold a card to show it in the side preview panel (NOT a
+// full-screen overlay). The long-press also swallows the tap that would otherwise play/select the card.
 (function () {
-    const peek = document.getElementById('cardPeek');
-    if (!peek) return;
     let timer = null, sx = 0, sy = 0, longFired = false;
     const clear = () => { if (timer) { clearTimeout(timer); timer = null; } };
 
-    function show(card) {
-        peek.innerHTML = '';
-        if (card.faceDown) {
-            const t = document.createElement('div'); t.className = 'peektext'; t.textContent = '(face-down card)';
-            peek.appendChild(t);
-        } else {
-            const img = document.createElement('img');
-            setCardImage(img, card);          // reuse the tile's art + fallback chain
-            peek.appendChild(img);
-        }
-        peek.style.display = 'flex';
-    }
-    const hide = () => { peek.style.display = 'none'; peek.innerHTML = ''; };
-
-    // dismiss on touch/click of the overlay; preventDefault stops a stray click leaking to a card
-    peek.addEventListener('touchstart', (e) => { e.preventDefault(); hide(); }, { passive: false });
-    peek.addEventListener('click', (e) => { e.stopPropagation(); hide(); });
-
     document.addEventListener('touchstart', (e) => {
-        if (peek.style.display === 'flex') return;
         const el = e.target.closest && e.target.closest('.card');
         if (!el || !el._card) return;
         const t = e.touches[0]; sx = t.clientX; sy = t.clientY; longFired = false;
         clear();
-        timer = setTimeout(() => { longFired = true; show(el._card); }, 360);
+        timer = setTimeout(() => { longFired = true; showCardViewer(el._card, true); }, 360); // → side viewer
     }, { passive: true, capture: true });
 
     document.addEventListener('touchmove', (e) => {
