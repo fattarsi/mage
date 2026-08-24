@@ -264,11 +264,22 @@
         .stackitem.resolvesnext > .card { outline: 2px solid #4fae67; outline-offset: -2px; box-shadow: 0 0 12px #4fae6788; }
         .resolvestag { font-size: 10px; font-weight: 700; color: #7fdc95; text-align: center; margin-top: 2px; }
         .stacktargets { font-size: 10px; color: #9cf; margin-top: 2px; max-width: var(--bf-card-w); }
+        /* resolve buttons in the stack area (shown while you hold priority) */
+        .stackResolve { display: inline-flex; flex-direction: column; gap: 5px; align-self: center; margin-left: 8px; }
+        .stackResolve button { font-size: 12px; font-weight: 700; padding: 8px 12px; white-space: nowrap; }
+        #stackResolveNext { background: #2e6a40; } #stackResolveNext:hover { background: #3c8a54; }
+        #stackResolveAll { background: #26543a; } #stackResolveAll:hover { background: #327049; }
         /* compact skip/pass controls, sitting just under the action bar (beneath the stack) */
         #skipbar { display: flex; gap: 5px; flex-wrap: wrap; padding: 0; margin: 0; }
         #skipbar button { background: #2e3a4a; font-size: 12px; padding: 5px 10px; border-radius: 4px; }
         #skipbar button:hover { background: #3d4d63; }
         #skipbar button.armed { background: #7a5a20; box-shadow: 0 0 0 1px #c79a40; } /* sticky skip is running */
+        /* the three skip-ahead buttons you actually use — bigger, left-hand (thumb) reachable */
+        #skipbar button.bigskip { font-size: 14px; font-weight: 700; padding: 11px 16px; background: #35506e; flex: 1 1 0; }
+        #skipbar button.bigskip:hover { background: #436489; }
+        #skipbar button.bigskip.armed { background: #7a5a20; }
+        #skipbar button.stopskip { background: #7a2f2f; font-weight: 700; padding: 11px 14px; }
+        #skipbar button.stopskip:hover { background: #9a3a3a; }
         /* compact action bar sitting directly under the stack */
         #prompt { background: #232a36; border: 1px solid #3a587e; border-radius: 6px;
                   padding: 5px 10px; margin: 6px 0; display: flex; flex-direction: column; gap: 3px; }
@@ -1105,12 +1116,15 @@ function act(a) { send('playerAction', a); }
 let stickySkip = null;   // { action, turn, step }
 const skipBtns = {};     // action -> button element (for the armed highlight)
 const SKIPS = [
-    {label:'Pass (F2)', key:'F2', fn:()=>send('playerBoolean', false), title:'Pass priority once'},
-    {label:'Next main (F5)', key:'F5', action:'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE', title:'Keep skipping to the next main phase — pauses for responses, then resumes (click again to cancel)'},
-    {label:'End of turn (F6)', key:'F6', action:'PASS_PRIORITY_UNTIL_TURN_END_STEP', title:'Keep skipping to this turn’s end step'},
-    {label:'Next turn (F4)', key:'F4', action:'PASS_PRIORITY_UNTIL_NEXT_TURN', title:'Keep skipping to the next turn'},
-    {label:'My next turn (F7)', key:'F7', action:'PASS_PRIORITY_UNTIL_MY_NEXT_TURN', title:'Keep skipping to your next turn — pauses for responses, then resumes'},
-    {label:'Stop skipping (F3)', key:'F3', fn:stopSticky, title:'Cancel any armed skip / Run to breakpoint and stop here now'},
+    // hide:true = keyboard shortcut only, no button (Pass is on the dock's primary; these are rarely tapped)
+    {label:'Pass (F2)', key:'F2', fn:()=>send('playerBoolean', false), title:'Pass priority once', hide:true},
+    {label:'Next main (F5)', key:'F5', action:'PASS_PRIORITY_UNTIL_NEXT_MAIN_PHASE', title:'Keep skipping to the next main phase', hide:true},
+    // the three skip-ahead buttons you actually use — big, left-hand (thumb) reachable
+    {label:'End of turn', key:'F6', action:'PASS_PRIORITY_UNTIL_TURN_END_STEP', title:'Keep skipping to this turn’s end step (F6)', big:true},
+    {label:'Next turn', key:'F4', action:'PASS_PRIORITY_UNTIL_NEXT_TURN', title:'Keep skipping to the next turn (F4)', big:true},
+    {label:'My next turn', key:'F7', action:'PASS_PRIORITY_UNTIL_MY_NEXT_TURN', title:'Keep skipping to your next turn — pauses for responses, then resumes (F7)', big:true},
+    // Stop only appears while a skip is armed
+    {label:'✕ Stop', key:'F3', fn:stopSticky, title:'Cancel the armed skip / stop here now (F3)', stopBtn:true},
 ];
 let stickyBypassBP = false; // let a freshly-armed skip leave the breakpoint it's currently sitting on
 function setSticky(action) {
@@ -1134,7 +1148,11 @@ function stopSticky() {
     stickySkip = null; advancing = false; stickyBypassBP = false; updateAdvanceBtn();
     act('PASS_PRIORITY_CANCEL_ALL_ACTIONS'); updateSkipUI();
 }
-function updateSkipUI() { for (const a in skipBtns) skipBtns[a].classList.toggle('armed', !!stickySkip && stickySkip.action === a); }
+function updateSkipUI() {
+    for (const a in skipBtns) skipBtns[a].classList.toggle('armed', !!stickySkip && stickySkip.action === a);
+    const stop = document.getElementById('stopSkipBtn');
+    if (stop) stop.style.display = (stickySkip || advancing) ? '' : 'none'; // only while a skip is running
+}
 function stickyReached(gv) {
     if (!stickySkip || !gv) return false;
     const me = (gv.players||[]).find(p => p.controlled); const myId = me && me.playerId;
@@ -1173,8 +1191,11 @@ advanceBtn.textContent = '▶ Run to breakpoint'; advanceBtn.onclick = startAdva
 advanceBtn.title = 'Auto-pass priority until the next breakpoint (or a decision that needs you)';
 skipbar.appendChild(advanceBtn);
 SKIPS.forEach(s => {
+    if (s.hide) return; // keyboard-only (Pass / Next main)
     const b = document.createElement('button'); b.textContent = s.label; if (s.title) b.title = s.title;
     b.onclick = s.action ? () => setSticky(s.action) : s.fn;
+    if (s.big) b.classList.add('bigskip');
+    if (s.stopBtn) { b.id = 'stopSkipBtn'; b.className = 'stopskip'; b.style.display = 'none'; } // shown only while a skip is armed
     if (s.action) skipBtns[s.action] = b;
     skipbar.appendChild(b);
 });
@@ -1944,6 +1965,8 @@ function updateAdvanceBtn() {
     const b = document.getElementById('advanceBtn'); if (!b) return;
     b.style.display = breakpoints.size ? '' : 'none';
     b.textContent = advancing ? '⏸ Stop' : '▶ Run to breakpoint';
+    const stop = document.getElementById('stopSkipBtn'); // keep the Stop-skip button in sync with `advancing`
+    if (stop) stop.style.display = (stickySkip || advancing) ? '' : 'none';
 }
 function startAdvance() { advancing = !advancing; updateAdvanceBtn(); if (advancing) tryAdvance(lastMethod, lastGameView); }
 // called after each frame: if we're advancing and it's safe to pass, pass; otherwise stop at the decision/breakpoint
@@ -2372,7 +2395,19 @@ function renderBoard(gv) {
             }
             stackZone.appendChild(item);
         });
-        // Resolve actions live in the always-visible control dock now (Resolve next / Resolve stack).
+        // Resolve buttons right in the stack area (handy when you're looking at the stack). Only shown
+        // when you actually hold priority; the dock has the same actions for when the stack is off-screen.
+        if (priorityActive) {
+            const col = document.createElement('div'); col.className = 'stackResolve';
+            const rb = document.createElement('button'); rb.id = 'stackResolveNext'; rb.textContent = '◂ Resolve next';
+            rb.title = 'Pass once so the top (rightmost) item resolves — opponents can still respond';
+            rb.onclick = () => send('playerBoolean', false);
+            const ra = document.createElement('button'); ra.id = 'stackResolveAll'; ra.textContent = 'Resolve stack';
+            ra.title = 'Pass until the ENTIRE stack resolves (F9)';
+            ra.onclick = () => act('PASS_PRIORITY_UNTIL_STACK_RESOLVED');
+            col.appendChild(rb); col.appendChild(ra);
+            stackZone.appendChild(col);
+        }
     }
     renderReveals(gv);
     updateTargetBar(gv, opponents, me);
