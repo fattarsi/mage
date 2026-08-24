@@ -178,8 +178,10 @@ public class WebGatewayServer {
         }
     }
 
-    /** How long a game is kept alive after a disconnect, waiting for the browser to reconnect. */
-    private static final int RECONNECT_GRACE_SECONDS = 120;
+    /** How long a game is kept alive after a disconnect, waiting for the browser to reconnect. The game
+     * pauses on the player's pending response and the session is kept pinged, so a tablet sleeping or a
+     * wifi blip won't lose the game — you can come back within this window and resume. */
+    private static final int RECONNECT_GRACE_SECONDS = 1800; // 30 min
     private final Map<String, PlaySession> playByClient = new ConcurrentHashMap<>();
     private final Map<String, PlaySession> playByWs = new ConcurrentHashMap<>();
     private final ScheduledExecutorService graceScheduler = Executors.newSingleThreadScheduledExecutor(r -> {

@@ -280,6 +280,8 @@
         #skipbar button.bigskip.armed { background: #7a5a20; }
         #skipbar button.stopskip { background: #7a2f2f; font-weight: 700; padding: 11px 14px; }
         #skipbar button.stopskip:hover { background: #9a3a3a; }
+        #skipbar button.undoctl { background: #4a3a5a; font-size: 12px; padding: 8px 11px; }
+        #skipbar button.undoctl:hover { background: #5e4a72; }
         /* compact action bar sitting directly under the stack */
         #prompt { background: #232a36; border: 1px solid #3a587e; border-radius: 6px;
                   padding: 5px 10px; margin: 6px 0; display: flex; flex-direction: column; gap: 3px; }
@@ -1199,6 +1201,19 @@ SKIPS.forEach(s => {
     if (s.action) skipBtns[s.action] = b;
     skipbar.appendChild(b);
 });
+// Undo / rollback (misclick recovery) — only meaningful while you hold priority; toggled in renderDock.
+const undoBtn = document.createElement('button');
+undoBtn.id = 'undoBtn'; undoBtn.className = 'undoctl'; undoBtn.textContent = '↶ Undo';
+undoBtn.title = 'Undo your last action (untap a land, take back a play you haven’t committed)';
+undoBtn.onclick = () => act('UNDO');
+undoBtn.style.display = 'none';
+skipbar.appendChild(undoBtn);
+const rollbackBtn = document.createElement('button');
+rollbackBtn.id = 'rollbackBtn'; rollbackBtn.className = 'undoctl'; rollbackBtn.textContent = '⟲ Back a turn';
+rollbackBtn.title = 'Roll the game back to the start of the previous turn (up to 4 turns; AI opponents allow it automatically)';
+rollbackBtn.onclick = () => { if (confirm('Roll the game back to the start of the previous turn?')) send('playerAction', 'ROLLBACK_TURNS', { amount: 1 }); };
+rollbackBtn.style.display = 'none';
+skipbar.appendChild(rollbackBtn);
 document.addEventListener('keydown', (e) => {
     if (document.getElementById('setup').style.display !== 'none') return; // don't skip while typing a deck
     const s = SKIPS.find(x => x.key === e.key);
@@ -2574,6 +2589,10 @@ function renderDock() {
         rightEl.appendChild(mk('Pass ▸', true, 'Pass priority (F2)', () => send('playerBoolean', false)));
     }
     // else: not our decision — leave actions empty (status shows whose turn; the top spinner shows waiting)
+    // undo/rollback: only offer while it's your move (they act on your priority)
+    const ub = document.getElementById('undoBtn'), rbk = document.getElementById('rollbackBtn');
+    if (ub) ub.style.display = priorityActive ? '' : 'none';
+    if (rbk) rbk.style.display = (priorityActive && (gv.turn || 0) > 1) ? '' : 'none';
 }
 // small thumbnails of the stack, newest (resolves next) highlighted; tap to scroll to the real stack
 function renderMiniStack(gv, stack) {
