@@ -438,7 +438,7 @@
         #sbTray.cols .colHead + .matCard { margin-top: 0; } /* first card sits below its header, not overlapping */
         #sbTray.over { box-shadow: inset 0 0 0 2px #6a5; }
         #sbMat.over { box-shadow: inset 0 0 0 2px #a55; } /* dropping a deck card here removes it */
-        .matCard { width: var(--mat-cw, 92px); height: calc(var(--mat-cw, 92px) * 1.4); border-radius: 6px; cursor: grab; user-select: none;
+        .matCard { width: var(--mat-cw, 92px); height: calc(var(--mat-cw, 92px) * 1.4); border-radius: 6px; cursor: grab; user-select: none; touch-action: none;
             box-shadow: 0 2px 8px #000a; border: 1px solid #3a4150; background: #232a33; overflow: hidden;
             display: flex; align-items: flex-end; justify-content: center; font-size: 9px; color: #cbd5e2; text-align: center; }
         #sbMat .matCard, #sbTray.free .matCard { position: absolute; }
@@ -446,7 +446,7 @@
         .matCard img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
         .matCard .matName { position: relative; z-index: 1; background: #000a; width: 100%; padding: 1px 2px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .matCard.dragging { opacity: .4; }
+        .matCard.dragging { opacity: 1; box-shadow: 0 12px 28px #000d; transform: scale(1.04); }
         .matCard .matQ { position: absolute; top: 2px; right: 3px; z-index: 2; background: #2e6a40; color: #fff;
             border-radius: 9px; font-size: 10px; font-weight: 800; padding: 0 5px; }
         .dragGhost { position: fixed; z-index: 9997; pointer-events: none; border-radius: 6px; overflow: hidden;
@@ -841,6 +841,7 @@
 </svg>
 <!-- fixed right column: card viewer (top), then floating mana, zone buttons, and size sliders (bottom) -->
 <div id="sidecol">
+    <button id="sideSwapBtn" class="alt" style="width:100%; padding:4px; font-size:12px" title="Move this preview column to the other side">⇄ Move panel to the left</button>
     <div id="viewer"><img id="viewerImg" alt=""/><div id="viewerInfo"><span class="meta">Hover a card to preview it here (on touch, press &amp; hold a card).</span></div></div>
     <div id="sideMana" class="meta">No floating mana</div>
     <div id="sideBtns">
@@ -865,7 +866,6 @@
     </div>
     <div id="sideSpacer"></div>
     <div id="sideSliders">
-        <div class="setrow"><button id="sideSwapBtn" class="alt" style="width:100%; padding:4px" title="Move this preview column to the other side">⇄ Move panel to the left</button></div>
         <div class="setrow"><label>Hand card size</label><input type="range" id="zoom" min="64" max="220" step="4" value="104"></div>
         <div class="setrow"><label>Battlefield card size</label><input type="range" id="bfzoom" min="44" max="180" step="4" value="78"></div>
         <div class="setrow"><label>Opponent card size</label><input type="range" id="oppzoom" min="44" max="180" step="4" value="78"></div>
@@ -1827,7 +1827,7 @@ function renderMat() {
         if (!p.opened) {
             const el = document.createElement('div'); el.className = 'matPack'; el.style.left = x+'px'; el.style.top = y+'px';
             el.innerHTML = `<div>Pack ${i+1}</div><div class="matPackN">${p.cards.length}</div><div style="font-size:20px">🎴</div>`;
-            el.onclick = () => { p.opened = true; renderMat(); };
+            el.onclick = () => { p.cards.forEach(preloadArt); p.opened = true; renderMat(); }; // warm the whole pack on open
             mat.appendChild(el);
             preloadArt(p.cards[p.cards.length-1]); // warm the first card so opening is instant
         } else if (p.cards.length) {
@@ -1899,8 +1899,9 @@ function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(ins
     const overEl = (el, x, y) => { const r = el.getBoundingClientRect(); return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom; };
     function onDown(e) {
         const card = e.target.closest && e.target.closest('.matCard');
-        if (!card || card.dataset.pack !== undefined || card.classList.contains('dragGhost')) return; // pack tops = click
-        drag = { zone: card.dataset.zone, id: card.dataset.id, key: card.dataset.key, el: card, sx: e.clientX, sy: e.clientY, moved: false };
+        if (!card || card.dataset.pack !== undefined) return; // pack tops = click
+        drag = { zone: card.dataset.zone, id: card.dataset.id, key: card.dataset.key, el: card, sx: e.clientX, sy: e.clientY, moved: false, pid: e.pointerId };
+        try { card.setPointerCapture(e.pointerId); } catch (err) {}
         document.addEventListener('pointermove', onMove, true);
         document.addEventListener('pointerup', onUp, true);
         document.addEventListener('pointercancel', onUp, true);
@@ -1909,14 +1910,15 @@ function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(ins
         if (!drag) return;
         if (!drag.moved) {
             if (Math.abs(e.clientX-drag.sx)<START && Math.abs(e.clientY-drag.sy)<START) return;
-            drag.moved = true; drag.el.classList.add('dragging');
-            const cw = matCw(); ghost = drag.el.cloneNode(true); ghost.className = 'matCard dragGhost';
-            ghost.style.width = cw+'px'; ghost.style.height = Math.round(cw*1.4)+'px';
-            document.body.appendChild(ghost);
+            drag.moved = true;
+            const cw = matCw(); const el = drag.el; // lift the actual card and follow the pointer
+            el.classList.add('dragging');
+            el.style.position='fixed'; el.style.zIndex='99999'; el.style.margin='0'; el.style.pointerEvents='none';
+            el.style.width=cw+'px'; el.style.height=Math.round(cw*1.4)+'px';
         }
         e.preventDefault();
         const cw = matCw();
-        ghost.style.left = (e.clientX - cw/2)+'px'; ghost.style.top = (e.clientY - cw*0.7)+'px';
+        drag.el.style.left = (e.clientX - cw/2)+'px'; drag.el.style.top = (e.clientY - cw*0.7)+'px';
         mat.classList.toggle('over', drag.zone==='tray' && overEl(mat, e.clientX, e.clientY));
         tray.classList.toggle('over', drag.zone==='mat' && overEl(tray, e.clientX, e.clientY));
     }
@@ -1926,9 +1928,8 @@ function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(ins
         document.removeEventListener('pointercancel', onUp, true);
         if (!drag) return;
         const d = drag; drag = null;
-        if (ghost) { ghost.remove(); ghost = null; }
-        d.el.classList.remove('dragging'); mat.classList.remove('over'); tray.classList.remove('over');
-        if (!d.moved) return; // a tap — hover/long-press handles preview
+        mat.classList.remove('over'); tray.classList.remove('over');
+        if (!d.moved) { d.el.classList.remove('dragging'); return; } // a tap — hover/long-press handles preview
         const onMat = overEl(mat, e.clientX, e.clientY), onTray = overEl(tray, e.clientX, e.clientY), cw = matCw();
         const matPos = () => { const mr = mat.getBoundingClientRect(); return { x: Math.max(0, e.clientX-mr.left-cw/2+mat.scrollLeft), y: Math.max(0, e.clientY-mr.top-cw*0.7+mat.scrollTop) }; };
         if (d.zone==='mat' && onTray) { // add to deck
@@ -1941,7 +1942,7 @@ function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(ins
             const inst = sbLoose.find(l=>l.id===d.id); if (inst) { const pos = matPos(); inst.x=pos.x; inst.y=pos.y; inst.z=++matZ; } renderMat();
         } else if (d.zone==='tray' && sbTraySort==='free') { // reposition within the tray (free mode)
             const tr=tray.getBoundingClientRect(); trayFree[d.key]={ x:Math.max(0,e.clientX-tr.left-cw/2+tray.scrollLeft), y:Math.max(0,e.clientY-tr.top-cw*0.7+tray.scrollTop) }; renderTray();
-        }
+        } else { renderSealedBuilder(); } // dropped a sorted tray card back in the tray → snap back
     }
     mat.addEventListener('pointerdown', onDown); tray.addEventListener('pointerdown', onDown);
 })();
