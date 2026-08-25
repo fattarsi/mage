@@ -1810,12 +1810,15 @@ function placeLoose(inst) {
     const mat = document.getElementById('sbMat'); const cw = matCw(), ch = Math.round(cw*1.4);
     const stepX = Math.round(cw*0.6), stepY = Math.round(ch*0.5); // ~40%/50% overlap
     const cols = Math.max(1, Math.floor((mat.clientWidth-14-cw)/stepX) + 1);
+    // start the grid on the row BELOW the packs (which sit at the top) so placed cards never cover them
+    const packsVisible = sbPacks && sbPacks.some(p => !p.opened || p.cards.length);
+    const top0 = packsVisible ? 8 + ch + 12 : 8;
     const used = new Set(sbLoose.filter(l => l.slot != null).map(l => l.slot));
     let slot = 0; while (used.has(slot)) slot++; // first free grid slot
     const col = slot % cols, row = Math.floor(slot/cols);
     inst.slot = slot;
     inst.x = 7 + col*stepX;
-    inst.y = 7 + row*stepY;          // top-anchored: newer cards go lower and on top, revealing tops above
+    inst.y = top0 + row*stepY;       // top-anchored (below the packs): newer cards go lower and on top
     inst.z = ++matZ;                 // last placed sits on top of the one it overlaps
     sbLoose.push(inst);
 }
@@ -1963,35 +1966,29 @@ function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(ins
             const tr=tray.getBoundingClientRect(); trayFree[d.key]={ x:Math.max(0,e.clientX-tr.left-cw/2+tray.scrollLeft), y:Math.max(0,e.clientY-tr.top-cw*0.7+tray.scrollTop) }; renderTray();
         } else { renderSealedBuilder(); } // dropped a sorted tray card back in the tray → snap back
     }
-    // Taps. A single tap on a pack places its top card on the mat IMMEDIATELY (no lag, so rapid tapping
-    // works). A double tap = "change zone": on a pack it places then promotes that card into the deck; a
-    // loose mat card goes into the deck; a deck-tray card comes back out onto the mat.
-    const DBL = 320; // ms window for a double tap
+    // Taps. A single tap on a pack ALWAYS places its top card on the mat, immediately — so tapping through
+    // a pack is reliable and rapid-tappable (no timing games). Double-tap changes zone only where single-tap
+    // does nothing, so there's no conflict: a loose mat card double-taps into the deck; a deck-tray card
+    // double-taps back out onto the mat. (To send a pack card straight to the deck: tap it onto the mat,
+    // then double-tap it.)
+    const DBL = 350; // ms window for a double tap
     function handleTap(d) {
         const now = (window.performance ? performance.now() : 0);
-        const dbl = lastTap && (now - lastTap.t) < DBL;
-        if (d.zone === 'pack') {
-            if (dbl && lastTap.zone === 'pack' && lastTap.packIdx === d.packIdx && lastTap.looseId != null) {
-                // quick second tap on the same pack → move the card we just placed into the deck
-                const i = sbLoose.findIndex(l => l.id === lastTap.looseId);
-                if (i >= 0) { const inst = sbLoose[i]; sbLoose.splice(i,1); addDeck(inst); }
-                lastTap = null; return;
-            }
+        const dbl = lastTap && lastTap.zone === d.zone && (now - lastTap.t) < DBL;
+        if (d.zone === 'pack') { // single tap → flip the top card onto the mat (unconditional, instant)
             const p = sbPacks[d.packIdx]; const inst = p && p.cards.pop();
-            if (inst) { const loose = { id:inst.id, n:inst.n,s:inst.s,c:inst.c,r:inst.r,mc:inst.mc,v:inst.v,land:inst.land,t:inst.t };
-                placeLoose(loose); renderMat(); lastTap = { zone:'pack', packIdx:d.packIdx, looseId:loose.id, t:now }; }
-            else { lastTap = null; }
-            return;
+            if (inst) { placeLoose({ id:inst.id, n:inst.n,s:inst.s,c:inst.c,r:inst.r,mc:inst.mc,v:inst.v,land:inst.land,t:inst.t }); renderMat(); }
+            lastTap = null; return;
         }
         if (d.zone === 'mat') { // double tap → into the deck (single tap: previews handle it)
-            if (dbl && lastTap.zone === 'mat' && lastTap.id === d.id) {
+            if (dbl && lastTap.id === d.id) {
                 const i = sbLoose.findIndex(l=>l.id===d.id); if (i>=0) { const inst = sbLoose[i]; sbLoose.splice(i,1); addDeck(inst); }
                 lastTap = null; return;
             }
             lastTap = { zone:'mat', id:d.id, t:now }; return;
         }
         if (d.zone === 'tray') { // double tap → out of the deck, back onto the mat
-            if (dbl && lastTap.zone === 'tray' && lastTap.key === d.key) {
+            if (dbl && lastTap.key === d.key) {
                 const card = sbDeck.find(c=>sbKey(c)===d.key);
                 if (card) { const p = Object.assign({}, card); removeDeckSilent(card); placeLoose({ id:'m'+(matId++), n:p.n,s:p.s,c:p.c,r:p.r,mc:p.mc,v:p.v,land:p.land,t:p.t }); renderSealedBuilder(); }
                 lastTap = null; return;
