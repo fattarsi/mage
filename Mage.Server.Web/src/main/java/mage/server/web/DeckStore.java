@@ -177,6 +177,29 @@ public final class DeckStore {
         return list;
     }
 
+    /** Serialize a pool of engine {@link mage.cards.Card}s to [{n,s,c,r,q}] (grouped by printing, with rarity). */
+    public static JsonArray cardsToJson(java.util.List<mage.cards.Card> cards) {
+        java.util.LinkedHashMap<String, int[]> counts = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, mage.cards.Card> sample = new java.util.LinkedHashMap<>();
+        for (mage.cards.Card c : cards) {
+            String key = c.getName() + "|" + c.getExpansionSetCode() + "|" + c.getCardNumber();
+            counts.computeIfAbsent(key, k -> new int[1])[0]++;
+            sample.putIfAbsent(key, c);
+        }
+        JsonArray out = new JsonArray();
+        for (java.util.Map.Entry<String, int[]> e : counts.entrySet()) {
+            mage.cards.Card c = sample.get(e.getKey());
+            JsonObject o = new JsonObject();
+            o.addProperty("n", c.getName());
+            if (c.getExpansionSetCode() != null && !c.getExpansionSetCode().isEmpty()) o.addProperty("s", c.getExpansionSetCode());
+            if (c.getCardNumber() != null && !c.getCardNumber().isEmpty()) o.addProperty("c", c.getCardNumber());
+            if (c.getRarity() != null) o.addProperty("r", c.getRarity().toString());
+            if (e.getValue()[0] > 1) o.addProperty("q", e.getValue()[0]);
+            out.add(o);
+        }
+        return out;
+    }
+
     /** Serialize a (repaired) deck to a compact snapshot object, grouping identical printings into a qty. */
     public static JsonObject snapshot(DeckCardLists deck) {
         JsonObject o = new JsonObject();

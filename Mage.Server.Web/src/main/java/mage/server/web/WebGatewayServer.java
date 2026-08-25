@@ -184,6 +184,20 @@ public class WebGatewayServer {
     private static final int RECONNECT_GRACE_SECONDS = 1800; // 30 min
     private final Map<String, PlaySession> playByClient = new ConcurrentHashMap<>();
     private final Map<String, PlaySession> playByWs = new ConcurrentHashMap<>();
+    // In-progress sealed events, keyed by the WS session id: keeps the AI pools until the human submits a deck.
+    private final Map<String, SealedEvent> sealedByWs = new ConcurrentHashMap<>();
+
+    /** A sealed pool waiting to become a match: the human + AI pools plus the chosen match length. */
+    private static final class SealedEvent {
+        final java.util.List<mage.cards.Card> humanPool;
+        final java.util.List<java.util.List<mage.cards.Card>> aiPools;
+        final int winsNeeded;
+        SealedEvent(java.util.List<mage.cards.Card> humanPool, java.util.List<java.util.List<mage.cards.Card>> aiPools, int winsNeeded) {
+            this.humanPool = humanPool;
+            this.aiPools = aiPools;
+            this.winsNeeded = winsNeeded;
+        }
+    }
     private final ScheduledExecutorService graceScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "web-reconnect-grace");
         t.setDaemon(true);
@@ -1062,6 +1076,35 @@ public class WebGatewayServer {
             return;
         }
 
+        // ---- Sealed (limited) events ---------------------------------------------------------------
+        // List the sets that have real booster packs (for the sealed set picker).
+        if ("sealedSets".equals(action)) {
+            ctx.send(JsonCodec.encodeCallback("SEALED_SETS", null, Map.of("sets", boosterableSets())));
+            return;
+        }
+        // Open 6 packs for the human and each AI; keep the AI pools, send the human's pool to build a deck.
+        if ("startSealed".equals(action)) {
+            try {
+                startSealedForSession(ctx, ps, sessionId, msg);
+            } catch (Exception e) {
+                logger.warn("web gateway: startSealed failed", e);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
+                        Map.of("message", "Couldn't open sealed pool: " + e.getMessage())));
+            }
+            return;
+        }
+        // The human submits their built sealed deck; build the AI deck(s) and start the match.
+        if ("sealedDeck".equals(action)) {
+            try {
+                startSealedMatch(ctx, ps, sessionId, msg);
+            } catch (Exception e) {
+                logger.warn("web gateway: sealedDeck failed", e);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
+                        Map.of("message", "Couldn't start sealed match: " + e.getMessage())));
+            }
+            return;
+        }
+
         // Control action: end the current game right now (no winner played out, no AIs left running).
         if ("endGame".equals(action)) {
             endSessionGame(ctx, ps);
@@ -1362,6 +1405,124 @@ public class WebGatewayServer {
             wsToGameId.put(ctx.getSessionId(), newId);
         }
         logger.info("web gateway: started " + fmt.gameType + " for " + humanName + " -> " + newId);
+    }
+
+    // ---- Sealed events ------------------------------------------------------------------------------
+
+    /** Sets that have real booster packs, as [{code,name,cards}] sorted newest-ish first (by code). */
+    private com.google.gson.JsonArray boosterableSets() {
+        java.util.List<mage.cards.ExpansionSet> sets = new java.util.ArrayList<>();
+        for (mage.cards.ExpansionSet s : mage.cards.Sets.getInstance().values()) {
+            if (s.hasBoosters()) {
+                sets.add(s);
+            }
+        }
+        // newest release first
+        sets.sort((a, b) -> b.getReleaseDate().compareTo(a.getReleaseDate()));
+        com.google.gson.JsonArray out = new com.google.gson.JsonArray();
+        for (mage.cards.ExpansionSet s : sets) {
+            com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+            o.addProperty("code", s.getCode());
+            o.addProperty("name", s.getName());
+            out.add(o);
+        }
+        return out;
+    }
+
+    /** Open 6 packs for the human + each AI seat; stash the AI pools, send the human's pool to build a deck. */
+    private void startSealedForSession(WsContext ctx, PlaySession ps, String sessionId, JsonObject msg) throws Exception {
+        String setCode = msg.has("setCode") && !msg.get("setCode").isJsonNull() ? msg.get("setCode").getAsString() : "";
+        int players = msg.has("players") ? Math.max(2, Math.min(8, msg.get("players").getAsInt())) : 2;
+        int winsNeeded = msg.has("bestOf3") && msg.get("bestOf3").getAsBoolean() ? 2 : 1;
+        final int PACKS = 6;
+
+        java.util.List<mage.cards.Card> humanPool = DeckFactory.openPacks(setCode, PACKS);
+        java.util.List<java.util.List<mage.cards.Card>> aiPools = new java.util.ArrayList<>();
+        for (int i = 1; i < players; i++) { // one pool per AI opponent
+            aiPools.add(DeckFactory.openPacks(setCode, PACKS));
+        }
+        sealedByWs.put(ctx.getSessionId(), new SealedEvent(humanPool, aiPools, winsNeeded));
+
+        com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
+        payload.addProperty("setCode", setCode);
+        payload.addProperty("players", players);
+        payload.add("pool", DeckStore.cardsToJson(humanPool)); // [{n,s,c,r}]
+        ctx.send(JsonCodec.encodeCallback("SEALED_POOL", null, payload));
+        logger.info("web gateway: opened sealed pool (" + setCode + ", " + players + " players) for " + ctx.getSessionId());
+    }
+
+    /** Build the human's submitted sealed deck + the AI decks, then start the match. */
+    private void startSealedMatch(WsContext ctx, PlaySession ps, String sessionId, JsonObject msg) throws Exception {
+        SealedEvent ev = sealedByWs.get(ctx.getSessionId());
+        if (ev == null) {
+            throw new IllegalStateException("No sealed pool is open — open packs first.");
+        }
+        // human deck: either auto-built from the pool, or from the submitted card list + basic lands
+        DeckCardLists humanDeck;
+        if (msg.has("auto") && msg.get("auto").getAsBoolean()) {
+            humanDeck = DeckFactory.buildDeckFromPool(ev.humanPool, "Sealed deck");
+        } else {
+            humanDeck = buildSubmittedSealedDeck(msg);
+        }
+        resolveToAvailablePrintings(humanDeck);
+        String reason = describeDeckProblems(humanDeck, "Limited");
+        if (reason != null) {
+            throw new IllegalStateException(reason);
+        }
+
+        java.util.List<DeckCardLists> aiDecks = new java.util.ArrayList<>();
+        for (int i = 0; i < ev.aiPools.size(); i++) {
+            DeckCardLists d = DeckFactory.buildDeckFromPool(ev.aiPools.get(i), "AI " + (i + 1) + " sealed");
+            resolveToAvailablePrintings(d);
+            aiDecks.add(d);
+        }
+
+        endSessionGame(ctx, ps); // end any previous game first
+        sealedByWs.remove(ctx.getSessionId());
+        String humanName = "h-" + sessionId.substring(0, 8);
+        // 2 players = duel; 3+ = free-for-all (single game for now; the elimination bracket is the next phase)
+        String gameType = ev.aiPools.size() > 1 ? "Free For All" : "Two Player Duel";
+        UUID newId = playOrchestrator.startHumanVsAi(sessionId, humanName, gameType, "Limited",
+                ev.aiPools.size(), humanDeck, aiDecks, ev.winsNeeded);
+        if (ps != null) {
+            ps.gameId = newId;
+        } else {
+            wsToGameId.put(ctx.getSessionId(), newId);
+        }
+        logger.info("web gateway: started sealed match for " + humanName + " -> " + newId);
+    }
+
+    /** Build a human sealed deck from the client's submitted card list + basic-land counts. */
+    private DeckCardLists buildSubmittedSealedDeck(JsonObject msg) {
+        DeckCardLists humanDeck = new DeckCardLists();
+        humanDeck.setName("Sealed deck");
+        if (msg.has("cards") && msg.get("cards").isJsonArray()) {
+            for (com.google.gson.JsonElement e : msg.getAsJsonArray("cards")) {
+                com.google.gson.JsonObject c = e.getAsJsonObject();
+                String n = c.has("n") ? c.get("n").getAsString() : null;
+                if (n == null) continue;
+                String s = c.has("s") && !c.get("s").isJsonNull() ? c.get("s").getAsString() : "";
+                String num = c.has("c") && !c.get("c").isJsonNull() ? c.get("c").getAsString() : "";
+                int qty = c.has("q") ? Math.max(1, c.get("q").getAsInt()) : 1;
+                for (int i = 0; i < qty; i++) humanDeck.getCards().add(new DeckCardInfo(n, num, s));
+            }
+        }
+        if (msg.has("basics") && msg.get("basics").isJsonObject()) {
+            com.google.gson.JsonObject b = msg.getAsJsonObject("basics");
+            addBasics(humanDeck, "Plains", b, "w");
+            addBasics(humanDeck, "Island", b, "u");
+            addBasics(humanDeck, "Swamp", b, "b");
+            addBasics(humanDeck, "Mountain", b, "r");
+            addBasics(humanDeck, "Forest", b, "g");
+        }
+        return humanDeck;
+    }
+
+    private static void addBasics(DeckCardLists deck, String name, com.google.gson.JsonObject b, String key) {
+        int n = (b.has(key) && !b.get(key).isJsonNull()) ? b.get(key).getAsInt() : 0;
+        for (int i = 0; i < Math.max(0, n); i++) {
+            deck.getCards().add(new DeckCardInfo(name, "", ""));
+        }
     }
 
     /** Resolve an auto-pool token ("saved:&lt;id&gt;" = manager snapshot, "src:&lt;id&gt;" = deck source) to a deck. */

@@ -1,6 +1,7 @@
 package mage.server.web;
 
 import mage.cards.Card;
+import mage.cards.ExpansionSet;
 import mage.cards.Sets;
 import mage.cards.decks.Deck;
 import mage.cards.decks.DeckCardInfo;
@@ -9,6 +10,7 @@ import mage.cards.decks.importer.DeckImporter;
 import mage.cards.repository.CardInfo;
 import mage.cards.repository.CardRepository;
 import mage.constants.ColoredManaSymbol;
+import mage.filter.FilterMana;
 import mage.player.ai.ComputerPlayer;
 
 import java.io.File;
@@ -61,6 +63,63 @@ public final class DeckFactory {
             }
         }
         return list;
+    }
+
+    /** Open {@code packs} real, correctly-collated booster packs of a set (for Sealed / draft pools). */
+    public static List<Card> openPacks(String setCode, int packs) {
+        ExpansionSet set = Sets.getInstance().get(setCode);
+        if (set == null) {
+            throw new IllegalArgumentException("Unknown set: " + setCode);
+        }
+        if (!set.hasBoosters()) {
+            throw new IllegalArgumentException(set.getName() + " has no booster packs.");
+        }
+        List<Card> pool = new ArrayList<>();
+        for (int i = 0; i < Math.max(1, packs); i++) {
+            pool.addAll(set.createBooster());
+        }
+        return pool;
+    }
+
+    /** Let the AI build a ~40-card limited deck from a sealed/draft pool (auto-picks its two best colors). */
+    public static DeckCardLists buildDeckFromPool(List<Card> pool, String name) {
+        Deck deck = ComputerPlayer.buildDeck(DECK_SIZE, pool, pickTwoColors(pool), false);
+        DeckCardLists list = new DeckCardLists();
+        list.setName(name != null ? name : "sealed");
+        for (Card card : deck.getCards()) {
+            list.getCards().add(new DeckCardInfo(card.getName(), card.getCardNumber(), card.getExpansionSetCode()));
+        }
+        return list;
+    }
+
+    /** Pick the two colors best represented (by non-land card count) in a pool, for AI deck building. */
+    private static List<ColoredManaSymbol> pickTwoColors(List<Card> pool) {
+        ColoredManaSymbol[] all = {ColoredManaSymbol.W, ColoredManaSymbol.U, ColoredManaSymbol.B,
+                ColoredManaSymbol.R, ColoredManaSymbol.G};
+        int[] count = new int[5];
+        for (Card c : pool) {
+            FilterMana ci = c.getColorIdentity();
+            if (ci == null) {
+                continue;
+            }
+            if (ci.isWhite()) count[0]++;
+            if (ci.isBlue()) count[1]++;
+            if (ci.isBlack()) count[2]++;
+            if (ci.isRed()) count[3]++;
+            if (ci.isGreen()) count[4]++;
+        }
+        // indices of the top two counts
+        int a = 0, b = 1;
+        for (int i = 0; i < 5; i++) {
+            if (count[i] > count[a]) { b = a; a = i; }
+            else if (i != a && count[i] > count[b]) { b = i; }
+        }
+        List<ColoredManaSymbol> colors = new ArrayList<>();
+        colors.add(all[a]);
+        if (b != a) {
+            colors.add(all[b]);
+        }
+        return colors;
     }
 
     /**

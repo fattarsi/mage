@@ -385,6 +385,23 @@
         .mgrRow .mgrOk { color: #9c9; }
         .mgrRow button { padding: 4px 9px; font-size: 12px; }
         .mgrEmpty { color: #8fa3ba; font-size: 13px; padding: 8px; }
+        /* setup mode toggle + sealed deck builder */
+        .modebtn { flex: 1; background: #2b3340; font-size: 13px; padding: 8px; }
+        .modebtn.on { background: #2e6a40; box-shadow: inset 0 0 0 1px #3c8a54; }
+        #sealedBuilder .sbLabel { font-size: 12px; color: #cbd5e2; font-weight: 700; margin: 4px 0; }
+        #sealedBuilder .sbGrid { flex: 1 1 auto; overflow-y: auto; border: 1px solid #2b3442; border-radius: 6px;
+            padding: 4px; background: #11151b; }
+        #sealedBuilder .sbRow { display: flex; align-items: center; gap: 7px; padding: 3px 5px; border-radius: 4px; cursor: pointer; }
+        #sealedBuilder .sbRow:hover { background: #1e2836; }
+        #sealedBuilder .sbRow .sbQ { color: #8fd29a; font-weight: 800; width: 18px; text-align: right; }
+        #sealedBuilder .sbRow .sbN { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #sealedBuilder .sbRow .sbPip { flex: 0 0 auto; }
+        #sealedBuilder .sbRow.r-mythic .sbN { color: #f0954a; } #sealedBuilder .sbRow.r-rare .sbN { color: #e6cf6a; }
+        #sealedBuilder .sbRow.r-uncommon .sbN { color: #b9c6d4; } #sealedBuilder .sbRow.r-common .sbN { color: #cfd8e2; }
+        #sbBasics .sbBasic { display: inline-flex; align-items: center; gap: 3px; background: #1a2230; border: 1px solid #333e4f;
+            border-radius: 8px; padding: 2px 6px; }
+        #sbBasics .sbBasic button { padding: 1px 8px; font-size: 14px; font-weight: 800; background: #2b3a52; }
+        #sbBasics .sbBasic span { min-width: 34px; text-align: center; }
         /* card picker: highlight the valid choices, dim the rest, mark the chosen ones with a check */
         .pickcount { font-size: 15px; font-weight: 800; color: #ffd166; margin: -4px 0 4px; }
         /* quick-target buttons, sitting right by the stack so you can pick a player without scrolling.
@@ -579,6 +596,22 @@
     <div class="panel">
         <h2>New game vs AI</h2>
         <div id="setupError" style="display:none"></div>
+        <div id="setupMode" style="display:flex; gap:6px; margin-bottom:8px;">
+            <button id="modeConstructed" type="button" class="modebtn on">Constructed</button>
+            <button id="modeSealed" type="button" class="modebtn">🎴 Sealed / Prerelease</button>
+        </div>
+        <div id="sealedSetup" style="display:none">
+            <label for="sealedSetSel">Set (real booster packs)</label>
+            <select id="sealedSetSel"><option value="">loading sets…</option></select>
+            <div style="display:flex; gap:12px; align-items:center; margin-top:6px; flex-wrap:wrap;">
+                <label style="margin:0">Players (you + AI):
+                    <input id="sealedPlayers" type="number" min="2" max="8" value="2" style="width:52px"></label>
+                <label style="margin:0"><input id="sealedBo3" type="checkbox"> Best of 3</label>
+            </div>
+            <div class="hint" style="margin-top:4px">Everyone opens 6 packs. You'll build a 40-card deck; AI opponents auto-build. (Single-match for now — bracket coming next.)</div>
+            <div style="margin-top:8px"><button id="openPacksBtn">Open 6 packs →</button></div>
+        </div>
+        <div id="constructedSetup">
         <label for="formatSel">Format</label>
         <select id="formatSel"></select>
         <div id="deckSourceWrap" style="display:none">
@@ -614,6 +647,31 @@
         <textarea id="deckInput" placeholder="4 Lightning Bolt&#10;4 Monastery Swiftspear&#10;20 Mountain&#10;...&#10;&#10;(plain '<count> <card name>' per line, or paste an XMage .dck)"></textarea>
         <div><button id="startBtn">Start game</button></div>
         <div class="hint">Random decks work for any non-Commander format. Commander needs a real deck with a commander (paste a .dck).</div>
+        </div><!-- /constructedSetup -->
+    </div>
+</div>
+
+<!-- Sealed deck builder: your 6-pack pool (top) and your deck (bottom); tap a card to move it. -->
+<div id="sealedBuilder" class="overlay" style="display:none">
+    <div class="panel" style="width:min(1000px,96vw); max-height:94vh; display:flex; flex-direction:column;">
+        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <h2 style="margin:0">Build your sealed deck</h2>
+            <span id="sbCount" class="hint"></span>
+            <span style="flex:1"></span>
+            <button id="sbAuto" class="alt" title="Let the AI build a solid deck from your pool">✨ Auto-build</button>
+            <button id="sbPlay" disabled title="Need at least 40 cards">Play ▸</button>
+        </div>
+        <div id="sbBasics" style="margin:6px 0; display:flex; gap:10px; flex-wrap:wrap; align-items:center;"></div>
+        <div style="display:flex; gap:10px; flex:1 1 auto; min-height:0; overflow:hidden;">
+            <div style="flex:1 1 55%; display:flex; flex-direction:column; min-height:0;">
+                <div class="sbLabel">Pool <span id="sbPoolCount" class="hint"></span> — tap to add</div>
+                <div id="sbPool" class="sbGrid"></div>
+            </div>
+            <div style="flex:1 1 45%; display:flex; flex-direction:column; min-height:0;">
+                <div class="sbLabel">Your deck <span id="sbDeckCount" class="hint"></span> — tap to remove</div>
+                <div id="sbDeck" class="sbGrid"></div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -1477,6 +1535,99 @@ document.getElementById('startBtn').onclick = () => {
     setPrompt('Starting game…');
 };
 document.getElementById('newGameBtn').onclick = () => { if (readyData) send('refreshDecks'); showSetup(); };
+
+// ---- Sealed / prerelease -----------------------------------------------------------------------
+(function () {
+    const mC = document.getElementById('modeConstructed'), mS = document.getElementById('modeSealed');
+    const cWrap = document.getElementById('constructedSetup'), sWrap = document.getElementById('sealedSetup');
+    function setMode(sealed) {
+        mS.classList.toggle('on', sealed); mC.classList.toggle('on', !sealed);
+        cWrap.style.display = sealed ? 'none' : ''; sWrap.style.display = sealed ? '' : 'none';
+    }
+    mC.onclick = () => setMode(false);
+    mS.onclick = () => setMode(true);
+    document.getElementById('openPacksBtn').onclick = () => {
+        const setCode = document.getElementById('sealedSetSel').value;
+        if (!setCode) { document.getElementById('setupError').textContent = 'Pick a set first.'; document.getElementById('setupError').style.display = ''; return; }
+        const players = Math.max(2, Math.min(8, parseInt(document.getElementById('sealedPlayers').value) || 2));
+        const bestOf3 = document.getElementById('sealedBo3').checked;
+        setupEl.style.display = 'none';
+        setPrompt('Opening packs…');
+        send('startSealed', undefined, { setCode, players, bestOf3 });
+    };
+})();
+window.fillSealedSets = function (sets) {
+    const sel = document.getElementById('sealedSetSel');
+    if (!sel) return;
+    sel.innerHTML = '';
+    (sets || []).forEach(s => { const o = document.createElement('option'); o.value = s.code; o.textContent = s.name + ' (' + s.code + ')'; sel.appendChild(o); });
+    if (!sel.options.length) sel.innerHTML = '<option value="">no boosterable sets found</option>';
+};
+
+// deck-builder state: pool + deck are arrays of {n,s,c,r,q}; basics {w,u,b,r,g}
+let sbPool = [], sbDeck = [], sbBasics = { w:0,u:0,b:0,r:0,g:0 };
+window.openSealedBuilder = function (data) {
+    sbPool = (data && data.pool ? data.pool : []).map(c => ({ n:c.n, s:c.s||'', c:c.c||'', r:c.r||'', q:c.q||1 }));
+    sbDeck = []; sbBasics = { w:0,u:0,b:0,r:0,g:0 };
+    setupEl.style.display = 'none';
+    document.getElementById('sealedBuilder').style.display = 'flex';
+    renderSealedBuilder();
+};
+function sbTotal() { return sbDeck.reduce((a,c)=>a+c.q,0) + sbBasics.w+sbBasics.u+sbBasics.b+sbBasics.r+sbBasics.g; }
+function rarClass(r) { r=(r||'').toLowerCase(); return r.startsWith('m')?'r-mythic':r.startsWith('r')?'r-rare':r.startsWith('u')?'r-uncommon':'r-common'; }
+function sbRow(card, side) {
+    const el = document.createElement('div'); el.className = 'sbRow ' + rarClass(card.r);
+    el.innerHTML = `<span class="sbQ">${card.q}×</span><span class="sbN">${msg(card.n)}</span>`;
+    el.onclick = () => { moveSealed(card, side); };
+    el.oncontextmenu = (e) => { e.preventDefault(); showCardViewer({ name: card.n, expansionSetCode: card.s, cardNumber: card.c }, true); };
+    el._card = { name: card.n, expansionSetCode: card.s, cardNumber: card.c }; // press-and-hold preview
+    return el;
+}
+function moveSealed(card, side) {
+    const from = side === 'pool' ? sbPool : sbDeck, to = side === 'pool' ? sbDeck : sbPool;
+    const fi = from.findIndex(c => c.n===card.n && c.s===card.s && c.c===card.c);
+    if (fi < 0) return;
+    from[fi].q--; if (from[fi].q <= 0) from.splice(fi, 1);
+    const ti = to.findIndex(c => c.n===card.n && c.s===card.s && c.c===card.c);
+    if (ti >= 0) to[ti].q++; else to.push({ n:card.n, s:card.s, c:card.c, r:card.r, q:1 });
+    renderSealedBuilder();
+}
+function renderSealedBuilder() {
+    const poolEl = document.getElementById('sbPool'), deckEl = document.getElementById('sbDeck');
+    const bykey = a => a.slice().sort((x,y)=>(x.n>y.n?1:-1));
+    poolEl.innerHTML = ''; bykey(sbPool).forEach(c => poolEl.appendChild(sbRow(c, 'pool')));
+    deckEl.innerHTML = ''; bykey(sbDeck).forEach(c => deckEl.appendChild(sbRow(c, 'deck')));
+    document.getElementById('sbPoolCount').textContent = '(' + sbPool.reduce((a,c)=>a+c.q,0) + ')';
+    const total = sbTotal();
+    document.getElementById('sbDeckCount').textContent = '(' + total + ')';
+    document.getElementById('sbCount').innerHTML = total >= 40
+        ? `<b style="color:#8fd29a">${total} cards</b> — ready`
+        : `<b style="color:#e0a06a">${total} cards</b> — need ${40-total} more`;
+    const play = document.getElementById('sbPlay'); play.disabled = total < 40; play.textContent = 'Play ▸';
+    // basic-land steppers
+    const bWrap = document.getElementById('sbBasics'); bWrap.innerHTML = '<span class="hint">Basic lands:</span>';
+    [['w','Plains'],['u','Island'],['b','Swamp'],['r','Mountain'],['g','Forest']].forEach(([k,name]) => {
+        const d = document.createElement('span'); d.className = 'sbBasic';
+        d.innerHTML = `<button>−</button><span>${name} ${sbBasics[k]}</span><button>＋</button>`;
+        const [minus,, plus] = d.childNodes;
+        minus.onclick = () => { sbBasics[k]=Math.max(0,sbBasics[k]-1); renderSealedBuilder(); };
+        plus.onclick = () => { sbBasics[k]++; renderSealedBuilder(); };
+        bWrap.appendChild(d);
+    });
+}
+document.getElementById('sbAuto').onclick = () => {
+    if (!confirm('Auto-build a deck from your pool and start the match?')) return;
+    document.getElementById('sealedBuilder').style.display = 'none';
+    setPrompt('Building deck & starting…');
+    send('sealedDeck', undefined, { auto: true });
+};
+document.getElementById('sbPlay').onclick = () => {
+    if (sbTotal() < 40) return;
+    document.getElementById('sealedBuilder').style.display = 'none';
+    setPrompt('Starting sealed match…');
+    send('sealedDeck', undefined, { cards: sbDeck.map(c => ({ n:c.n, s:c.s, c:c.c, q:c.q })),
+        basics: { w:sbBasics.w, u:sbBasics.u, b:sbBasics.b, r:sbBasics.r, g:sbBasics.g } });
+};
 
 // Resign vs End game are different: resign concedes (AIs play it out, you can watch);
 // end game stops the whole game immediately.
@@ -2934,7 +3085,9 @@ function handle(method, data) {
     const message = msg(data.message);
     switch (method) {
         case 'GATEWAY_HELLO': setPrompt('Connected.'); break;
-        case 'GATEWAY_READY': sendBuffer.length = 0; prepareSetup(data); sendSkips(); setPrompt('Ready. Click “New game” to start — or open ⚙ Settings.'); break;
+        case 'GATEWAY_READY': sendBuffer.length = 0; prepareSetup(data); sendSkips(); send('sealedSets'); setPrompt('Ready. Click “New game” to start — or open ⚙ Settings.'); break;
+        case 'SEALED_SETS': fillSealedSets(data && data.sets); break;
+        case 'SEALED_POOL': openSealedBuilder(data); break;
         case 'GATEWAY_RECONNECTED':
             setupEl.style.display = 'none'; hideBanner(); setGameActive(true);
             log('Reconnected to your game'); setPrompt('Reconnected — resuming…'); break;

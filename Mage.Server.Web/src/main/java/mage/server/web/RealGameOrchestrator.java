@@ -71,6 +71,13 @@ public class RealGameOrchestrator {
      */
     public UUID startHumanVsAi(String humanSession, String humanName, String gameType, String deckType,
                                int aiSeats, DeckCardLists humanDeck, java.util.List<DeckCardLists> aiDecks) throws Exception {
+        return startHumanVsAi(humanSession, humanName, gameType, deckType, aiSeats, humanDeck, aiDecks, 1);
+    }
+
+    /** As above, but with a configurable wins-needed (1 = single game, 2 = best-of-three). */
+    public UUID startHumanVsAi(String humanSession, String humanName, String gameType, String deckType,
+                               int aiSeats, DeckCardLists humanDeck, java.util.List<DeckCardLists> aiDecks,
+                               int winsNeeded) throws Exception {
         UUID room = server.serverGetMainRoomId();
 
         MatchOptions options = new MatchOptions("Web Human vs AI", gameType, true);
@@ -82,7 +89,7 @@ public class RealGameOrchestrator {
         options.setLimited(false);
         options.setAttackOption(MultiplayerAttackOption.MULTIPLE); // free-for-all: attack any opponent
         options.setRange(RangeOfInfluence.ALL);
-        options.setWinsNeeded(1);
+        options.setWinsNeeded(Math.max(1, winsNeeded));
         options.setMatchTimeLimit(MatchTimeLimit.NONE);      // no priority clock (don't kick idle players)
         // Commander house rule: the first mulligan is free (costs no card). The Commander match honors
         // options.getFreeMulligans(); other formats keep the standard London mulligan (0 free).
