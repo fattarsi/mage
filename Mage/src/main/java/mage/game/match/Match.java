@@ -19,7 +19,10 @@ import mage.players.Player;
  */
 public interface Match {
 
-    int SIDEBOARD_TIME = 180;
+    // Web fork: a generous between-games window so a human can inspect the finished game and click
+    // "Continue" when ready (the web client submits the deck to proceed early). AI-only matches submit
+    // instantly and never hit this timeout, so they are unaffected.
+    int SIDEBOARD_TIME = 900;
 
     UUID getId();
 

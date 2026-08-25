@@ -174,6 +174,11 @@ public class RealGameOrchestrator {
         }
     }
 
+    /** The table a game belongs to (a match's table stays constant across its games). Null if unknown. */
+    public UUID tableForGame(UUID gameId) {
+        return gameId == null ? null : gameToTable.get(gameId);
+    }
+
     /**
      * Hard-end a running game immediately: ends the game and removes its table and controller so it
      * does NOT keep playing in the background. Distinct from a player conceding ({@code matchQuit}),

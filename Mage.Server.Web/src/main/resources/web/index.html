@@ -542,6 +542,15 @@
         #working .spin { width: 15px; height: 15px; border: 2.5px solid #46506a; border-top-color: #7cc0ff;
             border-radius: 50%; animation: workspin .7s linear infinite; }
         @keyframes workspin { to { transform: rotate(360deg); } }
+        /* between-games pause bar (Bo3): a non-blocking banner so the finished board/log stay inspectable */
+        #matchPause { position: fixed; top: 52px; left: 50%; transform: translateX(-50%); z-index: 72;
+            display: none; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;
+            max-width: min(680px, 94vw); background: #14233af5; border: 1px solid #3f6ea0; border-radius: 12px;
+            padding: 10px 16px; box-shadow: 0 8px 26px #000c; color: #e7eef7; }
+        #matchPause .mpMsg { font-size: 13.5px; }
+        #matchPause .mpMsg b { color: #ffd166; }
+        #matchPause #mpContinue { font-size: 14px; padding: 7px 16px; }
+        #matchPause .mpCount { font-size: 11px; color: #9fb2c6; }
         .player.thinking { box-shadow: 0 0 0 2px #7cc0ff99, 0 0 18px #7cc0ff55; }
         .player.thinking .pname::after { content: ' 🤔'; }
         /* ---- persistent control dock (always-visible bottom bar) ---- */
@@ -833,6 +842,8 @@
 <div id="handPeek"></div>
 <!-- "working" indicator: appears while the engine/an AI is busy and it isn't your move yet -->
 <div id="working"><span class="spin"></span><span id="workingText">Working…</span></div>
+<!-- between-games pause (best-of-three): inspect the finished game, then continue to the next -->
+<div id="matchPause" style="display:none"></div>
 <!-- persistent control dock (always visible, pinned to the bottom): status + primary actions, the phase
      timeline, and the skip toggles. This is the single home for controls — the hand fan stacks above it. -->
 <div id="ctrlDock">
@@ -2218,6 +2229,29 @@ function setGameActive(active) {
     document.getElementById('rollbackBtn').style.display = active ? '' : 'none';
     stickySkip = null; advancing = false; updateSkipUI(); updateAdvanceBtn(); // reset skip state on game start/end
 }
+// ---- Best-of-three: pause between games so you can inspect the finished game, then continue -------------
+let matchPauseTimer = null;
+function showMatchPause(data) {
+    setGameActive(false);            // the game that just ended has no more actions
+    hideWorking();
+    const el = document.getElementById('matchPause');
+    let secs = Math.max(1, Math.round((data && data.time) || 900));
+    el.innerHTML = '<span class="mpMsg"><b>Game over.</b> Inspect the board & log below. '
+        + 'When you\'re ready, start the next game.</span>'
+        + '<button id="mpContinue" class="prim">Continue to next game ▸</button>'
+        + '<span class="mpCount"></span>';
+    el.style.display = 'flex';
+    document.getElementById('mpContinue').onclick = continueMatch;
+    const tick = () => { const c = el.querySelector('.mpCount');
+        if (c) c.textContent = 'auto-continues in ' + Math.floor(secs/60) + ':' + String(secs%60).padStart(2,'0'); };
+    tick();
+    clearInterval(matchPauseTimer);
+    matchPauseTimer = setInterval(() => { secs--; if (secs <= 0) { hideMatchPause(); return; } tick(); }, 1000);
+    setPrompt('<span class="over">Game over — review the board, then Continue to the next game.</span>');
+}
+function continueMatch() { hideMatchPause(); setPrompt('Starting the next game…'); send('sideboardDone'); }
+function hideMatchPause() { clearInterval(matchPauseTimer); matchPauseTimer = null;
+    document.getElementById('matchPause').style.display = 'none'; }
 resignBtn.onclick = () => {
     if (!confirm('Resign this game?\n\nYou concede, but the AI opponents keep playing it out — you can keep watching.')) return;
     send('resign');
@@ -3689,7 +3723,9 @@ function handle(method, data) {
             logc('err', msg);
             setPrompt('<span class="over">Couldn\'t start — see the message in the dialog.</span>');
             break; }
+        case 'SIDEBOARD': showMatchPause(data); break; // a match game ended; pause before the next one
         case 'START_GAME': case 'GAME_INIT':
+            hideMatchPause(); // the next game of the match is starting
             setupEl.style.display = 'none'; closeSealedBuilder(); // never let the full-screen builder cover the board/dock
             recentEvents.length = 0; renderEventFeed(); log('Game started'); setGameActive(true); resetCycle();
             holdPriority = false; { const hb = document.getElementById('holdBtn'); if (hb) hb.classList.remove('on'); }

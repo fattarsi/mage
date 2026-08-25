@@ -171,6 +171,8 @@ public class WebGatewayServer {
         final String mageSessionId;
         volatile WsContext ctx;
         volatile UUID gameId;
+        volatile UUID tableId;          // the match's table (for between-games sideboard submit)
+        volatile DeckCardLists matchDeck; // the human's deck, re-submitted to start the next game of a match
         volatile ScheduledFuture<?> grace;
         PlaySession(String clientId, String mageSessionId) {
             this.clientId = clientId;
@@ -1106,6 +1108,16 @@ public class WebGatewayServer {
             }
             return;
         }
+        // Between games of a match (Bo3): the human clicked "Continue" — submit the (unchanged) deck so the
+        // next game starts now instead of waiting out the sideboard timer.
+        if ("sideboardDone".equals(action)) {
+            try {
+                submitSideboard(ps);
+            } catch (Exception e) {
+                logger.warn("web gateway: sideboardDone failed", e);
+            }
+            return;
+        }
         // Auto-build a deck from the human's pool and send it back to the builder (do NOT start a game).
         if ("sealedAutoBuild".equals(action)) {
             try {
@@ -1518,6 +1530,20 @@ public class WebGatewayServer {
         ctx.send(JsonCodec.encodeCallback("SEALED_AUTOBUILD", null, payload));
     }
 
+    /** Finish the between-games sideboard by submitting the human's (unchanged) deck, starting the next game. */
+    private void submitSideboard(PlaySession ps) throws Exception {
+        if (ps == null || ps.tableId == null || ps.matchDeck == null) {
+            return; // not in a match / nothing to submit
+        }
+        UUID userId = managerFactory.sessionManager().getSession(ps.mageSessionId)
+                .map(s -> s.getUserId()).orElse(null);
+        if (userId == null) {
+            return;
+        }
+        managerFactory.tableManager().submitDeck(userId, ps.tableId, ps.matchDeck);
+        logger.info("web gateway: sideboard submitted (continue) for table " + ps.tableId);
+    }
+
     /** Build the human's submitted sealed deck + the AI decks, then start the match. */
     private void startSealedMatch(WsContext ctx, PlaySession ps, String sessionId, JsonObject msg) throws Exception {
         SealedEvent ev = sealedByWs.get(ctx.getSessionId());
@@ -1555,6 +1581,8 @@ public class WebGatewayServer {
                 ev.aiPools.size(), humanDeck, aiDecks, ev.winsNeeded);
         if (ps != null) {
             ps.gameId = newId;
+            ps.tableId = playOrchestrator.tableForGame(newId); // for the between-games "Continue" (Bo3)
+            ps.matchDeck = humanDeck;                          // re-submitted (unchanged) to start the next game
         } else {
             wsToGameId.put(ctx.getSessionId(), newId);
         }
