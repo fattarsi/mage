@@ -192,10 +192,12 @@ public class WebGatewayServer {
         final java.util.List<mage.cards.Card> humanPool;
         final java.util.List<java.util.List<mage.cards.Card>> aiPools;
         final int winsNeeded;
-        SealedEvent(java.util.List<mage.cards.Card> humanPool, java.util.List<java.util.List<mage.cards.Card>> aiPools, int winsNeeded) {
+        final String setCode; // so basic lands come from the sealed set, not arbitrary printings
+        SealedEvent(java.util.List<mage.cards.Card> humanPool, java.util.List<java.util.List<mage.cards.Card>> aiPools, int winsNeeded, String setCode) {
             this.humanPool = humanPool;
             this.aiPools = aiPools;
             this.winsNeeded = winsNeeded;
+            this.setCode = setCode;
         }
     }
     private final ScheduledExecutorService graceScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -1466,7 +1468,7 @@ public class WebGatewayServer {
         for (int i = 1; i < players; i++) { // one pool per AI opponent
             aiPools.add(DeckFactory.openPacks(setCode, PACKS));
         }
-        sealedByWs.put(ctx.getSessionId(), new SealedEvent(humanPool, aiPools, winsNeeded));
+        sealedByWs.put(ctx.getSessionId(), new SealedEvent(humanPool, aiPools, winsNeeded, setCode));
 
         com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
         payload.addProperty("setCode", setCode);
@@ -1529,6 +1531,7 @@ public class WebGatewayServer {
         } else {
             humanDeck = buildSubmittedSealedDeck(msg);
         }
+        useSetBasics(humanDeck, ev.setCode); // basic lands from the sealed set, not random printings
         resolveToAvailablePrintings(humanDeck);
         String reason = describeDeckProblems(humanDeck, "Limited");
         if (reason != null) {
@@ -1538,6 +1541,7 @@ public class WebGatewayServer {
         java.util.List<DeckCardLists> aiDecks = new java.util.ArrayList<>();
         for (int i = 0; i < ev.aiPools.size(); i++) {
             DeckCardLists d = DeckFactory.buildDeckFromPool(ev.aiPools.get(i), "AI " + (i + 1) + " sealed");
+            useSetBasics(d, ev.setCode);
             resolveToAvailablePrintings(d);
             aiDecks.add(d);
         }
@@ -1587,6 +1591,31 @@ public class WebGatewayServer {
         int n = (b.has(key) && !b.get(key).isJsonNull()) ? b.get(key).getAsInt() : 0;
         for (int i = 0; i < Math.max(0, n); i++) {
             deck.getCards().add(new DeckCardInfo(name, "", ""));
+        }
+    }
+
+    /**
+     * Rewrite every basic land in a deck to the sealed set's own printing so the in-game art matches the set
+     * (instead of an arbitrary printing picked by name). Falls back to a sensible core-set basic when the set
+     * doesn't print that basic (e.g. sets with no basics).
+     */
+    private static void useSetBasics(DeckCardLists deck, String setCode) {
+        if (deck == null || setCode == null || setCode.isEmpty()) {
+            return;
+        }
+        java.util.Set<String> basics = new java.util.HashSet<>(
+                java.util.Arrays.asList("Plains", "Island", "Swamp", "Mountain", "Forest"));
+        java.util.List<DeckCardInfo> cards = deck.getCards();
+        for (int i = 0; i < cards.size(); i++) {
+            DeckCardInfo info = cards.get(i);
+            if (!basics.contains(info.getCardName())) {
+                continue;
+            }
+            mage.cards.repository.CardInfo p = mage.cards.repository.CardRepository.instance
+                    .findCardWithPreferredSetAndNumber(info.getCardName(), setCode, null);
+            if (p != null) {
+                cards.set(i, new DeckCardInfo(info.getCardName(), p.getCardNumber(), p.getSetCode(), info.getAmount()));
+            }
         }
     }
 
