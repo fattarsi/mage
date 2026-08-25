@@ -538,7 +538,9 @@
             background: #10151df5; border-top: 1px solid #3a4a63; box-shadow: 0 -5px 18px #000b;
             padding: 4px 8px 6px; }
         #dockBody { display: flex; flex-direction: column; gap: 4px; }
-        #ctrlDock.collapsed #dockBody { display: none; }
+        /* Collapsing hides the bulky phase timeline + skip bar to save space, but the primary action row
+           (status + Pass/Resolve/Done) stays visible — you must never lose the ability to advance the game. */
+        #ctrlDock.collapsed #phasebar, #ctrlDock.collapsed #skipbar { display: none; }
         #dockToggle { position: absolute; top: -18px; right: 12px; z-index: 1; background: #1b2230;
             border: 1px solid #3a4a63; border-bottom: 0; border-radius: 7px 7px 0 0; color: #cbd5e2;
             font-size: 12px; padding: 1px 12px; cursor: pointer; }
@@ -1800,13 +1802,16 @@ function reconcileMat() {
         while (missing>0 && proto) { placeLoose({ id:'m'+(matId++), n:proto.n,s:proto.s,c:proto.c,r:proto.r,mc:proto.mc,v:proto.v,land:proto.land,t:proto.t }); missing--; }
     });
 }
-// place a loose card in the next slot, filling from the BOTTOM-left up (top stays free for your sorting)
+// place a loose card in the next slot, filling from the BOTTOM-left up (top stays free for your sorting).
+// cards overlap a little (they don't sit in a full grid) so many more fit on screen at once.
 function placeLoose(inst) {
     const mat = document.getElementById('sbMat'); const cw = matCw(), ch = Math.round(cw*1.4);
-    const cols = Math.max(1, Math.floor((mat.clientWidth-14)/(cw+6)));
+    const stepX = Math.round(cw*0.6), stepY = Math.round(ch*0.5); // ~40%/50% overlap
+    const cols = Math.max(1, Math.floor((mat.clientWidth-14-cw)/stepX) + 1);
     const idx = sbLoose.length; const col = idx % cols, row = Math.floor(idx/cols);
-    inst.x = 7 + col*(cw+6);
-    inst.y = Math.max(6, (mat.clientHeight||300) - ch - 6 - row*(ch+6));
+    inst.x = 7 + col*stepX;
+    inst.y = Math.max(6, (mat.clientHeight||300) - ch - 6 - row*stepY);
+    inst.z = ++matZ; // last placed sits on top of the one it overlaps
     sbLoose.push(inst);
 }
 function matCardEl(inst, extra) {
@@ -1832,13 +1837,12 @@ function renderMat() {
             preloadArt(p.cards[p.cards.length-1]); // warm the first card so opening is instant
         } else if (p.cards.length) {
             const top = p.cards[p.cards.length-1];
-            const el = matCardEl(top); el.style.left = x+'px'; el.style.top = y+'px'; el.dataset.pack = i; el.style.cursor='pointer';
+            const el = matCardEl(top); el.style.left = x+'px'; el.style.top = y+'px'; el.dataset.pack = i; el.style.cursor='grab';
             const badge = document.createElement('div'); badge.className = 'matPackN';
-            badge.style.cssText = 'position:absolute;top:-13px;left:0;color:#9ab;font-size:10px'; badge.textContent = p.cards.length + ' — click';
+            badge.style.cssText = 'position:absolute;top:-13px;left:0;color:#9ab;font-size:10px'; badge.textContent = p.cards.length + ' — tap/drag';
             el.appendChild(badge);
-            el.onclick = () => { p.cards.pop(); placeLoose({ id:top.id, n:top.n,s:top.s,c:top.c,r:top.r,mc:top.mc,v:top.v,land:top.land,t:top.t }); renderMat(); };
             mat.appendChild(el);
-            preloadArt(p.cards[p.cards.length-2]); // warm the next card so it shows instantly on click
+            preloadArt(p.cards[p.cards.length-2]); // warm the next card so it shows instantly
             preloadArt(p.cards[p.cards.length-3]);
         }
     });
@@ -1897,10 +1901,12 @@ function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(ins
     const mat = document.getElementById('sbMat'), tray = document.getElementById('sbTray');
     let drag = null, ghost = null; const START = 5;
     const overEl = (el, x, y) => { const r = el.getBoundingClientRect(); return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom; };
+    let tapPend = null; // pending single-tap (so a double-tap can cancel it)
     function onDown(e) {
         const card = e.target.closest && e.target.closest('.matCard');
-        if (!card || card.dataset.pack !== undefined) return; // pack tops = click
-        drag = { zone: card.dataset.zone, id: card.dataset.id, key: card.dataset.key, el: card, sx: e.clientX, sy: e.clientY, moved: false, pid: e.pointerId };
+        if (!card) return;
+        const packIdx = card.dataset.pack !== undefined ? +card.dataset.pack : null;
+        drag = { zone: packIdx!=null ? 'pack' : card.dataset.zone, packIdx, id: card.dataset.id, key: card.dataset.key, el: card, sx: e.clientX, sy: e.clientY, moved: false };
         try { card.setPointerCapture(e.pointerId); } catch (err) {}
         document.addEventListener('pointermove', onMove, true);
         document.addEventListener('pointerup', onUp, true);
@@ -1911,6 +1917,14 @@ function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(ins
         if (!drag.moved) {
             if (Math.abs(e.clientX-drag.sx)<START && Math.abs(e.clientY-drag.sy)<START) return;
             drag.moved = true;
+            if (drag.zone === 'pack') { // pull the top card off the pack, then drag it as a loose card
+                const p = sbPacks[drag.packIdx]; const inst = p.cards.pop();
+                if (!inst) { drag = null; return; }
+                const mr = mat.getBoundingClientRect(), r = drag.el.getBoundingClientRect();
+                sbLoose.push({ id:inst.id, n:inst.n,s:inst.s,c:inst.c,r:inst.r,mc:inst.mc,v:inst.v,land:inst.land,t:inst.t, x:r.left-mr.left+mat.scrollLeft, y:r.top-mr.top+mat.scrollTop });
+                drag.zone='mat'; drag.id=inst.id; drag.el.dataset.zone='mat'; drag.el.dataset.id=inst.id; delete drag.el.dataset.pack;
+                const b = drag.el.querySelector('.matPackN'); if (b) b.remove();
+            }
             const cw = matCw(); const el = drag.el; // lift the actual card and follow the pointer
             el.classList.add('dragging');
             el.style.position='fixed'; el.style.zIndex='99999'; el.style.margin='0'; el.style.pointerEvents='none';
@@ -1929,8 +1943,8 @@ function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(ins
         if (!drag) return;
         const d = drag; drag = null;
         mat.classList.remove('over'); tray.classList.remove('over');
-        if (!d.moved) { d.el.classList.remove('dragging'); return; } // a tap — hover/long-press handles preview
-        const onMat = overEl(mat, e.clientX, e.clientY), onTray = overEl(tray, e.clientX, e.clientY), cw = matCw();
+        if (!d.moved) { d.el.classList.remove('dragging'); handleTap(d); return; } // tap / double-tap
+        const onTray = overEl(tray, e.clientX, e.clientY), cw = matCw();
         const matPos = () => { const mr = mat.getBoundingClientRect(); return { x: Math.max(0, e.clientX-mr.left-cw/2+mat.scrollLeft), y: Math.max(0, e.clientY-mr.top-cw*0.7+mat.scrollTop) }; };
         if (d.zone==='mat' && onTray) { // add to deck
             const i = sbLoose.findIndex(l=>l.id===d.id); if (i>=0) { const inst = sbLoose[i]; sbLoose.splice(i,1); addDeck(inst); }
@@ -1943,6 +1957,27 @@ function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(ins
         } else if (d.zone==='tray' && sbTraySort==='free') { // reposition within the tray (free mode)
             const tr=tray.getBoundingClientRect(); trayFree[d.key]={ x:Math.max(0,e.clientX-tr.left-cw/2+tray.scrollLeft), y:Math.max(0,e.clientY-tr.top-cw*0.7+tray.scrollTop) }; renderTray();
         } else { renderSealedBuilder(); } // dropped a sorted tray card back in the tray → snap back
+    }
+    // single tap / double tap (reliable on touch): single pack tap = flip a card to the mat; double tap = change zone
+    function handleTap(d) {
+        const tapId = d.zone + ':' + (d.id || d.key || d.packIdx);
+        const now = (window.performance ? performance.now() : 0);
+        if (tapPend && tapPend.id === tapId && (now - tapPend.t) < 260) { // DOUBLE tap → change zone
+            clearTimeout(tapPend.timer); tapPend = null;
+            if (d.zone === 'pack' || d.zone === 'mat') { // → into the deck
+                if (d.zone === 'pack') { const inst = sbPacks[d.packIdx].cards.pop(); if (inst) addDeck(inst); }
+                else { const i = sbLoose.findIndex(l=>l.id===d.id); if (i>=0) { const inst = sbLoose[i]; sbLoose.splice(i,1); addDeck(inst); } }
+            } else if (d.zone === 'tray') { // → out of the deck (back onto the mat)
+                const card = sbDeck.find(c=>sbKey(c)===d.key);
+                if (card) { const p = Object.assign({}, card); removeDeckSilent(card); placeLoose({ id:'m'+(matId++), n:p.n,s:p.s,c:p.c,r:p.r,mc:p.mc,v:p.v,land:p.land,t:p.t }); renderSealedBuilder(); }
+            }
+            return;
+        }
+        tapPend = { id: tapId, t: now, timer: setTimeout(() => { // SINGLE tap
+            tapPend = null;
+            if (d.zone === 'pack') { const p = sbPacks[d.packIdx]; const inst = p.cards.pop(); if (inst) { placeLoose({ id:inst.id, n:inst.n,s:inst.s,c:inst.c,r:inst.r,mc:inst.mc,v:inst.v,land:inst.land,t:inst.t }); renderMat(); } }
+            // single tap on a mat/tray card does nothing (hover/long-press previews)
+        }, 260) };
     }
     mat.addEventListener('pointerdown', onDown); tray.addEventListener('pointerdown', onDown);
 })();
@@ -1970,11 +2005,30 @@ document.getElementById('sbQuit').onclick = () => {
     showSetup(); // back to the new-game menu
 };
 document.getElementById('sbAuto').onclick = () => {
-    if (!confirm('Auto-build a deck from your pool and start the match?')) return;
-    closeSealedBuilder();
-    setPrompt('Building deck & starting…');
-    send('sealedDeck', undefined, { auto: true });
+    // Auto-build the deck into the tray so it can be inspected/tweaked — it does NOT start the game.
+    send('sealedAutoBuild', undefined, {});
 };
+// The server built a deck from the pool; load it into the deck tray (matched back to pool printings) to inspect.
+function applyAutoBuild(data) {
+    sbDeck = [];
+    (data.cards || []).forEach(rc => {
+        let need = rc.q || 1;
+        const exact = rc.n + '|' + (rc.s||'') + '|' + (rc.c||'');
+        // prefer the exact printing the server chose, then any other printing of the same card name
+        const cand = sbPoolFull.filter(p => p.n === rc.n).sort((a,b) => (sbKey(a)===exact?-1:0) - (sbKey(b)===exact?-1:0));
+        for (const p of cand) {
+            if (need <= 0) break;
+            const take = Math.min(need, p.q); if (take <= 0) continue;
+            const d = sbDeck.find(x => sbKey(x)===sbKey(p));
+            if (d) d.q += take; else sbDeck.push(Object.assign({}, p, { q:take }));
+            need -= take;
+        }
+    });
+    const b = data.basics || {};
+    sbBasics = { w:b.w||0, u:b.u||0, b:b.b||0, r:b.r||0, g:b.g||0 };
+    reconcileMat();
+    renderSealedBuilder();
+}
 document.getElementById('sbPlay').onclick = () => {
     if (sbTotal() < 40) return;
     closeSealedBuilder();
@@ -3444,6 +3498,7 @@ function handle(method, data) {
         case 'GATEWAY_READY': sendBuffer.length = 0; prepareSetup(data); sendSkips(); send('sealedSets'); setPrompt('Ready. Click “New game” to start — or open ⚙ Settings.'); break;
         case 'SEALED_SETS': fillSealedSets(data && data.sets); break;
         case 'SEALED_POOL': openSealedBuilder(data); break;
+        case 'SEALED_AUTOBUILD': applyAutoBuild(data); break;
         case 'GATEWAY_RECONNECTED':
             setupEl.style.display = 'none'; hideBanner(); setGameActive(true);
             log('Reconnected to your game'); setPrompt('Reconnected — resuming…'); break;
@@ -3464,7 +3519,8 @@ function handle(method, data) {
             setPrompt('<span class="over">Couldn\'t start — see the message in the dialog.</span>');
             break; }
         case 'START_GAME': case 'GAME_INIT':
-            setupEl.style.display = 'none'; recentEvents.length = 0; renderEventFeed(); log('Game started'); setGameActive(true); resetCycle();
+            setupEl.style.display = 'none'; closeSealedBuilder(); // never let the full-screen builder cover the board/dock
+            recentEvents.length = 0; renderEventFeed(); log('Game started'); setGameActive(true); resetCycle();
             holdPriority = false; { const hb = document.getElementById('holdBtn'); if (hb) hb.classList.remove('on'); }
             setPrompt('Game started — waiting for the first decision…'); break;
 

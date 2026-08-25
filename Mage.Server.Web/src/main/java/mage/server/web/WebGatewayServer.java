@@ -1104,6 +1104,17 @@ public class WebGatewayServer {
             }
             return;
         }
+        // Auto-build a deck from the human's pool and send it back to the builder (do NOT start a game).
+        if ("sealedAutoBuild".equals(action)) {
+            try {
+                autoBuildSealedIntoTray(ctx);
+            } catch (Exception e) {
+                logger.warn("web gateway: sealedAutoBuild failed", e);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
+                        Map.of("message", "Couldn't auto-build deck: " + e.getMessage())));
+            }
+            return;
+        }
 
         // Control action: end the current game right now (no winner played out, no AIs left running).
         if ("endGame".equals(action)) {
@@ -1464,6 +1475,45 @@ public class WebGatewayServer {
         payload.add("packs", packsJson);                        // per-pack card lists (Playmat view)
         ctx.send(JsonCodec.encodeCallback("SEALED_POOL", null, payload));
         logger.info("web gateway: opened sealed pool (" + setCode + ", " + players + " players) for " + ctx.getSessionId());
+    }
+
+    /** Auto-build a 40-card deck from the human's open pool and send it back to the builder to inspect (no game). */
+    private void autoBuildSealedIntoTray(WsContext ctx) {
+        SealedEvent ev = sealedByWs.get(ctx.getSessionId());
+        if (ev == null) {
+            throw new IllegalStateException("No sealed pool is open — open packs first.");
+        }
+        DeckCardLists deck = DeckFactory.buildDeckFromPool(ev.humanPool, "Sealed deck");
+        // Split the built deck into non-basic spells (matched back to the pool) and basic-land counts.
+        String[] basicNames = {"Plains", "Island", "Swamp", "Mountain", "Forest"};
+        java.util.Set<String> basicSet = new java.util.HashSet<>(java.util.Arrays.asList(basicNames));
+        int[] basics = new int[5]; // w,u,b,r,g
+        com.google.gson.JsonArray cards = new com.google.gson.JsonArray();
+        java.util.LinkedHashMap<String, int[]> spellCounts = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, mage.cards.decks.DeckCardInfo> spellSample = new java.util.LinkedHashMap<>();
+        for (mage.cards.decks.DeckCardInfo ci : deck.getCards()) {
+            int bi = java.util.Arrays.asList(basicNames).indexOf(ci.getCardName());
+            if (bi >= 0) { basics[bi]++; continue; }
+            String key = ci.getCardName() + "|" + ci.getSetCode() + "|" + ci.getCardNumber();
+            spellCounts.computeIfAbsent(key, k -> new int[1])[0]++;
+            spellSample.putIfAbsent(key, ci);
+        }
+        for (java.util.Map.Entry<String, int[]> e : spellCounts.entrySet()) {
+            mage.cards.decks.DeckCardInfo ci = spellSample.get(e.getKey());
+            com.google.gson.JsonObject o = new com.google.gson.JsonObject();
+            o.addProperty("n", ci.getCardName());
+            if (ci.getSetCode() != null && !ci.getSetCode().isEmpty()) o.addProperty("s", ci.getSetCode());
+            if (ci.getCardNumber() != null && !ci.getCardNumber().isEmpty()) o.addProperty("c", ci.getCardNumber());
+            o.addProperty("q", e.getValue()[0]);
+            cards.add(o);
+        }
+        com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
+        payload.add("cards", cards);
+        com.google.gson.JsonObject b = new com.google.gson.JsonObject();
+        b.addProperty("w", basics[0]); b.addProperty("u", basics[1]); b.addProperty("b", basics[2]);
+        b.addProperty("r", basics[3]); b.addProperty("g", basics[4]);
+        payload.add("basics", b);
+        ctx.send(JsonCodec.encodeCallback("SEALED_AUTOBUILD", null, payload));
     }
 
     /** Build the human's submitted sealed deck + the AI decks, then start the match. */
