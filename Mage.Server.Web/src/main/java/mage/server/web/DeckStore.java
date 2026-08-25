@@ -194,6 +194,9 @@ public final class DeckStore {
             if (c.getExpansionSetCode() != null && !c.getExpansionSetCode().isEmpty()) o.addProperty("s", c.getExpansionSetCode());
             if (c.getCardNumber() != null && !c.getCardNumber().isEmpty()) o.addProperty("c", c.getCardNumber());
             if (c.getRarity() != null) o.addProperty("r", c.getRarity().toString());
+            o.addProperty("mc", String.join("", c.getManaCostSymbols())); // e.g. {2}{R}
+            o.addProperty("v", c.getManaValue());                          // mana value (for the curve)
+            o.addProperty("land", c.isLand());                             // exclude lands from the curve
             if (e.getValue()[0] > 1) o.addProperty("q", e.getValue()[0]);
             out.add(o);
         }

@@ -402,6 +402,11 @@
             border-radius: 8px; padding: 2px 6px; }
         #sbBasics .sbBasic button { padding: 1px 8px; font-size: 14px; font-weight: 800; background: #2b3a52; }
         #sbBasics .sbBasic span { min-width: 34px; text-align: center; }
+        #sbCurve { display: flex; gap: 3px; align-items: flex-end; margin-left: auto; }
+        #sbCurve .sbBar { display: flex; flex-direction: column; align-items: center; width: 18px; }
+        #sbCurve .sbBar i { width: 12px; min-height: 2px; background: #4a7ba8; border-radius: 2px 2px 0 0; display: block; }
+        #sbCurve .sbBarN { font-size: 9px; color: #8fd29a; height: 11px; }
+        #sbCurve .sbBarX { font-size: 9px; color: #8090a0; margin-top: 1px; }
         /* card picker: highlight the valid choices, dim the rest, mark the chosen ones with a check */
         .pickcount { font-size: 15px; font-weight: 800; color: #ffd166; margin: -4px 0 4px; }
         /* quick-target buttons, sitting right by the stack so you can pick a player without scrolling.
@@ -661,7 +666,11 @@
             <button id="sbAuto" class="alt" title="Let the AI build a solid deck from your pool">✨ Auto-build</button>
             <button id="sbPlay" disabled title="Need at least 40 cards">Play ▸</button>
         </div>
-        <div id="sbBasics" style="margin:6px 0; display:flex; gap:10px; flex-wrap:wrap; align-items:center;"></div>
+        <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:6px 0;">
+            <div id="sbBasics" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;"></div>
+            <button id="sbAutoLands" class="alt" title="Fill basic lands to reach 40 cards, split by your deck's colours">⛰ Auto-fill lands</button>
+            <div id="sbCurve" title="mana curve (non-land cards by mana value)"></div>
+        </div>
         <div style="display:flex; gap:10px; flex:1 1 auto; min-height:0; overflow:hidden;">
             <div style="flex:1 1 55%; display:flex; flex-direction:column; min-height:0;">
                 <div class="sbLabel">Pool <span id="sbPoolCount" class="hint"></span> — tap to add</div>
@@ -1572,7 +1581,7 @@ try { const cs = JSON.parse(localStorage.getItem('sealedSets') || 'null'); if (c
 // deck-builder state: pool + deck are arrays of {n,s,c,r,q}; basics {w,u,b,r,g}
 let sbPool = [], sbDeck = [], sbBasics = { w:0,u:0,b:0,r:0,g:0 };
 window.openSealedBuilder = function (data) {
-    sbPool = (data && data.pool ? data.pool : []).map(c => ({ n:c.n, s:c.s||'', c:c.c||'', r:c.r||'', q:c.q||1 }));
+    sbPool = (data && data.pool ? data.pool : []).map(c => ({ n:c.n, s:c.s||'', c:c.c||'', r:c.r||'', q:c.q||1, mc:c.mc||'', v:c.v||0, land:!!c.land }));
     sbDeck = []; sbBasics = { w:0,u:0,b:0,r:0,g:0 };
     setupEl.style.display = 'none';
     document.getElementById('sealedBuilder').style.display = 'flex';
@@ -1580,12 +1589,14 @@ window.openSealedBuilder = function (data) {
 };
 function sbTotal() { return sbDeck.reduce((a,c)=>a+c.q,0) + sbBasics.w+sbBasics.u+sbBasics.b+sbBasics.r+sbBasics.g; }
 function rarClass(r) { r=(r||'').toLowerCase(); return r.startsWith('m')?'r-mythic':r.startsWith('r')?'r-rare':r.startsWith('u')?'r-uncommon':'r-common'; }
+function sbCardObj(card) { return { name: card.n, expansionSetCode: card.s, cardNumber: card.c, manaCostStr: card.mc }; }
 function sbRow(card, side) {
     const el = document.createElement('div'); el.className = 'sbRow ' + rarClass(card.r);
-    el.innerHTML = `<span class="sbQ">${card.q}×</span><span class="sbN">${msg(card.n)}</span>`;
+    el.innerHTML = `<span class="sbQ">${card.q}×</span><span class="sbN">${msg(card.n)}</span><span class="sbPip">${card.mc ? manaPips(card.mc) : ''}</span>`;
     el.onclick = () => { moveSealed(card, side); };
-    el.oncontextmenu = (e) => { e.preventDefault(); showCardViewer({ name: card.n, expansionSetCode: card.s, cardNumber: card.c }, true); };
-    el._card = { name: card.n, expansionSetCode: card.s, cardNumber: card.c }; // press-and-hold preview
+    el.onmouseenter = () => showCardViewer(sbCardObj(card), true); // hover → read the card in the side panel
+    el.oncontextmenu = (e) => { e.preventDefault(); showCardViewer(sbCardObj(card), true); };
+    el._card = sbCardObj(card); // press-and-hold preview (tablet)
     return el;
 }
 function moveSealed(card, side) {
@@ -1594,21 +1605,25 @@ function moveSealed(card, side) {
     if (fi < 0) return;
     from[fi].q--; if (from[fi].q <= 0) from.splice(fi, 1);
     const ti = to.findIndex(c => c.n===card.n && c.s===card.s && c.c===card.c);
-    if (ti >= 0) to[ti].q++; else to.push({ n:card.n, s:card.s, c:card.c, r:card.r, q:1 });
+    if (ti >= 0) to[ti].q++; else to.push(Object.assign({}, card, { q:1 }));
     renderSealedBuilder();
 }
 function renderSealedBuilder() {
     const poolEl = document.getElementById('sbPool'), deckEl = document.getElementById('sbDeck');
-    const bykey = a => a.slice().sort((x,y)=>(x.n>y.n?1:-1));
+    const bykey = a => a.slice().sort((x,y)=>(x.v-y.v) || (x.n>y.n?1:-1)); // by mana value, then name
     poolEl.innerHTML = ''; bykey(sbPool).forEach(c => poolEl.appendChild(sbRow(c, 'pool')));
     deckEl.innerHTML = ''; bykey(sbDeck).forEach(c => deckEl.appendChild(sbRow(c, 'deck')));
     document.getElementById('sbPoolCount').textContent = '(' + sbPool.reduce((a,c)=>a+c.q,0) + ')';
     const total = sbTotal();
+    const spells = sbDeck.reduce((a,c)=>a+(c.land?0:c.q),0);
+    const lands = total - spells;
     document.getElementById('sbDeckCount').textContent = '(' + total + ')';
-    document.getElementById('sbCount').innerHTML = total >= 40
+    document.getElementById('sbCount').innerHTML = (total >= 40
         ? `<b style="color:#8fd29a">${total} cards</b> — ready`
-        : `<b style="color:#e0a06a">${total} cards</b> — need ${40-total} more`;
+        : `<b style="color:#e0a06a">${total} cards</b> — need ${40-total} more`)
+        + ` <span class="hint">· ${spells} spells · ${lands} lands</span>`;
     const play = document.getElementById('sbPlay'); play.disabled = total < 40; play.textContent = 'Play ▸';
+    renderManaCurve();
     // basic-land steppers
     const bWrap = document.getElementById('sbBasics'); bWrap.innerHTML = '<span class="hint">Basic lands:</span>';
     [['w','Plains'],['u','Island'],['b','Swamp'],['r','Mountain'],['g','Forest']].forEach(([k,name]) => {
@@ -1619,6 +1634,38 @@ function renderSealedBuilder() {
         plus.onclick = () => { sbBasics[k]++; renderSealedBuilder(); };
         bWrap.appendChild(d);
     });
+    const auto = document.getElementById('sbAutoLands');
+    auto.onclick = autoFillBasics;
+}
+// mana curve: count non-land deck cards by mana value (0..7+)
+function renderManaCurve() {
+    const el = document.getElementById('sbCurve'); if (!el) return;
+    const buckets = [0,0,0,0,0,0,0,0]; // 0,1,2,3,4,5,6,7+
+    sbDeck.forEach(c => { if (c.land) return; const i = Math.min(7, Math.max(0, c.v|0)); buckets[i] += c.q; });
+    const max = Math.max(1, ...buckets);
+    el.innerHTML = '';
+    buckets.forEach((n, i) => {
+        const col = document.createElement('div'); col.className = 'sbBar';
+        col.innerHTML = `<span class="sbBarN">${n||''}</span><i style="height:${Math.round(n/max*46)}px"></i><span class="sbBarX">${i===7?'7+':i}</span>`;
+        el.appendChild(col);
+    });
+}
+// fill basic lands to reach 40, distributed by the coloured pips of the non-land cards in the deck
+function autoFillBasics() {
+    const need = Math.max(0, 40 - sbDeck.reduce((a,c)=>a+c.q,0));
+    const pips = { w:0,u:0,b:0,r:0,g:0 };
+    sbDeck.forEach(c => { if (c.land) return; (c.mc.match(/\{([WUBRG])\}/g)||[]).forEach(sym => { pips[sym.charAt(1).toLowerCase()] += c.q; }); });
+    const totalPips = pips.w+pips.u+pips.b+pips.r+pips.g;
+    sbBasics = { w:0,u:0,b:0,r:0,g:0 };
+    if (need <= 0) { renderSealedBuilder(); return; }
+    if (totalPips === 0) { sbBasics.w = need; renderSealedBuilder(); return; } // no colored spells → arbitrary
+    let assigned = 0;
+    ['w','u','b','r','g'].forEach(k => { sbBasics[k] = Math.round(need * pips[k] / totalPips); assigned += sbBasics[k]; });
+    // fix rounding drift onto the most-needed color
+    let drift = need - assigned;
+    const top = ['w','u','b','r','g'].sort((a,b)=>pips[b]-pips[a])[0];
+    sbBasics[top] = Math.max(0, sbBasics[top] + drift);
+    renderSealedBuilder();
 }
 document.getElementById('sbAuto').onclick = () => {
     if (!confirm('Auto-build a deck from your pool and start the match?')) return;
