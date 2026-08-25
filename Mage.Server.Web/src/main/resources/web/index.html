@@ -413,6 +413,18 @@
         #sbCurve .sbBar i { width: 12px; min-height: 2px; background: #4a7ba8; border-radius: 2px 2px 0 0; display: block; }
         #sbCurve .sbBarN { font-size: 9px; color: #8fd29a; height: 11px; }
         #sbCurve .sbBarX { font-size: 9px; color: #8090a0; margin-top: 1px; }
+        /* deck "mana by color" stats (colored pips of non-land cards) */
+        #sbColors .sbColorRow { display: flex; align-items: center; gap: 5px; margin: 2px 0; }
+        #sbColors .sbColorPip { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto; border: 1px solid #0006; }
+        #sbColors .sbColorBar { flex: 1 1 auto; height: 8px; background: #1a2230; border-radius: 4px; overflow: hidden; }
+        #sbColors .sbColorBar i { display: block; height: 100%; }
+        #sbColors .sbColorN { flex: 0 0 auto; font-size: 10px; color: #9ab; min-width: 58px; text-align: right; }
+        /* playmat group-by bar + the column headers it draws on the mat */
+        #sbMatBar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 4px 8px; font-size: 12px; color: #9fb4c8;
+            background: #111a24; border: 1px solid #2b3442; border-bottom: 0; border-radius: 6px 6px 0 0; }
+        #sbMatBar .sbGroup { background: #243244; font-size: 11px; padding: 3px 9px; }
+        #sbMatBar .sbGroup.on { background: #2f5a86; }
+        .matGroupHead { position: absolute; font-size: 10px; font-weight: 700; color: #9ab; white-space: nowrap; z-index: 1; pointer-events: none; }
         /* full-screen sealed builder: playmat on top, deck tray on the bottom */
         #sealedBuilder { position: fixed; left: 0; top: 44px; right: var(--sidecol-w); bottom: 0; z-index: 46;
             background: #0d1117; display: flex; flex-direction: column; padding: 6px 8px; gap: 6px; }
@@ -420,7 +432,7 @@
         #sbListView { display: flex; gap: 10px; flex: 1 1 auto; min-height: 0; overflow: hidden; }
         #sbListView .sbCol { flex: 1 1 50%; display: flex; flex-direction: column; min-height: 0; }
         #sbMatView { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; gap: 0; }
-        #sbMat { position: relative; flex: 1 1 62%; overflow: auto; border: 1px solid #2b3442; border-radius: 6px 6px 0 0;
+        #sbMat { position: relative; flex: 1 1 62%; overflow: auto; border: 1px solid #2b3442; border-radius: 0;
             background: #10161d; background-image: radial-gradient(circle, #1a2431 1px, transparent 1px); background-size: 22px 22px;
             touch-action: none; min-height: 120px; }
         #sbTrayBar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 4px 8px;
@@ -738,6 +750,15 @@
         </div>
     </div>
     <div id="sbMatView">
+        <div id="sbMatBar">
+            <span class="hint">Group:</span>
+            <button class="sbGroup on" data-group="free">Free</button>
+            <button class="sbGroup" data-group="color">Color</button>
+            <button class="sbGroup" data-group="rarity">Rarity</button>
+            <button class="sbGroup" data-group="type">Type</button>
+            <span style="flex:1"></span>
+            <span id="sbMatCount" class="hint"></span>
+        </div>
         <div id="sbMat"></div>
         <div id="sbTrayBar">
             <b>Deck</b> <span id="sbTrayCount" class="hint"></span>
@@ -855,6 +876,7 @@
     <div id="sbControls" style="display:none">
         <div id="sbCount" class="hint" style="margin-bottom:4px"></div>
         <div id="sbCurve" title="mana curve (non-land cards by mana value)"></div>
+        <div id="sbColors" title="deck mana allocation by color — colored pips of your non-land cards" style="margin-top:8px"></div>
         <div id="sbBasics" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0;"></div>
         <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
             <button id="sbAutoLands" class="alt" style="flex:1 1 auto">⛰ Auto-fill lands</button>
@@ -1673,6 +1695,8 @@ window.openSealedBuilder = function (data) {
     sbPacksRaw = (data && data.packs ? data.packs : []).map(p => p.map(norm));
     sbDeck = []; sbBasics = { w:0,u:0,b:0,r:0,g:0 };
     matBuilt = false; sbLoose = []; sbPacks = [];
+    matGroup = 'free'; // reset the mat grouping to match the default button state
+    document.querySelectorAll('#sbMatBar .sbGroup').forEach(x => x.classList.toggle('on', x.dataset.group==='free'));
     setupEl.style.display = 'none';
     document.getElementById('sealedBuilder').style.display = 'flex';
     document.getElementById('sbControls').style.display = 'block';
@@ -1723,6 +1747,8 @@ function renderSealedBuilder() {
         + ` <span class="hint">· ${spells} spells · ${lands} lands</span>`;
     const play = document.getElementById('sbPlay'); play.disabled = total < 40; play.textContent = 'Play ▸';
     renderManaCurve();
+    renderColorStats();
+    document.getElementById('sbMatCount').textContent = sbLoose.length ? sbLoose.length + ' on mat' : '';
     // basic-land steppers
     const bWrap = document.getElementById('sbBasics'); bWrap.innerHTML = '<span class="hint">Basic lands:</span>';
     [['w','Plains'],['u','Island'],['b','Swamp'],['r','Mountain'],['g','Forest']].forEach(([k,name]) => {
@@ -1749,6 +1775,26 @@ function renderManaCurve() {
         el.appendChild(col);
     });
 }
+// --- colour helpers (derived roughly from the printed mana cost; good enough for stats + grouping) ---
+function cardColorSet(c) { const s = new Set(); (String(c.mc||'').match(/[WUBRG]/g)||[]).forEach(x => s.add(x)); return s; }
+function colorGroup(c) { if (c.land) return 'land'; const s = cardColorSet(c); if (!s.size) return 'colorless'; if (s.size >= 2) return 'multi'; return [...s][0].toLowerCase(); }
+function rarKey(r) { r = (r||'').toLowerCase(); return r.startsWith('m') ? 'm' : r.startsWith('r') ? 'r' : r.startsWith('u') ? 'u' : 'c'; }
+function deckColorPips() { const p = { W:0,U:0,B:0,R:0,G:0 };
+    sbDeck.forEach(c => { if (c.land) return; (String(c.mc||'').match(/[WUBRG]/g)||[]).forEach(s => { if (p[s]!=null) p[s] += c.q; }); }); return p; }
+// deck "mana by color": colored-pip share across the non-land cards (drives the mana base)
+function renderColorStats() {
+    const el = document.getElementById('sbColors'); if (!el) return;
+    const pips = deckColorPips(); const total = pips.W+pips.U+pips.B+pips.R+pips.G;
+    const defs = [['W','#e9e3c0'],['U','#4a90d9'],['B','#8a7d97'],['R','#d9534f'],['G','#4a9b5e']];
+    el.innerHTML = '<div class="hint" style="margin-bottom:2px">Mana by color' + (total ? '' : ' — none yet') + '</div>';
+    defs.forEach(([k,col]) => { const n = pips[k], pct = total ? Math.round(n/total*100) : 0;
+        const row = document.createElement('div'); row.className = 'sbColorRow';
+        row.innerHTML = `<span class="sbColorPip" style="background:${col}"></span>`
+            + `<span class="sbColorBar"><i style="width:${pct}%;background:${col}"></i></span>`
+            + `<span class="sbColorN">${n ? n + ' · ' + pct + '%' : '—'}</span>`;
+        el.appendChild(row);
+    });
+}
 // fill basic lands to reach 40, distributed by the coloured pips of the non-land cards in the deck
 function autoFillBasics() {
     const need = Math.max(0, 40 - sbDeck.reduce((a,c)=>a+c.q,0));
@@ -1771,6 +1817,7 @@ function autoFillBasics() {
 // drag a card up into the mat to remove it). Cards move between via drag; adding to deck = drop on the tray.
 let sbPacks = [], sbLoose = [], matBuilt = false, matId = 1, matZ = 10;
 let sbTraySort = 'mana', trayFree = {}; // free-mode positions keyed by card key
+let matGroup = 'free'; // how the loose cards on the mat are laid out: free | color | rarity | type
 function matCw() { return parseInt(getComputedStyle(document.documentElement).getPropertyValue('--mat-cw')) || 92; }
 function setMatView(mat) {
     sbView = mat ? 'mat' : 'list';
@@ -1854,8 +1901,41 @@ function renderMat() {
             preloadArt(p.cards[p.cards.length-3]);
         }
     });
-    sbLoose.forEach(l => { const el = matCardEl(l); el.style.left = (l.x||20)+'px'; el.style.top = (l.y||180)+'px'; el.style.zIndex = l.z||1; el.dataset.zone='mat'; mat.appendChild(el); });
+    if (matGroup === 'free') {
+        sbLoose.forEach(l => { const el = matCardEl(l); el.style.left = (l.x||20)+'px'; el.style.top = (l.y||180)+'px'; el.style.zIndex = l.z||1; el.dataset.zone='mat'; mat.appendChild(el); });
+    } else {
+        renderMatGroups(mat, cw); // tidy the loose cards into labelled columns (non-destructive: 'Free' restores them)
+    }
     renderTray();
+}
+// Group the loose (not-yet-in-deck) cards on the mat into labelled columns by colour / rarity / type.
+// This is a view overlay — it positions cards for display but does NOT change their stored free positions,
+// so switching back to Free returns them exactly where you had them.
+function matGroups() {
+    if (matGroup === 'color') return [['w','White'],['u','Blue'],['b','Black'],['r','Red'],['g','Green'],
+        ['multi','Multicolor'],['colorless','Colorless'],['land','Land']].map(([k,head]) => ({ head, match: c => colorGroup(c)===k }));
+    if (matGroup === 'rarity') return [['m','Mythic'],['r','Rare'],['u','Uncommon'],['c','Common']]
+        .map(([k,head]) => ({ head, match: c => rarKey(c.r)===k }));
+    return [['creature','Creatures'],['instant','Instants'],['sorcery','Sorceries'],['artifact','Artifacts'],
+        ['enchantment','Enchantments'],['planeswalker','Planeswalkers'],['land','Lands'],['other','Other']]
+        .map(([k,head]) => ({ head, match: c => (c.land ? 'land' : (c.t||'other'))===k }));
+}
+function renderMatGroups(mat, cw) {
+    const ch = Math.round(cw*1.4), stepY = Math.round(ch*0.5), colW = cw + 14;
+    const packsVisible = sbPacks && sbPacks.some(p => !p.opened || p.cards.length);
+    const headY = packsVisible ? 8 + ch + 10 : 8;   // headers sit just below the packs row
+    const top0 = headY + 16;
+    let colX = 8;
+    matGroups().forEach(g => {
+        const cards = sbLoose.filter(g.match).sort((a,b) => (a.v-b.v) || (a.n>b.n?1:-1));
+        if (!cards.length) return;
+        const h = document.createElement('div'); h.className = 'matGroupHead';
+        h.style.left = colX+'px'; h.style.top = headY+'px'; h.textContent = g.head + ' (' + cards.length + ')';
+        mat.appendChild(h);
+        cards.forEach((cd, i) => { const el = matCardEl(cd); el.style.left = colX+'px'; el.style.top = (top0 + i*stepY)+'px';
+            el.style.zIndex = 100 + i; el.dataset.zone='mat'; mat.appendChild(el); });
+        colX += colW;
+    });
 }
 // the deck tray: your deck cards. Sorted modes lay them out in overlapping COLUMNS (by mana value or
 // type); Free mode lets you place each card anywhere. Drag a card up into the mat to remove it.
@@ -1898,6 +1978,12 @@ document.querySelectorAll('#sbTrayBar .sbSort').forEach(b => b.onclick = () => {
     sbTraySort = b.dataset.sort;
     document.querySelectorAll('#sbTrayBar .sbSort').forEach(x => x.classList.toggle('on', x===b));
     renderTray();
+});
+// playmat "group by" buttons (color / rarity / type / free) — re-lay the loose cards on the mat
+document.querySelectorAll('#sbMatBar .sbGroup').forEach(b => b.onclick = () => {
+    matGroup = b.dataset.group;
+    document.querySelectorAll('#sbMatBar .sbGroup').forEach(x => x.classList.toggle('on', x===b));
+    if (sbView === 'mat') renderMat();
 });
 // decrement a deck card without re-rendering (caller renders after arranging the mat)
 function removeDeckSilent(card) { const k = sbKey(card); const i = sbDeck.findIndex(c => sbKey(c)===k);
