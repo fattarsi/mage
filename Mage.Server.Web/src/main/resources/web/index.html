@@ -1802,16 +1802,21 @@ function reconcileMat() {
         while (missing>0 && proto) { placeLoose({ id:'m'+(matId++), n:proto.n,s:proto.s,c:proto.c,r:proto.r,mc:proto.mc,v:proto.v,land:proto.land,t:proto.t }); missing--; }
     });
 }
-// place a loose card in the next slot, filling from the BOTTOM-left up (top stays free for your sorting).
-// cards overlap a little (they don't sit in a full grid) so many more fit on screen at once.
+// place a loose card in the next free grid slot, filling from the TOP-left DOWN so each card's top edge
+// (name + mana cost) stays readable as the column fills. Cards overlap a little so many more fit on screen.
+// Auto-placed cards carry a `slot` so a removed one frees its slot and the next placement falls in line
+// (fills the gap) instead of skipping — user-dragged cards have no `slot` and don't reserve grid space.
 function placeLoose(inst) {
     const mat = document.getElementById('sbMat'); const cw = matCw(), ch = Math.round(cw*1.4);
     const stepX = Math.round(cw*0.6), stepY = Math.round(ch*0.5); // ~40%/50% overlap
     const cols = Math.max(1, Math.floor((mat.clientWidth-14-cw)/stepX) + 1);
-    const idx = sbLoose.length; const col = idx % cols, row = Math.floor(idx/cols);
+    const used = new Set(sbLoose.filter(l => l.slot != null).map(l => l.slot));
+    let slot = 0; while (used.has(slot)) slot++; // first free grid slot
+    const col = slot % cols, row = Math.floor(slot/cols);
+    inst.slot = slot;
     inst.x = 7 + col*stepX;
-    inst.y = Math.max(6, (mat.clientHeight||300) - ch - 6 - row*stepY);
-    inst.z = ++matZ; // last placed sits on top of the one it overlaps
+    inst.y = 7 + row*stepY;          // top-anchored: newer cards go lower and on top, revealing tops above
+    inst.z = ++matZ;                 // last placed sits on top of the one it overlaps
     sbLoose.push(inst);
 }
 function matCardEl(inst, extra) {
@@ -1952,8 +1957,8 @@ function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(ins
             const card = sbDeck.find(c=>sbKey(c)===d.key);
             if (card) { const p = Object.assign({}, card); removeDeckSilent(card); const pos = matPos();
                 sbLoose.push({ id:'m'+(matId++), n:p.n,s:p.s,c:p.c,r:p.r,mc:p.mc,v:p.v,land:p.land,t:p.t, x:pos.x, y:pos.y, z:++matZ }); renderSealedBuilder(); }
-        } else if (d.zone==='mat') { // reposition on the mat
-            const inst = sbLoose.find(l=>l.id===d.id); if (inst) { const pos = matPos(); inst.x=pos.x; inst.y=pos.y; inst.z=++matZ; } renderMat();
+        } else if (d.zone==='mat') { // reposition on the mat (a hand-placed card no longer holds a grid slot)
+            const inst = sbLoose.find(l=>l.id===d.id); if (inst) { const pos = matPos(); inst.x=pos.x; inst.y=pos.y; inst.z=++matZ; inst.slot=null; } renderMat();
         } else if (d.zone==='tray' && sbTraySort==='free') { // reposition within the tray (free mode)
             const tr=tray.getBoundingClientRect(); trayFree[d.key]={ x:Math.max(0,e.clientX-tr.left-cw/2+tray.scrollLeft), y:Math.max(0,e.clientY-tr.top-cw*0.7+tray.scrollTop) }; renderTray();
         } else { renderSealedBuilder(); } // dropped a sorted tray card back in the tray → snap back
