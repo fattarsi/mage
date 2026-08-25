@@ -1556,13 +1556,18 @@ document.getElementById('newGameBtn').onclick = () => { if (readyData) send('ref
         send('startSealed', undefined, { setCode, players, bestOf3 });
     };
 })();
-window.fillSealedSets = function (sets) {
+window.fillSealedSets = function (sets, fromCache) {
     const sel = document.getElementById('sealedSetSel');
     if (!sel) return;
+    if (!sets || !sets.length) { if (!sel.options.length) sel.innerHTML = '<option value="">no boosterable sets found</option>'; return; }
+    const keep = sel.value;
     sel.innerHTML = '';
-    (sets || []).forEach(s => { const o = document.createElement('option'); o.value = s.code; o.textContent = s.name + ' (' + s.code + ')'; sel.appendChild(o); });
-    if (!sel.options.length) sel.innerHTML = '<option value="">no boosterable sets found</option>';
+    sets.forEach(s => { const o = document.createElement('option'); o.value = s.code; o.textContent = s.name + ' (' + s.code + ')'; sel.appendChild(o); });
+    if (keep) sel.value = keep;
+    if (!fromCache) { try { localStorage.setItem('sealedSets', JSON.stringify(sets)); } catch (e) {} }
 };
+// show the cached set list immediately on load (the server refreshes it on connect)
+try { const cs = JSON.parse(localStorage.getItem('sealedSets') || 'null'); if (cs) window.fillSealedSets(cs, true); } catch (e) {}
 
 // deck-builder state: pool + deck are arrays of {n,s,c,r,q}; basics {w,u,b,r,g}
 let sbPool = [], sbDeck = [], sbBasics = { w:0,u:0,b:0,r:0,g:0 };
@@ -1926,7 +1931,9 @@ function onSocketMessage(ev) {
         // on every plain-priority frame while the toggle is on — that keeps priority after you cast, letting
         // you stack multiple spells/responses before passing. (Not during combat declaration or mana pay.)
         if (holdPriority && priorityActive && !combatMode && !manaMode) send('playerAction', 'HOLD_PRIORITY');
-        const gv = data.gameView || (data.players ? data : null);
+        // a game view has a players ARRAY; guard against other frames (e.g. SEALED_POOL) that carry a
+        // numeric `players` count, which must NOT be mistaken for a board.
+        const gv = data.gameView || (Array.isArray(data.players) ? data : null);
         if (gv) {
             const prev = lastGameView;
             guardStaleFrame(gv);       // detect + self-heal a backwards board (the "revert" symptom)

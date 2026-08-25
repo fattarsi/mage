@@ -1409,8 +1409,14 @@ public class WebGatewayServer {
 
     // ---- Sealed events ------------------------------------------------------------------------------
 
-    /** Sets that have real booster packs, as [{code,name,cards}] sorted newest-ish first (by code). */
+    private volatile com.google.gson.JsonArray boosterableSetsCache; // computed once, reused
+
+    /** Sets that have real booster packs, as [{code,name}] sorted newest-first. Cached after first build. */
     private com.google.gson.JsonArray boosterableSets() {
+        com.google.gson.JsonArray cached = boosterableSetsCache;
+        if (cached != null) {
+            return cached;
+        }
         java.util.List<mage.cards.ExpansionSet> sets = new java.util.ArrayList<>();
         for (mage.cards.ExpansionSet s : mage.cards.Sets.getInstance().values()) {
             if (s.hasBoosters()) {
@@ -1426,6 +1432,7 @@ public class WebGatewayServer {
             o.addProperty("name", s.getName());
             out.add(o);
         }
+        boosterableSetsCache = out;
         return out;
     }
 
