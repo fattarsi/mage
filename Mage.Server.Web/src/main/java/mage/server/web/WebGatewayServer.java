@@ -1443,7 +1443,14 @@ public class WebGatewayServer {
         int winsNeeded = msg.has("bestOf3") && msg.get("bestOf3").getAsBoolean() ? 2 : 1;
         final int PACKS = 6;
 
-        java.util.List<mage.cards.Card> humanPool = DeckFactory.openPacks(setCode, PACKS);
+        // Open the human's 6 packs individually so the Playmat view can open them one real pack at a time.
+        com.google.gson.JsonArray packsJson = new com.google.gson.JsonArray();
+        java.util.List<mage.cards.Card> humanPool = new java.util.ArrayList<>();
+        for (int i = 0; i < PACKS; i++) {
+            java.util.List<mage.cards.Card> pack = DeckFactory.openPacks(setCode, 1);
+            humanPool.addAll(pack);
+            packsJson.add(DeckStore.cardsToJson(pack));
+        }
         java.util.List<java.util.List<mage.cards.Card>> aiPools = new java.util.ArrayList<>();
         for (int i = 1; i < players; i++) { // one pool per AI opponent
             aiPools.add(DeckFactory.openPacks(setCode, PACKS));
@@ -1453,7 +1460,8 @@ public class WebGatewayServer {
         com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
         payload.addProperty("setCode", setCode);
         payload.addProperty("players", players);
-        payload.add("pool", DeckStore.cardsToJson(humanPool)); // [{n,s,c,r}]
+        payload.add("pool", DeckStore.cardsToJson(humanPool)); // flat grouped list (List view)
+        payload.add("packs", packsJson);                        // per-pack card lists (Playmat view)
         ctx.send(JsonCodec.encodeCallback("SEALED_POOL", null, payload));
         logger.info("web gateway: opened sealed pool (" + setCode + ", " + players + " players) for " + ctx.getSessionId());
     }

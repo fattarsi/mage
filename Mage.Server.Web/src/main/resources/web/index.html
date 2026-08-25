@@ -407,6 +407,29 @@
         #sbCurve .sbBar i { width: 12px; min-height: 2px; background: #4a7ba8; border-radius: 2px 2px 0 0; display: block; }
         #sbCurve .sbBarN { font-size: 9px; color: #8fd29a; height: 11px; }
         #sbCurve .sbBarX { font-size: 9px; color: #8090a0; margin-top: 1px; }
+        /* playmat: a scrollable canvas of draggable cards + a deck tray */
+        #sbMatView { display: none; }
+        #sbMat { position: relative; flex: 1 1 auto; overflow: auto; border: 1px solid #2b3442; border-radius: 6px;
+            background: #10161d; background-image: radial-gradient(circle, #1a2431 1px, transparent 1px); background-size: 22px 22px;
+            touch-action: none; min-height: 320px; }
+        #sbMatView #sbDeckTray { flex: 0 0 auto; margin-top: 6px; padding: 9px; text-align: center; border: 1px dashed #4a6a3a;
+            border-radius: 8px; background: #16221a; color: #a8d0b0; font-weight: 700; font-size: 13px; }
+        #sbMatView #sbDeckTray.over { background: #1f3a26; border-color: #6a5; }
+        .matCard { position: absolute; width: 92px; height: 129px; border-radius: 6px; cursor: grab; user-select: none;
+            box-shadow: 0 2px 8px #000a; border: 1px solid #3a4150; background: #232a33; overflow: hidden;
+            display: flex; align-items: flex-end; justify-content: center; font-size: 9px; color: #cbd5e2; text-align: center; }
+        .matCard img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+        .matCard .matName { position: relative; z-index: 1; background: #000a; width: 100%; padding: 1px 2px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .matCard.dragging { cursor: grabbing; box-shadow: 0 8px 22px #000c; }
+        .matPack { position: absolute; width: 92px; height: 129px; border-radius: 8px; cursor: pointer;
+            background: linear-gradient(135deg, #2a3a58, #1a2740); border: 1px solid #40527a; box-shadow: 0 2px 8px #000a;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #cfe; font-weight: 700; }
+        .matPack .matPackN { font-size: 11px; color: #9ab; }
+        #matMenu { position: fixed; z-index: 9998; background: #1b2230; border: 1px solid #3a4a63; border-radius: 8px;
+            box-shadow: 0 6px 20px #000b; padding: 4px; min-width: 150px; }
+        #matMenu button { display: block; width: 100%; text-align: left; background: transparent; padding: 8px 10px; font-size: 13px; }
+        #matMenu button:hover { background: #2b3a52; }
         /* card picker: highlight the valid choices, dim the rest, mark the chosen ones with a check */
         .pickcount { font-size: 15px; font-weight: 800; color: #ffd166; margin: -4px 0 4px; }
         /* quick-target buttons, sitting right by the stack so you can pick a player without scrolling.
@@ -661,6 +684,10 @@
     <div class="panel" style="width:min(1000px,96vw); max-height:94vh; display:flex; flex-direction:column;">
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
             <h2 style="margin:0">Build your sealed deck</h2>
+            <div id="sbViewToggle" style="display:flex; gap:4px;">
+                <button id="sbViewList" class="modebtn on" style="flex:0 0 auto; padding:5px 10px;">☰ List</button>
+                <button id="sbViewMat" class="modebtn" style="flex:0 0 auto; padding:5px 10px;">🃏 Playmat</button>
+            </div>
             <span id="sbCount" class="hint"></span>
             <span style="flex:1"></span>
             <button id="sbAuto" class="alt" title="Let the AI build a solid deck from your pool">✨ Auto-build</button>
@@ -671,7 +698,7 @@
             <button id="sbAutoLands" class="alt" title="Fill basic lands to reach 40 cards, split by your deck's colours">⛰ Auto-fill lands</button>
             <div id="sbCurve" title="mana curve (non-land cards by mana value)"></div>
         </div>
-        <div style="display:flex; gap:10px; flex:1 1 auto; min-height:0; overflow:hidden;">
+        <div id="sbListView" style="display:flex; gap:10px; flex:1 1 auto; min-height:0; overflow:hidden;">
             <div style="flex:1 1 55%; display:flex; flex-direction:column; min-height:0;">
                 <div class="sbLabel">Pool <span id="sbPoolCount" class="hint"></span> — tap to add</div>
                 <div id="sbPool" class="sbGrid"></div>
@@ -681,8 +708,15 @@
                 <div id="sbDeck" class="sbGrid"></div>
             </div>
         </div>
+        <!-- Playmat: click a pack to open it, drag cards out to form piles, drag onto the deck tray (or
+             long-press → Add to deck) to add them. -->
+        <div id="sbMatView" style="display:none; flex:1 1 auto; min-height:0; flex-direction:column;">
+            <div id="sbMat"></div>
+            <div id="sbDeckTray" title="Drag cards here to add them to your deck">▾ Deck tray — drag cards here to add <span id="sbTrayCount"></span></div>
+        </div>
     </div>
 </div>
+<div id="matMenu" style="display:none"></div>
 
 <div id="deckMgr" class="overlay" style="display:none">
     <div class="panel" style="width:min(680px,95vw)">
@@ -1578,42 +1612,54 @@ window.fillSealedSets = function (sets, fromCache) {
 // show the cached set list immediately on load (the server refreshes it on connect)
 try { const cs = JSON.parse(localStorage.getItem('sealedSets') || 'null'); if (cs) window.fillSealedSets(cs, true); } catch (e) {}
 
-// deck-builder state: pool + deck are arrays of {n,s,c,r,q}; basics {w,u,b,r,g}
-let sbPool = [], sbDeck = [], sbBasics = { w:0,u:0,b:0,r:0,g:0 };
+// canonical deck-builder state: sbPoolFull = all pool cards (grouped, immutable qty); sbDeck = deck (grouped);
+// both the List view and the Playmat derive from these. Cards are {n,s,c,r,q,mc,v,land}.
+let sbPoolFull = [], sbDeck = [], sbBasics = { w:0,u:0,b:0,r:0,g:0 };
+let sbPacksRaw = [], sbView = 'list';
 window.openSealedBuilder = function (data) {
-    sbPool = (data && data.pool ? data.pool : []).map(c => ({ n:c.n, s:c.s||'', c:c.c||'', r:c.r||'', q:c.q||1, mc:c.mc||'', v:c.v||0, land:!!c.land }));
+    const norm = c => ({ n:c.n, s:c.s||'', c:c.c||'', r:c.r||'', q:c.q||1, mc:c.mc||'', v:c.v||0, land:!!c.land });
+    sbPoolFull = (data && data.pool ? data.pool : []).map(norm);
+    sbPacksRaw = (data && data.packs ? data.packs : []).map(p => p.map(norm));
     sbDeck = []; sbBasics = { w:0,u:0,b:0,r:0,g:0 };
+    matBuilt = false; sbLoose = []; sbPacks = [];
+    setMatView(false);
     setupEl.style.display = 'none';
     document.getElementById('sealedBuilder').style.display = 'flex';
     renderSealedBuilder();
 };
+const sbKey = c => c.n + '|' + c.s + '|' + c.c;
 function sbTotal() { return sbDeck.reduce((a,c)=>a+c.q,0) + sbBasics.w+sbBasics.u+sbBasics.b+sbBasics.r+sbBasics.g; }
 function rarClass(r) { r=(r||'').toLowerCase(); return r.startsWith('m')?'r-mythic':r.startsWith('r')?'r-rare':r.startsWith('u')?'r-uncommon':'r-common'; }
 function sbCardObj(card) { return { name: card.n, expansionSetCode: card.s, cardNumber: card.c, manaCostStr: card.mc }; }
+// cards not yet in the deck (full pool minus deck), grouped
+function availablePool() {
+    const deckC = {}; sbDeck.forEach(c => deckC[sbKey(c)] = (deckC[sbKey(c)]||0) + c.q);
+    return sbPoolFull.map(c => Object.assign({}, c, { q: c.q - (deckC[sbKey(c)]||0) })).filter(c => c.q > 0);
+}
+function addDeck(card) { const k = sbKey(card); const d = sbDeck.find(c => sbKey(c)===k);
+    if (d) d.q++; else sbDeck.push(Object.assign({}, card, { q:1 })); renderSealedBuilder(); }
+function removeDeck(card) { const k = sbKey(card); const i = sbDeck.findIndex(c => sbKey(c)===k);
+    if (i>=0) { sbDeck[i].q--; if (sbDeck[i].q<=0) sbDeck.splice(i,1); } renderSealedBuilder(); }
 function sbRow(card, side) {
     const el = document.createElement('div'); el.className = 'sbRow ' + rarClass(card.r);
     el.innerHTML = `<span class="sbQ">${card.q}×</span><span class="sbN">${msg(card.n)}</span><span class="sbPip">${card.mc ? manaPips(card.mc) : ''}</span>`;
-    el.onclick = () => { moveSealed(card, side); };
+    el.onclick = () => { side === 'pool' ? addDeck(card) : removeDeck(card); };
     el.onmouseenter = () => showCardViewer(sbCardObj(card), true); // hover → read the card in the side panel
     el.oncontextmenu = (e) => { e.preventDefault(); showCardViewer(sbCardObj(card), true); };
     el._card = sbCardObj(card); // press-and-hold preview (tablet)
     return el;
 }
-function moveSealed(card, side) {
-    const from = side === 'pool' ? sbPool : sbDeck, to = side === 'pool' ? sbDeck : sbPool;
-    const fi = from.findIndex(c => c.n===card.n && c.s===card.s && c.c===card.c);
-    if (fi < 0) return;
-    from[fi].q--; if (from[fi].q <= 0) from.splice(fi, 1);
-    const ti = to.findIndex(c => c.n===card.n && c.s===card.s && c.c===card.c);
-    if (ti >= 0) to[ti].q++; else to.push(Object.assign({}, card, { q:1 }));
-    renderSealedBuilder();
-}
 function renderSealedBuilder() {
-    const poolEl = document.getElementById('sbPool'), deckEl = document.getElementById('sbDeck');
     const bykey = a => a.slice().sort((x,y)=>(x.v-y.v) || (x.n>y.n?1:-1)); // by mana value, then name
-    poolEl.innerHTML = ''; bykey(sbPool).forEach(c => poolEl.appendChild(sbRow(c, 'pool')));
-    deckEl.innerHTML = ''; bykey(sbDeck).forEach(c => deckEl.appendChild(sbRow(c, 'deck')));
-    document.getElementById('sbPoolCount').textContent = '(' + sbPool.reduce((a,c)=>a+c.q,0) + ')';
+    if (sbView === 'list') {
+        const poolEl = document.getElementById('sbPool'), deckEl = document.getElementById('sbDeck');
+        const avail = availablePool();
+        poolEl.innerHTML = ''; bykey(avail).forEach(c => poolEl.appendChild(sbRow(c, 'pool')));
+        deckEl.innerHTML = ''; bykey(sbDeck).forEach(c => deckEl.appendChild(sbRow(c, 'deck')));
+        document.getElementById('sbPoolCount').textContent = '(' + avail.reduce((a,c)=>a+c.q,0) + ')';
+    } else {
+        renderMat();
+    }
     const total = sbTotal();
     const spells = sbDeck.reduce((a,c)=>a+(c.land?0:c.q),0);
     const lands = total - spells;
@@ -1667,6 +1713,128 @@ function autoFillBasics() {
     sbBasics[top] = Math.max(0, sbBasics[top] + drift);
     renderSealedBuilder();
 }
+// ---- Playmat view: open packs, drag cards into piles, drag to the deck tray to add ----
+let sbPacks = [], sbLoose = [], matBuilt = false, matId = 1, matZ = 10;
+function setMatView(mat) {
+    sbView = mat ? 'mat' : 'list';
+    document.getElementById('sbListView').style.display = mat ? 'none' : 'flex';
+    document.getElementById('sbMatView').style.display = mat ? 'flex' : 'none';
+    document.getElementById('sbViewMat').classList.toggle('on', mat);
+    document.getElementById('sbViewList').classList.toggle('on', !mat);
+    if (mat) { if (!matBuilt) { initMat(); matBuilt = true; } else { reconcileMat(); } }
+    renderSealedBuilder();
+}
+document.getElementById('sbViewList').onclick = () => setMatView(false);
+document.getElementById('sbViewMat').onclick = () => setMatView(true);
+function packInstances(pack) { const out = []; (pack||[]).forEach(c => { for (let i=0;i<(c.q||1);i++) out.push({ id:'m'+(matId++), n:c.n,s:c.s,c:c.c,r:c.r,mc:c.mc,v:c.v,land:c.land }); }); return out; }
+function initMat() {
+    sbPacks = sbPacksRaw.map(p => ({ cards: packInstances(p), opened: false }));
+    sbLoose = [];
+    reconcileMat();
+}
+// keep the mat (packs + loose) equal to the available pool (full − deck): remove decked cards, add the rest as loose
+function reconcileMat() {
+    const want = {}; availablePool().forEach(c => want[sbKey(c)] = c.q);
+    const have = {}; const all = [...sbLoose.map(l=>l), ...sbPacks.flatMap(p=>p.cards.map(c=>({card:c})))];
+    sbLoose.forEach(l => have[sbKey(l)] = (have[sbKey(l)]||0)+1);
+    sbPacks.forEach(p => p.cards.forEach(c => have[sbKey(c)] = (have[sbKey(c)]||0)+1));
+    // remove excess (loose first, then packs)
+    Object.keys(have).forEach(k => {
+        let excess = have[k] - (want[k]||0);
+        for (let i=sbLoose.length-1;i>=0 && excess>0;i--) if (sbKey(sbLoose[i])===k) { sbLoose.splice(i,1); excess--; }
+        sbPacks.forEach(p => { for (let i=p.cards.length-1;i>=0 && excess>0;i--) if (sbKey(p.cards[i])===k) { p.cards.splice(i,1); excess--; } });
+    });
+    // add missing as loose (scattered below the pack row)
+    Object.keys(want).forEach(k => {
+        let missing = (want[k]||0) - (have[k]||0);
+        const proto = sbPoolFull.find(c => sbKey(c)===k);
+        while (missing>0 && proto) { sbLoose.push({ id:'m'+(matId++), n:proto.n,s:proto.s,c:proto.c,r:proto.r,mc:proto.mc,v:proto.v,land:proto.land, x:16+Math.random()*260, y:170+Math.random()*160 }); missing--; }
+    });
+}
+function matCardEl(inst) {
+    const el = document.createElement('div'); el.className = 'matCard'; el.dataset.id = inst.id;
+    el.innerHTML = `<span class="matName">${msg(inst.n)}</span>`;
+    if (artCandidates(sbCardObj(inst)).length) { const img = document.createElement('img'); setCardImage(img, sbCardObj(inst)); el.insertBefore(img, el.firstChild); }
+    el._card = sbCardObj(inst);
+    el.onmouseenter = () => showCardViewer(sbCardObj(inst), true);
+    el.oncontextmenu = (e) => { e.preventDefault(); showMatMenu(e.clientX, e.clientY, inst); };
+    return el;
+}
+function renderMat() {
+    const mat = document.getElementById('sbMat'); mat.innerHTML = '';
+    sbPacks.forEach((p, i) => {
+        const x = 12 + i * 104, y = 12;
+        if (!p.opened) {
+            const el = document.createElement('div'); el.className = 'matPack'; el.style.left = x+'px'; el.style.top = y+'px';
+            el.innerHTML = `<div>Pack ${i+1}</div><div class="matPackN">${p.cards.length} cards</div><div style="font-size:20px">🎴</div>`;
+            el.onclick = () => { p.opened = true; renderMat(); };
+            mat.appendChild(el);
+        } else if (p.cards.length) {
+            const top = p.cards[p.cards.length-1];
+            const el = matCardEl(top); el.style.left = x+'px'; el.style.top = y+'px'; el.dataset.pack = i;
+            const badge = document.createElement('div'); badge.className = 'matPackN';
+            badge.style.cssText = 'position:absolute;top:-14px;left:0;color:#9ab;font-size:10px'; badge.textContent = p.cards.length + ' left — drag off';
+            el.appendChild(badge);
+            mat.appendChild(el);
+        }
+    });
+    sbLoose.forEach(l => { const el = matCardEl(l); el.style.left = (l.x||20)+'px'; el.style.top = (l.y||180)+'px'; el.style.zIndex = l.z||1; mat.appendChild(el); });
+    document.getElementById('sbTrayCount').textContent = '(deck: ' + sbTotal() + ')';
+}
+// ---- mat drag (pointer events; works for mouse + touch) ----
+(function () {
+    const mat = document.getElementById('sbMat'), tray = document.getElementById('sbDeckTray');
+    let drag = null;
+    mat.addEventListener('pointerdown', (e) => {
+        const card = e.target.closest && e.target.closest('.matCard');
+        if (!card) return;
+        e.preventDefault();
+        let inst;
+        if (card.dataset.pack !== undefined) { // pull the top card off its pack into a loose card
+            const p = sbPacks[+card.dataset.pack]; inst = p.cards.pop();
+            const r = card.getBoundingClientRect(), mr = mat.getBoundingClientRect();
+            inst = { id:inst.id, n:inst.n,s:inst.s,c:inst.c,r:inst.r,mc:inst.mc,v:inst.v,land:inst.land, x: r.left-mr.left+mat.scrollLeft, y: r.top-mr.top+mat.scrollTop };
+            sbLoose.push(inst); renderMat();
+        } else { inst = sbLoose.find(l => l.id === card.dataset.id); }
+        if (!inst) return;
+        const el = mat.querySelector('.matCard[data-id="'+inst.id+'"]'); if (!el) return;
+        const r = el.getBoundingClientRect();
+        drag = { inst, el, offx: e.clientX - r.left, offy: e.clientY - r.top };
+        el.classList.add('dragging'); inst.z = ++matZ; el.style.zIndex = inst.z;
+        el.setPointerCapture && el.setPointerCapture(e.pointerId);
+    });
+    mat.addEventListener('pointermove', (e) => {
+        if (!drag) return;
+        const mr = mat.getBoundingClientRect();
+        drag.inst.x = e.clientX - mr.left - drag.offx + mat.scrollLeft;
+        drag.inst.y = e.clientY - mr.top - drag.offy + mat.scrollTop;
+        drag.el.style.left = drag.inst.x + 'px'; drag.el.style.top = drag.inst.y + 'px';
+        const t = tray.getBoundingClientRect();
+        tray.classList.toggle('over', e.clientX>=t.left && e.clientX<=t.right && e.clientY>=t.top && e.clientY<=t.bottom);
+    });
+    function endDrag(e) {
+        if (!drag) return;
+        const t = tray.getBoundingClientRect();
+        const overTray = e.clientX>=t.left && e.clientX<=t.right && e.clientY>=t.top && e.clientY<=t.bottom;
+        drag.el.classList.remove('dragging'); tray.classList.remove('over');
+        if (overTray) { const i = sbLoose.findIndex(l => l.id === drag.inst.id); if (i>=0) sbLoose.splice(i,1); addDeck(drag.inst); } // addDeck re-renders
+        drag = null;
+    }
+    mat.addEventListener('pointerup', endDrag);
+    mat.addEventListener('pointercancel', endDrag);
+})();
+// right-click menu on a mat card
+function showMatMenu(x, y, inst) {
+    const menu = document.getElementById('matMenu'); menu.innerHTML = '';
+    const add = document.createElement('button'); add.textContent = '＋ Add to deck';
+    add.onclick = () => { const i = sbLoose.findIndex(l => l.id===inst.id); if (i>=0) sbLoose.splice(i,1); addDeck(inst); menu.style.display='none'; };
+    const prev = document.createElement('button'); prev.textContent = '🔍 Preview';
+    prev.onclick = () => { showCardViewer(sbCardObj(inst), true); menu.style.display='none'; };
+    menu.appendChild(add); menu.appendChild(prev);
+    menu.style.left = Math.min(x, window.innerWidth-160)+'px'; menu.style.top = y+'px'; menu.style.display = 'block';
+}
+document.addEventListener('pointerdown', (e) => { const m = document.getElementById('matMenu'); if (m && m.style.display==='block' && !m.contains(e.target)) m.style.display='none'; });
+
 document.getElementById('sbAuto').onclick = () => {
     if (!confirm('Auto-build a deck from your pool and start the match?')) return;
     document.getElementById('sealedBuilder').style.display = 'none';
