@@ -105,6 +105,12 @@
                    display: flex; flex-direction: column; gap: 8px; padding: 10px 10px calc(10px + var(--dock-h)); overflow-y: auto;
                    background: #14171c; border-left: 1px solid #2b313b; }
         #board, #logBar { margin-right: var(--sidecol-w); }   /* reserve room so nothing hides under the column */
+        /* preview column moved to the LEFT (toggle) — flip the fixed elements that hug the side column */
+        body.sidecol-left #sidecol { left: 0; right: auto; border-left: 0; border-right: 1px solid #2b313b; }
+        body.sidecol-left #board, body.sidecol-left #logBar { margin-left: var(--sidecol-w); margin-right: 0; }
+        body.sidecol-left #ctrlDock, body.sidecol-left #sealedBuilder, body.sidecol-left #handPeek { left: var(--sidecol-w); right: 0; }
+        body.sidecol-left .overlay { left: var(--sidecol-w); right: 0; }
+        body.sidecol-left #leftbar { left: auto; right: 10px; }
         #viewer { width: 100%; background: #1b212b; border: 1px solid #3a4658; border-radius: 9px; padding: 9px; }
         #viewerInfo .vpr { color: #8fd29a; font-size: 12px; margin-top: 4px; }
         #viewerInfo .vnote { font-size: 11.5px; margin-top: 6px; padding: 4px 6px; border-radius: 5px; line-height: 1.35; }
@@ -423,15 +429,20 @@
         #sbTrayBar .sbSort.on { background: #2e6a40; }
         #sbTray { flex: 1 1 38%; position: relative; overflow: auto; border: 1px solid #4a6a3a; border-top: 0; border-radius: 0 0 6px 6px;
             background: #121a14; touch-action: none; min-height: 90px; }
-        #sbTray.free { } /* free mode uses absolute positions; sorted modes use a wrapped grid */
-        #sbTray.grid { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; padding: 6px; }
+        #sbTray.free { } /* free mode uses absolute positions; sorted modes use overlapping columns */
+        /* sorted modes: one column per mana value / type; cards overlap downward so you read each title */
+        #sbTray.cols { display: flex; gap: 6px; padding: 6px; align-items: flex-start; overflow-x: auto; }
+        #sbTray.cols .sbTrayCol { display: flex; flex-direction: column; flex: 0 0 auto; align-items: center; }
+        #sbTray.cols .sbTrayCol .colHead { font-size: 10px; color: #9ab; font-weight: 700; margin-bottom: 2px; white-space: nowrap; }
+        #sbTray.cols .matCard { position: relative; margin-top: calc(28px - var(--mat-cw, 92px) * 1.4); }
+        #sbTray.cols .colHead + .matCard { margin-top: 0; } /* first card sits below its header, not overlapping */
         #sbTray.over { box-shadow: inset 0 0 0 2px #6a5; }
         #sbMat.over { box-shadow: inset 0 0 0 2px #a55; } /* dropping a deck card here removes it */
         .matCard { width: var(--mat-cw, 92px); height: calc(var(--mat-cw, 92px) * 1.4); border-radius: 6px; cursor: grab; user-select: none;
             box-shadow: 0 2px 8px #000a; border: 1px solid #3a4150; background: #232a33; overflow: hidden;
             display: flex; align-items: flex-end; justify-content: center; font-size: 9px; color: #cbd5e2; text-align: center; }
         #sbMat .matCard, #sbTray.free .matCard { position: absolute; }
-        #sbTray.grid .matCard { position: relative; }
+        #sbTray.cols .matCard { position: relative; }
         .matCard img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
         .matCard .matName { position: relative; z-index: 1; background: #000a; width: 100%; padding: 1px 2px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -854,6 +865,7 @@
     </div>
     <div id="sideSpacer"></div>
     <div id="sideSliders">
+        <div class="setrow"><button id="sideSwapBtn" class="alt" style="width:100%; padding:4px" title="Move this preview column to the other side">⇄ Move panel to the left</button></div>
         <div class="setrow"><label>Hand card size</label><input type="range" id="zoom" min="64" max="220" step="4" value="104"></div>
         <div class="setrow"><label>Battlefield card size</label><input type="range" id="bfzoom" min="44" max="180" step="4" value="78"></div>
         <div class="setrow"><label>Opponent card size</label><input type="range" id="oppzoom" min="44" max="180" step="4" value="78"></div>
@@ -1654,7 +1666,7 @@ try { const cs = JSON.parse(localStorage.getItem('sealedSets') || 'null'); if (c
 let sbPoolFull = [], sbDeck = [], sbBasics = { w:0,u:0,b:0,r:0,g:0 };
 let sbPacksRaw = [], sbView = 'mat';
 window.openSealedBuilder = function (data) {
-    const norm = c => ({ n:c.n, s:c.s||'', c:c.c||'', r:c.r||'', q:c.q||1, mc:c.mc||'', v:c.v||0, land:!!c.land });
+    const norm = c => ({ n:c.n, s:c.s||'', c:c.c||'', r:c.r||'', q:c.q||1, mc:c.mc||'', v:c.v||0, land:!!c.land, t:c.t||'other' });
     sbPoolFull = (data && data.pool ? data.pool : []).map(norm);
     sbPacksRaw = (data && data.packs ? data.packs : []).map(p => p.map(norm));
     sbDeck = []; sbBasics = { w:0,u:0,b:0,r:0,g:0 };
@@ -1769,7 +1781,7 @@ function setMatView(mat) {
 }
 document.getElementById('sbViewList').onclick = () => setMatView(false);
 document.getElementById('sbViewMat').onclick = () => setMatView(true);
-function packInstances(pack) { const out = []; (pack||[]).forEach(c => { for (let i=0;i<(c.q||1);i++) out.push({ id:'m'+(matId++), n:c.n,s:c.s,c:c.c,r:c.r,mc:c.mc,v:c.v,land:c.land }); }); return out; }
+function packInstances(pack) { const out = []; (pack||[]).forEach(c => { for (let i=0;i<(c.q||1);i++) out.push({ id:'m'+(matId++), n:c.n,s:c.s,c:c.c,r:c.r,mc:c.mc,v:c.v,land:c.land,t:c.t }); }); return out; }
 function initMat() { sbPacks = sbPacksRaw.map(p => ({ cards: packInstances(p), opened: false })); sbLoose = []; reconcileMat(); }
 // keep mat (packs + loose) + deck instances equal to the full pool: drop cards now in the deck
 function reconcileMat() {
@@ -1785,7 +1797,7 @@ function reconcileMat() {
     Object.keys(want).forEach(k => { // any available card not on the mat and not in a pack → drop as loose
         let missing = (want[k]||0) - (have[k]||0);
         const proto = sbPoolFull.find(c => sbKey(c)===k);
-        while (missing>0 && proto) { placeLoose({ id:'m'+(matId++), n:proto.n,s:proto.s,c:proto.c,r:proto.r,mc:proto.mc,v:proto.v,land:proto.land }); missing--; }
+        while (missing>0 && proto) { placeLoose({ id:'m'+(matId++), n:proto.n,s:proto.s,c:proto.c,r:proto.r,mc:proto.mc,v:proto.v,land:proto.land,t:proto.t }); missing--; }
     });
 }
 // place a loose card in the next slot, filling from the BOTTOM-left up (top stays free for your sorting)
@@ -1817,83 +1829,134 @@ function renderMat() {
             el.innerHTML = `<div>Pack ${i+1}</div><div class="matPackN">${p.cards.length}</div><div style="font-size:20px">🎴</div>`;
             el.onclick = () => { p.opened = true; renderMat(); };
             mat.appendChild(el);
+            preloadArt(p.cards[p.cards.length-1]); // warm the first card so opening is instant
         } else if (p.cards.length) {
             const top = p.cards[p.cards.length-1];
             const el = matCardEl(top); el.style.left = x+'px'; el.style.top = y+'px'; el.dataset.pack = i; el.style.cursor='pointer';
             const badge = document.createElement('div'); badge.className = 'matPackN';
             badge.style.cssText = 'position:absolute;top:-13px;left:0;color:#9ab;font-size:10px'; badge.textContent = p.cards.length + ' — click';
             el.appendChild(badge);
-            el.onclick = () => { p.cards.pop(); placeLoose({ id:top.id, n:top.n,s:top.s,c:top.c,r:top.r,mc:top.mc,v:top.v,land:top.land }); renderMat(); };
+            el.onclick = () => { p.cards.pop(); placeLoose({ id:top.id, n:top.n,s:top.s,c:top.c,r:top.r,mc:top.mc,v:top.v,land:top.land,t:top.t }); renderMat(); };
             mat.appendChild(el);
+            preloadArt(p.cards[p.cards.length-2]); // warm the next card so it shows instantly on click
+            preloadArt(p.cards[p.cards.length-3]);
         }
     });
     sbLoose.forEach(l => { const el = matCardEl(l); el.style.left = (l.x||20)+'px'; el.style.top = (l.y||180)+'px'; el.style.zIndex = l.z||1; el.dataset.zone='mat'; mat.appendChild(el); });
     renderTray();
 }
-// the deck tray: your deck cards, sorted by mana/type or arranged freely; drag one up into the mat to remove
+// the deck tray: your deck cards. Sorted modes lay them out in overlapping COLUMNS (by mana value or
+// type); Free mode lets you place each card anywhere. Drag a card up into the mat to remove it.
 function renderTray() {
     const tray = document.getElementById('sbTray'); if (!tray) return;
-    tray.className = sbTraySort === 'free' ? 'free' : 'grid';
     tray.innerHTML = '';
-    let cards = sbDeck.slice();
-    if (sbTraySort === 'mana') cards.sort((a,b)=>(a.land-b.land)||(a.v-b.v)||(a.n>b.n?1:-1));
-    else if (sbTraySort === 'type') cards.sort((a,b)=>(typeRank(a)-typeRank(b))||(a.v-b.v)||(a.n>b.n?1:-1));
-    cards.forEach(card => {
-        const el = matCardEl(card, { q: card.q }); el.dataset.zone='tray'; el.dataset.key = sbKey(card);
-        if (sbTraySort === 'free') { const p = trayFree[sbKey(card)]||{x:8,y:8}; el.style.left=p.x+'px'; el.style.top=p.y+'px'; }
-        tray.appendChild(el);
-    });
+    if (sbTraySort === 'free') {
+        tray.className = 'free';
+        sbDeck.forEach(card => { const el = matCardEl(card, { q: card.q }); el.dataset.zone='tray'; el.dataset.key = sbKey(card);
+            const p = trayFree[sbKey(card)] || { x:8, y:8 }; el.style.left=p.x+'px'; el.style.top=p.y+'px'; tray.appendChild(el); });
+    } else {
+        tray.className = 'cols';
+        trayColumns().forEach(col => {
+            if (!col.cards.length) return;
+            const c = document.createElement('div'); c.className = 'sbTrayCol';
+            const h = document.createElement('div'); h.className = 'colHead';
+            h.textContent = col.head + ' (' + col.cards.reduce((a,x)=>a+x.q,0) + ')'; c.appendChild(h);
+            col.cards.forEach(card => { const el = matCardEl(card, { q: card.q }); el.dataset.zone='tray'; el.dataset.key = sbKey(card); c.appendChild(el); });
+            tray.appendChild(c);
+        });
+    }
     document.getElementById('sbTrayCount').textContent = sbTotal() + ' cards';
 }
-function typeRank(c){ if(c.land) return 3; const t=(c.mc||''); return 1; } // creatures/spells lumped for now; lands last
+// group the deck into columns for the sorted tray (mana value, or card type)
+function trayColumns() {
+    const byName = (a,b) => a.n>b.n?1:-1;
+    if (sbTraySort === 'type') {
+        const order = [['creature','Creatures'],['instant','Instants'],['sorcery','Sorceries'],
+            ['artifact','Artifacts'],['enchantment','Enchantments'],['planeswalker','Planeswalkers'],['land','Lands'],['other','Other']];
+        return order.map(([k,head]) => ({ head, cards: sbDeck.filter(c => (c.land ? 'land' : (c.t||'other')) === k).sort((a,b)=>(a.v-b.v)||byName(a,b)) }));
+    }
+    const cols = []; for (let v=0; v<=6; v++) cols.push({ head:String(v), cards:[] });
+    cols.push({ head:'7+', cards:[] }); cols.push({ head:'Land', cards:[] });
+    sbDeck.forEach(card => { if (card.land) cols[8].cards.push(card); else cols[Math.min(7, card.v|0)].cards.push(card); });
+    cols.forEach(col => col.cards.sort(byName));
+    return cols;
+}
 // sort buttons
 document.querySelectorAll('#sbTrayBar .sbSort').forEach(b => b.onclick = () => {
     sbTraySort = b.dataset.sort;
     document.querySelectorAll('#sbTrayBar .sbSort').forEach(x => x.classList.toggle('on', x===b));
     renderTray();
 });
-// ---- unified drag: mat loose ⇄ tray (add/remove), reposition within a zone (pointer events) ----
+// decrement a deck card without re-rendering (caller renders after arranging the mat)
+function removeDeckSilent(card) { const k = sbKey(card); const i = sbDeck.findIndex(c => sbKey(c)===k);
+    if (i>=0) { sbDeck[i].q--; if (sbDeck[i].q<=0) sbDeck.splice(i,1); } }
+// preload a card's art so the next one under a pack shows instantly when clicked
+function preloadArt(inst) { if (!inst) return; const u = artUrlFor(sbCardObj(inst)); if (u) { const im = new Image(); im.src = u; } }
+// ---- unified drag: mat loose ⇄ tray, reposition within a zone. Document-level so the ghost always follows. ----
 (function () {
     const mat = document.getElementById('sbMat'), tray = document.getElementById('sbTray');
-    let drag = null, ghost = null, START = 6;
-    function overEl(el, x, y) { const r = el.getBoundingClientRect(); return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom; }
-    function down(e) {
+    let drag = null, ghost = null; const START = 5;
+    const overEl = (el, x, y) => { const r = el.getBoundingClientRect(); return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom; };
+    function onDown(e) {
         const card = e.target.closest && e.target.closest('.matCard');
-        if (!card || card.dataset.pack !== undefined) return; // pack tops use click, not drag
-        const zone = card.dataset.zone;
-        drag = { zone, id: card.dataset.id, key: card.dataset.key, el: card, sx: e.clientX, sy: e.clientY, moved: false, pointerId: e.pointerId };
-        (zone==='mat'?mat:tray).setPointerCapture && (zone==='mat'?mat:tray).setPointerCapture(e.pointerId);
+        if (!card || card.dataset.pack !== undefined || card.classList.contains('dragGhost')) return; // pack tops = click
+        drag = { zone: card.dataset.zone, id: card.dataset.id, key: card.dataset.key, el: card, sx: e.clientX, sy: e.clientY, moved: false };
+        document.addEventListener('pointermove', onMove, true);
+        document.addEventListener('pointerup', onUp, true);
+        document.addEventListener('pointercancel', onUp, true);
     }
-    function move(e) {
+    function onMove(e) {
         if (!drag) return;
-        if (!drag.moved) { if (Math.abs(e.clientX-drag.sx)<START && Math.abs(e.clientY-drag.sy)<START) return;
+        if (!drag.moved) {
+            if (Math.abs(e.clientX-drag.sx)<START && Math.abs(e.clientY-drag.sy)<START) return;
             drag.moved = true; drag.el.classList.add('dragging');
-            ghost = drag.el.cloneNode(true); ghost.className='matCard dragGhost';
-            ghost.style.width=matCw()+'px'; ghost.style.height=Math.round(matCw()*1.4)+'px';
+            const cw = matCw(); ghost = drag.el.cloneNode(true); ghost.className = 'matCard dragGhost';
+            ghost.style.width = cw+'px'; ghost.style.height = Math.round(cw*1.4)+'px';
             document.body.appendChild(ghost);
         }
         e.preventDefault();
-        ghost.style.left = (e.clientX - matCw()/2)+'px'; ghost.style.top = (e.clientY - matCw()*0.7)+'px';
+        const cw = matCw();
+        ghost.style.left = (e.clientX - cw/2)+'px'; ghost.style.top = (e.clientY - cw*0.7)+'px';
         mat.classList.toggle('over', drag.zone==='tray' && overEl(mat, e.clientX, e.clientY));
         tray.classList.toggle('over', drag.zone==='mat' && overEl(tray, e.clientX, e.clientY));
     }
-    function up(e) {
+    function onUp(e) {
+        document.removeEventListener('pointermove', onMove, true);
+        document.removeEventListener('pointerup', onUp, true);
+        document.removeEventListener('pointercancel', onUp, true);
         if (!drag) return;
-        const wasMoved = drag.moved, d = drag; drag = null;
+        const d = drag; drag = null;
         if (ghost) { ghost.remove(); ghost = null; }
         d.el.classList.remove('dragging'); mat.classList.remove('over'); tray.classList.remove('over');
-        if (!wasMoved) return; // a tap — leave it (hover/long-press handles preview)
-        const onMat = overEl(mat, e.clientX, e.clientY), onTray = overEl(tray, e.clientX, e.clientY);
-        if (d.zone==='mat' && onTray) { const i = sbLoose.findIndex(l=>l.id===d.id); const inst = i>=0?sbLoose[i]:null; if(inst){ sbLoose.splice(i,1); addDeck(inst); } }
-        else if (d.zone==='tray' && onMat) { const card = sbDeck.find(c=>sbKey(c)===d.key); if (card){ removeDeck(card); reconcileMat(); renderMat(); } }
-        else if (d.zone==='mat') { const inst = sbLoose.find(l=>l.id===d.id); if (inst){ const mr=mat.getBoundingClientRect(); inst.x=e.clientX-mr.left-matCw()/2+mat.scrollLeft; inst.y=e.clientY-mr.top-matCw()*0.7+mat.scrollTop; inst.z=++matZ; } renderMat(); }
-        else if (d.zone==='tray' && sbTraySort==='free') { const tr=tray.getBoundingClientRect(); trayFree[d.key]={x:e.clientX-tr.left-matCw()/2+tray.scrollLeft, y:e.clientY-tr.top-matCw()*0.7+tray.scrollTop}; renderTray(); }
+        if (!d.moved) return; // a tap — hover/long-press handles preview
+        const onMat = overEl(mat, e.clientX, e.clientY), onTray = overEl(tray, e.clientX, e.clientY), cw = matCw();
+        const matPos = () => { const mr = mat.getBoundingClientRect(); return { x: Math.max(0, e.clientX-mr.left-cw/2+mat.scrollLeft), y: Math.max(0, e.clientY-mr.top-cw*0.7+mat.scrollTop) }; };
+        if (d.zone==='mat' && onTray) { // add to deck
+            const i = sbLoose.findIndex(l=>l.id===d.id); if (i>=0) { const inst = sbLoose[i]; sbLoose.splice(i,1); addDeck(inst); }
+        } else if (d.zone==='tray' && !onTray) { // drag a deck card OUT → remove it, drop it exactly where released
+            const card = sbDeck.find(c=>sbKey(c)===d.key);
+            if (card) { const p = Object.assign({}, card); removeDeckSilent(card); const pos = matPos();
+                sbLoose.push({ id:'m'+(matId++), n:p.n,s:p.s,c:p.c,r:p.r,mc:p.mc,v:p.v,land:p.land,t:p.t, x:pos.x, y:pos.y, z:++matZ }); renderSealedBuilder(); }
+        } else if (d.zone==='mat') { // reposition on the mat
+            const inst = sbLoose.find(l=>l.id===d.id); if (inst) { const pos = matPos(); inst.x=pos.x; inst.y=pos.y; inst.z=++matZ; } renderMat();
+        } else if (d.zone==='tray' && sbTraySort==='free') { // reposition within the tray (free mode)
+            const tr=tray.getBoundingClientRect(); trayFree[d.key]={ x:Math.max(0,e.clientX-tr.left-cw/2+tray.scrollLeft), y:Math.max(0,e.clientY-tr.top-cw*0.7+tray.scrollTop) }; renderTray();
+        }
     }
-    [mat, tray].forEach(z => { z.addEventListener('pointerdown', down); z.addEventListener('pointermove', move); z.addEventListener('pointerup', up); z.addEventListener('pointercancel', up); });
+    mat.addEventListener('pointerdown', onDown); tray.addEventListener('pointerdown', onDown);
 })();
 // card-size slider for the mat/tray
 (function(){ const s=document.getElementById('sbCardSize'); const saved=localStorage.getItem('matCw'); if(saved){s.value=saved;} document.documentElement.style.setProperty('--mat-cw', s.value+'px');
     s.oninput = () => { document.documentElement.style.setProperty('--mat-cw', s.value+'px'); localStorage.setItem('matCw', s.value); if(sbView==='mat') renderMat(); }; })();
+
+// move the preview/side column to the left or right (persisted)
+(function () {
+    const btn = document.getElementById('sideSwapBtn');
+    function apply(left) { document.body.classList.toggle('sidecol-left', left);
+        btn.textContent = left ? '⇄ Move panel to the right' : '⇄ Move panel to the left'; }
+    apply(localStorage.getItem('sidecolLeft') === '1');
+    btn.onclick = () => { const left = !document.body.classList.contains('sidecol-left'); localStorage.setItem('sidecolLeft', left?'1':'0'); apply(left); };
+})();
 
 function closeSealedBuilder() {
     document.getElementById('sealedBuilder').style.display = 'none';

@@ -197,10 +197,24 @@ public final class DeckStore {
             o.addProperty("mc", String.join("", c.getManaCostSymbols())); // e.g. {2}{R}
             o.addProperty("v", c.getManaValue());                          // mana value (for the curve)
             o.addProperty("land", c.isLand());                             // exclude lands from the curve
+            o.addProperty("t", typeCategory(c));                           // creature/instant/… (for type sort)
             if (e.getValue()[0] > 1) o.addProperty("q", e.getValue()[0]);
             out.add(o);
         }
         return out;
+    }
+
+    /** A single card-type category for deck-builder sorting. */
+    private static String typeCategory(mage.cards.Card c) {
+        java.util.List<mage.constants.CardType> types = c.getCardType();
+        if (types.contains(mage.constants.CardType.CREATURE)) return "creature";
+        if (types.contains(mage.constants.CardType.LAND)) return "land";
+        if (types.contains(mage.constants.CardType.PLANESWALKER)) return "planeswalker";
+        if (types.contains(mage.constants.CardType.INSTANT)) return "instant";
+        if (types.contains(mage.constants.CardType.SORCERY)) return "sorcery";
+        if (types.contains(mage.constants.CardType.ARTIFACT)) return "artifact";
+        if (types.contains(mage.constants.CardType.ENCHANTMENT)) return "enchantment";
+        return "other";
     }
 
     /** Serialize a (repaired) deck to a compact snapshot object, grouping identical printings into a qty. */
