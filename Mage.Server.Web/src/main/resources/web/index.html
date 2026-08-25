@@ -461,6 +461,8 @@
         .matCard.dragging { opacity: 1; box-shadow: 0 12px 28px #000d; transform: scale(1.04); }
         .matCard .matQ { position: absolute; top: 2px; right: 3px; z-index: 2; background: #2e6a40; color: #fff;
             border-radius: 9px; font-size: 10px; font-weight: 800; padding: 0 5px; }
+        .matCard .matPrice { position: absolute; top: 2px; left: 2px; z-index: 2; background: #14532d; color: #c9f5d0;
+            border-radius: 6px; font-size: 9px; font-weight: 700; padding: 0 4px; }
         .dragGhost { position: fixed; z-index: 9997; pointer-events: none; border-radius: 6px; overflow: hidden;
             box-shadow: 0 10px 26px #000d; border: 1px solid #5a6b86; }
         .dragGhost img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -751,11 +753,13 @@
     </div>
     <div id="sbMatView">
         <div id="sbMatBar">
-            <span class="hint">Group:</span>
+            <button id="sbOpenAll" class="alt" title="Open every pack and lay all cards out on the mat">📂 Open all</button>
+            <span class="hint" style="margin-left:6px">Group:</span>
             <button class="sbGroup on" data-group="free">Free</button>
             <button class="sbGroup" data-group="color">Color</button>
             <button class="sbGroup" data-group="rarity">Rarity</button>
             <button class="sbGroup" data-group="type">Type</button>
+            <button class="sbGroup" data-group="price">Price</button>
             <span style="flex:1"></span>
             <span id="sbMatCount" class="hint"></span>
         </div>
@@ -877,6 +881,7 @@
         <div id="sbCount" class="hint" style="margin-bottom:4px"></div>
         <div id="sbCurve" title="mana curve (non-land cards by mana value)"></div>
         <div id="sbColors" title="deck mana allocation by color — colored pips of your non-land cards" style="margin-top:8px"></div>
+        <div id="sbValue" class="hint" title="approx. market value (Scryfall USD prices)" style="margin-top:8px"></div>
         <div id="sbBasics" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0;"></div>
         <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
             <button id="sbAutoLands" class="alt" style="flex:1 1 auto">⛰ Auto-fill lands</button>
@@ -1697,6 +1702,7 @@ window.openSealedBuilder = function (data) {
     matBuilt = false; sbLoose = []; sbPacks = [];
     matGroup = 'free'; // reset the mat grouping to match the default button state
     document.querySelectorAll('#sbMatBar .sbGroup').forEach(x => x.classList.toggle('on', x.dataset.group==='free'));
+    loadPoolPrices(); // warm card prices for the value stat + price sort
     setupEl.style.display = 'none';
     document.getElementById('sealedBuilder').style.display = 'flex';
     document.getElementById('sbControls').style.display = 'block';
@@ -1748,6 +1754,7 @@ function renderSealedBuilder() {
     const play = document.getElementById('sbPlay'); play.disabled = total < 40; play.textContent = 'Play ▸';
     renderManaCurve();
     renderColorStats();
+    renderDeckValue();
     document.getElementById('sbMatCount').textContent = sbLoose.length ? sbLoose.length + ' on mat' : '';
     // basic-land steppers
     const bWrap = document.getElementById('sbBasics'); bWrap.innerHTML = '<span class="hint">Basic lands:</span>';
@@ -1794,6 +1801,38 @@ function renderColorStats() {
             + `<span class="sbColorN">${n ? n + ' · ' + pct + '%' : '—'}</span>`;
         el.appendChild(row);
     });
+}
+// --- card prices (Scryfall USD, via the server's /cardinfo cache) -------------------------------------
+let sbPrices = {}; // sbKey -> usd number | null (undefined = not yet requested)
+function priceOf(c) { const p = sbPrices[sbKey(c)]; return (typeof p === 'number') ? p : 0; }
+let priceRenderT = null;
+function schedulePriceRender() { if (priceRenderT) return; priceRenderT = setTimeout(() => { priceRenderT = null;
+    if (document.getElementById('sealedBuilder').style.display !== 'none') renderSealedBuilder(); }, 500); }
+// lazily fetch a USD price for every distinct pool card; cache in localStorage so re-opens are instant
+function loadPoolPrices() {
+    const uniq = {}; sbPoolFull.forEach(c => { uniq[sbKey(c)] = c; });
+    Object.values(uniq).forEach(c => {
+        const key = sbKey(c);
+        if (sbPrices[key] !== undefined) return;
+        if (!c.s || !c.c) { sbPrices[key] = null; return; }
+        const lsk = 'px:' + c.s + '|' + c.c, ls = localStorage.getItem(lsk);
+        if (ls !== null) { sbPrices[key] = ls === '' ? null : parseFloat(ls); return; }
+        sbPrices[key] = null; // optimistic until it resolves
+        fetch('/cardinfo/' + encodeURIComponent(c.s) + '/' + encodeURIComponent(c.c))
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { const usd = d && d.usd != null ? parseFloat(d.usd) : null; sbPrices[key] = usd;
+                try { localStorage.setItem(lsk, usd == null ? '' : String(usd)); } catch (e) {}
+                schedulePriceRender(); })
+            .catch(() => {});
+    });
+}
+// total market value of the deck (and the whole pool), from loaded prices
+function renderDeckValue() {
+    const el = document.getElementById('sbValue'); if (!el) return;
+    let dv = 0, pv = 0;
+    sbDeck.forEach(c => { dv += priceOf(c) * c.q; });
+    sbPoolFull.forEach(c => { pv += priceOf(c) * c.q; });
+    el.innerHTML = `<b style="color:#8fd29a">Deck value: $${dv.toFixed(2)}</b> <span class="hint">· pool $${pv.toFixed(2)}</span>`;
 }
 // fill basic lands to reach 40, distributed by the coloured pips of the non-land cards in the deck
 function autoFillBasics() {
@@ -1903,10 +1942,32 @@ function renderMat() {
     });
     if (matGroup === 'free') {
         sbLoose.forEach(l => { const el = matCardEl(l); el.style.left = (l.x||20)+'px'; el.style.top = (l.y||180)+'px'; el.style.zIndex = l.z||1; el.dataset.zone='mat'; mat.appendChild(el); });
+    } else if (matGroup === 'price') {
+        renderMatPriceList(mat, cw); // a single list sorted by price (high → low), flowing down newspaper columns
     } else {
         renderMatGroups(mat, cw); // tidy the loose cards into labelled columns (non-destructive: 'Free' restores them)
     }
     renderTray();
+}
+// One sorted list by price (high → low). Fills down newspaper-style columns (compact but a single ordered
+// run), each card badged with its USD price. Prices load in the background; unknown prices sort last.
+function renderMatPriceList(mat, cw) {
+    const ch = Math.round(cw*1.4), stepY = Math.round(ch*0.5), colW = cw + 14;
+    const packsVisible = sbPacks && sbPacks.some(p => !p.opened || p.cards.length);
+    const headY = packsVisible ? 8 + ch + 10 : 8;
+    const top0 = headY + 16;
+    const cards = sbLoose.slice().sort((a,b) => (priceOf(b)-priceOf(a)) || (a.n>b.n?1:-1));
+    const availH = Math.max(stepY*2, (mat.clientHeight||420) - top0 - Math.round(ch*0.5));
+    const perCol = Math.max(1, Math.floor(availH/stepY) + 1);
+    const h = document.createElement('div'); h.className = 'matGroupHead'; h.style.left = '8px'; h.style.top = headY+'px';
+    h.textContent = 'By price ($ high → low) · ' + cards.length + ' cards'; mat.appendChild(h);
+    cards.forEach((cd, i) => { const col = Math.floor(i/perCol), row = i % perCol;
+        const el = matCardEl(cd); el.style.left = (8 + col*colW)+'px'; el.style.top = (top0 + row*stepY)+'px';
+        el.style.zIndex = 100 + row; el.dataset.zone='mat';
+        const pv = priceOf(cd); const b = document.createElement('div'); b.className = 'matPrice';
+        b.textContent = pv ? '$' + pv.toFixed(2) : '$–'; el.appendChild(b);
+        mat.appendChild(el);
+    });
 }
 // Group the loose (not-yet-in-deck) cards on the mat into labelled columns by colour / rarity / type.
 // This is a view overlay — it positions cards for display but does NOT change their stored free positions,
@@ -1979,12 +2040,19 @@ document.querySelectorAll('#sbTrayBar .sbSort').forEach(b => b.onclick = () => {
     document.querySelectorAll('#sbTrayBar .sbSort').forEach(x => x.classList.toggle('on', x===b));
     renderTray();
 });
-// playmat "group by" buttons (color / rarity / type / free) — re-lay the loose cards on the mat
+// playmat "group by" buttons (color / rarity / type / price / free) — re-lay the loose cards on the mat
 document.querySelectorAll('#sbMatBar .sbGroup').forEach(b => b.onclick = () => {
     matGroup = b.dataset.group;
     document.querySelectorAll('#sbMatBar .sbGroup').forEach(x => x.classList.toggle('on', x===b));
     if (sbView === 'mat') renderMat();
 });
+// "Open all": open every pack and lay all of its cards out on the mat at once
+document.getElementById('sbOpenAll').onclick = () => {
+    const all = [];
+    sbPacks.forEach(p => { p.opened = true; while (p.cards.length) all.push(p.cards.pop()); });
+    all.forEach(inst => placeLoose(inst)); // packs now empty → cards fill from the top down
+    renderMat();
+};
 // decrement a deck card without re-rendering (caller renders after arranging the mat)
 function removeDeckSilent(card) { const k = sbKey(card); const i = sbDeck.findIndex(c => sbKey(c)===k);
     if (i>=0) { sbDeck[i].q--; if (sbDeck[i].q<=0) sbDeck.splice(i,1); } }
