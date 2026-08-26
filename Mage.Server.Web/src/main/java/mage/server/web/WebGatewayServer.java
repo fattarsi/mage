@@ -194,14 +194,33 @@ public class WebGatewayServer {
         final java.util.List<mage.cards.Card> humanPool;
         final java.util.List<java.util.List<mage.cards.Card>> aiPools;
         final int winsNeeded;
-        final String setCode; // so basic lands come from the sealed set, not arbitrary printings
-        SealedEvent(java.util.List<mage.cards.Card> humanPool, java.util.List<java.util.List<mage.cards.Card>> aiPools, int winsNeeded, String setCode) {
+        final String setCode;  // so basic lands come from the sealed set, not arbitrary printings
+        final boolean tournament; // true = 1v1 single-elimination bracket; false = one free-for-all game
+        SealedEvent(java.util.List<mage.cards.Card> humanPool, java.util.List<java.util.List<mage.cards.Card>> aiPools,
+                    int winsNeeded, String setCode, boolean tournament) {
             this.humanPool = humanPool;
             this.aiPools = aiPools;
             this.winsNeeded = winsNeeded;
             this.setCode = setCode;
+            this.tournament = tournament;
         }
     }
+
+    /** A running 1v1 single-elimination tournament: the human plays a real match each round; the AI-vs-AI
+     * matches are resolved instantly (deck strength + luck), so the human's ladder of opponents is known up
+     * front. Advance one round each time the human wins. */
+    private static final class Tournament {
+        final DeckCardLists humanDeck;
+        final java.util.List<DeckCardLists> ladder;   // the human's opponent deck, per round (index 0 = round 1)
+        final java.util.List<String> ladderNames;
+        int round = 0;                                 // 0-based current round
+        Tournament(DeckCardLists humanDeck, java.util.List<DeckCardLists> ladder, java.util.List<String> ladderNames) {
+            this.humanDeck = humanDeck;
+            this.ladder = ladder;
+            this.ladderNames = ladderNames;
+        }
+    }
+    private final Map<String, Tournament> tournamentByWs = new ConcurrentHashMap<>();
     private final ScheduledExecutorService graceScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "web-reconnect-grace");
         t.setDaemon(true);
@@ -1118,6 +1137,22 @@ public class WebGatewayServer {
             }
             return;
         }
+        // Tournament: the human won a round and clicked "Continue" — start the next round's 1v1 match.
+        if ("tournamentAdvance".equals(action)) {
+            try {
+                Tournament t = tournamentByWs.get(ctx.getSessionId());
+                if (t != null) { t.round++; startTournamentRound(ctx, ps, sessionId); }
+            } catch (Exception e) {
+                logger.warn("web gateway: tournamentAdvance failed", e);
+            }
+            return;
+        }
+        // Tournament: the human was eliminated, won it all, or quit — tear down the bracket state.
+        if ("tournamentEnd".equals(action)) {
+            tournamentByWs.remove(ctx.getSessionId());
+            endSessionGame(ctx, ps);
+            return;
+        }
         // Auto-build a deck from the human's pool and send it back to the builder (do NOT start a game).
         if ("sealedAutoBuild".equals(action)) {
             try {
@@ -1466,6 +1501,7 @@ public class WebGatewayServer {
         String setCode = msg.has("setCode") && !msg.get("setCode").isJsonNull() ? msg.get("setCode").getAsString() : "";
         int players = msg.has("players") ? Math.max(2, Math.min(8, msg.get("players").getAsInt())) : 2;
         int winsNeeded = msg.has("bestOf3") && msg.get("bestOf3").getAsBoolean() ? 2 : 1;
+        boolean tournament = !msg.has("mode") || !"ffa".equals(msg.get("mode").getAsString()); // default: 1v1 bracket
         final int PACKS = 6;
 
         // Open the human's 6 packs individually so the Playmat view can open them one real pack at a time.
@@ -1480,7 +1516,7 @@ public class WebGatewayServer {
         for (int i = 1; i < players; i++) { // one pool per AI opponent
             aiPools.add(DeckFactory.openPacks(setCode, PACKS));
         }
-        sealedByWs.put(ctx.getSessionId(), new SealedEvent(humanPool, aiPools, winsNeeded, setCode));
+        sealedByWs.put(ctx.getSessionId(), new SealedEvent(humanPool, aiPools, winsNeeded, setCode, tournament));
 
         com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
         payload.addProperty("setCode", setCode);
@@ -1596,8 +1632,15 @@ public class WebGatewayServer {
 
         endSessionGame(ctx, ps); // end any previous game first
         sealedByWs.remove(ctx.getSessionId());
+        tournamentByWs.remove(ctx.getSessionId());
+
+        if (ev.tournament && ev.aiPools.size() >= 1) {
+            startTournament(ctx, ps, sessionId, humanDeck, aiDecks);
+            return;
+        }
+
         String humanName = "h-" + sessionId.substring(0, 8);
-        // 2 players = duel; 3+ = free-for-all (single game for now; the elimination bracket is the next phase)
+        // battle-royale mode: 2 players = duel; 3+ = one free-for-all game
         String gameType = ev.aiPools.size() > 1 ? "Free For All" : "Two Player Duel";
         UUID newId = playOrchestrator.startHumanVsAi(sessionId, humanName, gameType, "Limited",
                 ev.aiPools.size(), humanDeck, aiDecks, ev.winsNeeded);
@@ -1609,6 +1652,92 @@ public class WebGatewayServer {
             wsToGameId.put(ctx.getSessionId(), newId);
         }
         logger.info("web gateway: started sealed match for " + humanName + " -> " + newId);
+    }
+
+    // ---- 1v1 single-elimination tournament ------------------------------------------------------------
+    /** Resolve the AI-only bracket instantly (deck strength + luck) into the human's ladder of opponents,
+     *  then start round 1 as a real 1v1 match. */
+    private void startTournament(WsContext ctx, PlaySession ps, String sessionId,
+                                 DeckCardLists humanDeck, java.util.List<DeckCardLists> aiDecks) throws Exception {
+        int n = aiDecks.size() + 1;                 // total players (human + AIs)
+        int rounds = 32 - Integer.numberOfLeadingZeros(Math.max(1, n) - 1); // ceil(log2(n)); n=2→1, 4→2, 8→3
+        // seeds 1..n-1 are the AIs (seed 0 = human); aiDecks.get(seed-1) is that seed's deck
+        double[] strength = new double[n];
+        for (int s = 1; s < n; s++) strength[s] = deckStrength(aiDecks.get(s - 1));
+        java.util.List<DeckCardLists> ladder = new java.util.ArrayList<>();
+        java.util.List<String> ladderNames = new java.util.ArrayList<>();
+        for (int r = 0; r < rounds; r++) {
+            // round r+1 opponent = champion of the AI sub-bracket of seeds [2^r .. 2^(r+1)-1]
+            java.util.List<Integer> seeds = new java.util.ArrayList<>();
+            for (int s = (1 << r); s < Math.min(n, (1 << (r + 1))); s++) seeds.add(s);
+            int champ = resolveChampion(seeds, strength);
+            ladder.add(aiDecks.get(champ - 1));
+            ladderNames.add("AI " + champ);
+        }
+        tournamentByWs.put(ctx.getSessionId(), new Tournament(humanDeck, ladder, ladderNames));
+
+        com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
+        payload.addProperty("total", rounds);
+        com.google.gson.JsonArray opps = new com.google.gson.JsonArray();
+        for (String nm : ladderNames) opps.add(nm);
+        payload.add("opponents", opps);
+        ctx.send(JsonCodec.encodeCallback("TOURNAMENT_START", null, payload));
+        startTournamentRound(ctx, ps, sessionId);
+    }
+
+    /** Start (or advance to) the current round's 1v1 match for the tournament held by this session. */
+    private void startTournamentRound(WsContext ctx, PlaySession ps, String sessionId) throws Exception {
+        Tournament t = tournamentByWs.get(ctx.getSessionId());
+        if (t == null || t.round >= t.ladder.size()) {
+            return;
+        }
+        endSessionGame(ctx, ps);
+        String humanName = "h-" + sessionId.substring(0, 8);
+        UUID newId = playOrchestrator.startHumanVsAi(sessionId, humanName, "Two Player Duel", "Limited",
+                1, t.humanDeck, java.util.Collections.singletonList(t.ladder.get(t.round)), 1);
+        if (ps != null) {
+            ps.gameId = newId;
+            ps.tableId = playOrchestrator.tableForGame(newId);
+            ps.matchDeck = t.humanDeck;
+        } else {
+            wsToGameId.put(ctx.getSessionId(), newId);
+        }
+        logger.info("web gateway: tournament round " + (t.round + 1) + "/" + t.ladder.size()
+                + " vs " + t.ladderNames.get(t.round) + " -> " + newId);
+    }
+
+    /** A deck's rough strength: weighted by card rarity (bombs matter), for the instant AI-vs-AI resolution. */
+    private double deckStrength(DeckCardLists deck) {
+        double s = 10.0;
+        for (DeckCardInfo ci : deck.getCards()) {
+            mage.cards.repository.CardInfo info = (ci.getSetCode() != null && !ci.getSetCode().isEmpty()
+                    && ci.getCardNumber() != null && !ci.getCardNumber().isEmpty())
+                    ? mage.cards.repository.CardRepository.instance.findCard(ci.getSetCode(), ci.getCardNumber())
+                    : null;
+            if (info == null) info = mage.cards.repository.CardRepository.instance.findCard(ci.getCardName());
+            mage.constants.Rarity rar = info != null ? info.getRarity() : null;
+            if (rar == mage.constants.Rarity.MYTHIC) s += 4;
+            else if (rar == mage.constants.Rarity.RARE) s += 3;
+            else if (rar == mage.constants.Rarity.UNCOMMON) s += 1.5;
+            else s += 0.5;
+        }
+        return s;
+    }
+
+    /** Single-elimination among the given seeds; each match's winner is chosen by strength + luck. */
+    private int resolveChampion(java.util.List<Integer> seeds, double[] strength) {
+        java.util.List<Integer> field = new java.util.ArrayList<>(seeds);
+        while (field.size() > 1) {
+            java.util.List<Integer> next = new java.util.ArrayList<>();
+            for (int i = 0; i < field.size(); i += 2) {
+                if (i + 1 >= field.size()) { next.add(field.get(i)); continue; } // odd one out gets a bye
+                int a = field.get(i), b = field.get(i + 1);
+                double sa = strength[a], sb = strength[b];
+                next.add(Math.random() * (sa + sb) < sa ? a : b);
+            }
+            field = next;
+        }
+        return field.get(0);
     }
 
     /** Build a human sealed deck from the client's submitted card list + basic-land counts. */
@@ -1869,6 +1998,8 @@ public class WebGatewayServer {
 
     private void onClose(WsContext ctx) {
         clients.remove(ctx);
+        sealedByWs.remove(ctx.getSessionId());
+        tournamentByWs.remove(ctx.getSessionId()); // bracket state is per live connection (not resumable yet)
 
         // PLAY: keep the game alive for a grace period so a reload can reconnect to it
         PlaySession ps = playByWs.remove(ctx.getSessionId());

@@ -698,11 +698,20 @@
             <label for="sealedSetSel">Set (real booster packs)</label>
             <select id="sealedSetSel"><option value="">loading sets…</option></select>
             <div style="display:flex; gap:12px; align-items:center; margin-top:6px; flex-wrap:wrap;">
+                <label style="margin:0">Mode:
+                    <select id="sealedMode">
+                        <option value="tournament">1v1 tournament</option>
+                        <option value="ffa">Battle royale (free-for-all)</option>
+                    </select></label>
                 <label style="margin:0">Players (you + AI):
-                    <input id="sealedPlayers" type="number" min="2" max="8" value="2" style="width:52px"></label>
-                <label style="margin:0"><input id="sealedBo3" type="checkbox"> Best of 3</label>
+                    <select id="sealedPlayers">
+                        <option value="2">2</option>
+                        <option value="4" selected>4</option>
+                        <option value="8">8</option>
+                    </select></label>
+                <label id="sealedBo3Wrap" style="margin:0; display:none"><input id="sealedBo3" type="checkbox"> Best of 3</label>
             </div>
-            <div class="hint" style="margin-top:4px">Everyone opens 6 packs. You'll build a 40-card deck; AI opponents auto-build. (Single-match for now — bracket coming next.)</div>
+            <div id="sealedModeHint" class="hint" style="margin-top:4px"></div>
             <div style="margin-top:8px"><button id="openPacksBtn">Open 6 packs →</button></div>
         </div>
         <div id="constructedSetup">
@@ -1701,14 +1710,25 @@ document.getElementById('newGameBtn').onclick = () => { if (readyData) send('ref
     }
     mC.onclick = () => setMode(false);
     mS.onclick = () => setMode(true);
+    // sealed sub-mode: tournament (1v1 bracket) vs battle royale (one FFA game). Best-of-3 only applies to FFA.
+    const sealedModeSel = document.getElementById('sealedMode');
+    function updateSealedMode() {
+        const t = sealedModeSel.value === 'tournament';
+        document.getElementById('sealedBo3Wrap').style.display = t ? 'none' : '';
+        document.getElementById('sealedModeHint').innerHTML = t
+            ? 'Everyone opens 6 packs and builds a 40-card deck. You play a <b>1v1 each round</b>; the other matches are auto-resolved and the winner advances until someone takes the whole bracket.'
+            : 'Everyone opens 6 packs and builds a 40-card deck, then all play a single <b>free-for-all</b> game.';
+    }
+    sealedModeSel.onchange = updateSealedMode; updateSealedMode();
     document.getElementById('openPacksBtn').onclick = () => {
         const setCode = document.getElementById('sealedSetSel').value;
         if (!setCode) { document.getElementById('setupError').textContent = 'Pick a set first.'; document.getElementById('setupError').style.display = ''; return; }
         const players = Math.max(2, Math.min(8, parseInt(document.getElementById('sealedPlayers').value) || 2));
         const bestOf3 = document.getElementById('sealedBo3').checked;
+        const mode = sealedModeSel.value;
         setupEl.style.display = 'none';
         setPrompt('Opening packs…');
-        send('startSealed', undefined, { setCode, players, bestOf3 });
+        send('startSealed', undefined, { setCode, players, bestOf3, mode });
     };
 })();
 window.fillSealedSets = function (sets, fromCache) {
@@ -2327,6 +2347,40 @@ function showMatchPause(data) {
 function continueMatch() { hideMatchPause(); setPrompt('Starting the next game…'); send('sideboardDone'); }
 function hideMatchPause() { clearInterval(matchPauseTimer); matchPauseTimer = null;
     document.getElementById('matchPause').style.display = 'none'; }
+
+// ---- 1v1 single-elimination tournament (client side) ---------------------------------------------------
+let tourney = null;         // { total, opponents:[names], round } — active tournament, else null
+let tourneyGameDone = false; // guard so a round's result screen shows once
+// The human won their game iff they're still alive when the game ends (1v1: the other seat was eliminated).
+function humanWonGame() {
+    const gv = lastGameView; if (!gv || !gv.players) return true;
+    const me = gv.players.find(p => p.controlled); if (!me) return true;
+    return !me.hasLeft && (typeof me.life !== 'number' || me.life > 0);
+}
+function showTournamentResult(won) {
+    setGameActive(false); hideWorking();
+    const el = document.getElementById('matchPause');
+    const end = (msg) => { el.innerHTML = '<span class="mpMsg">' + msg + '</span>'
+            + '<button id="mpNew" class="prim">New event</button>';
+        el.style.display = 'flex';
+        document.getElementById('mpNew').onclick = () => { hideMatchPause(); send('tournamentEnd'); tourney = null; showSetup(); }; };
+    if (won && tourney.round >= tourney.total) {
+        end('<b>🏆 Champion!</b> You won the whole bracket (' + tourney.total + ' round' + (tourney.total>1?'s':'') + ').');
+        setPrompt('<span class="over">🏆 Tournament won!</span>');
+    } else if (won) {
+        const next = tourney.opponents[tourney.round] || 'the winner'; // opponents[round] = next round's foe
+        el.innerHTML = '<span class="mpMsg"><b>Round ' + tourney.round + ' won!</b> Next: round '
+            + (tourney.round + 1) + ' of ' + tourney.total + ' vs <b>' + esc(next) + '</b>.</span>'
+            + '<button id="mpContinue" class="prim">Continue ▸</button>';
+        el.style.display = 'flex';
+        document.getElementById('mpContinue').onclick = () => { tourney.round++; hideMatchPause();
+            setPrompt('Starting the next round…'); send('tournamentAdvance'); };
+        setPrompt('<span class="over">Round ' + tourney.round + ' won — continue to the next round.</span>');
+    } else {
+        end('<b>Knocked out.</b> You lost in round ' + tourney.round + ' of ' + tourney.total + '.');
+        setPrompt('<span class="over">Knocked out of the tournament.</span>');
+    }
+}
 resignBtn.onclick = () => {
     if (!confirm('Resign this game?\n\nYou concede, but the AI opponents keep playing it out — you can keep watching.')) return;
     send('resign');
@@ -3799,8 +3853,11 @@ function handle(method, data) {
             setPrompt('<span class="over">Couldn\'t start — see the message in the dialog.</span>');
             break; }
         case 'SIDEBOARD': showMatchPause(data); break; // a match game ended; pause before the next one
+        case 'TOURNAMENT_START':
+            tourney = { total: data.total || 1, opponents: data.opponents || [], round: 1 };
+            log('Tournament started — ' + tourney.total + ' round(s). Round 1 vs ' + (tourney.opponents[0]||'AI')); break;
         case 'START_GAME': case 'GAME_INIT':
-            hideMatchPause(); // the next game of the match is starting
+            hideMatchPause(); tourneyGameDone = false; // the next game/round is starting
             setupEl.style.display = 'none'; closeSealedBuilder(); // never let the full-screen builder cover the board/dock
             recentEvents.length = 0; renderEventFeed(); log('Game started'); setGameActive(true); resetCycle();
             holdPriority = false; { const hb = document.getElementById('holdBtn'); if (hb) hb.classList.remove('on'); }
@@ -3953,8 +4010,10 @@ function handle(method, data) {
         }
         case 'GAME_OVER': case 'END_GAME_INFO':
             setGameActive(false);
-            setPrompt('<span class="over">Game over — ' + (msg(data.message) || 'see log') + '</span>');
-            log('GAME OVER: ' + (data.message||'')); break;
+            log('GAME OVER: ' + (data.message||''));
+            if (tourney && !tourneyGameDone) { tourneyGameDone = true; showTournamentResult(humanWonGame()); }
+            else setPrompt('<span class="over">Game over — ' + (msg(data.message) || 'see log') + '</span>');
+            break;
 
         case 'GAME_UPDATE': case 'GAME_UPDATE_AND_INFORM':
             // these carry only "PHASE - Waiting for X" status (shown in the turn bar already), not the
