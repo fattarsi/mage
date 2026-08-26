@@ -413,12 +413,15 @@
         #sbCurve .sbBar i { width: 12px; min-height: 2px; background: #4a7ba8; border-radius: 2px 2px 0 0; display: block; }
         #sbCurve .sbBarN { font-size: 9px; color: #8fd29a; height: 11px; }
         #sbCurve .sbBarX { font-size: 9px; color: #8090a0; margin-top: 1px; }
-        /* deck "mana by color" stats (colored pips of non-land cards) */
-        #sbColors .sbColorRow { display: flex; align-items: center; gap: 5px; margin: 2px 0; }
-        #sbColors .sbColorPip { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto; border: 1px solid #0006; }
-        #sbColors .sbColorBar { flex: 1 1 auto; height: 8px; background: #1a2230; border-radius: 4px; overflow: hidden; }
-        #sbColors .sbColorBar i { display: block; height: 100%; }
-        #sbColors .sbColorN { flex: 0 0 auto; font-size: 10px; color: #9ab; min-width: 58px; text-align: right; }
+        /* "mana by color" stats — a labelled colour chip (W/U/B/R/G), a share bar, and the count. Used by
+           both the sealed deck stats (#sbColors) and the draft pool stats (#draftStats). */
+        #sbColors .sbColorRow, #draftStats .sbColorRow { display: flex; align-items: center; gap: 5px; margin: 2px 0; }
+        #sbColors .sbColorPip, #draftStats .sbColorPip { width: 15px; height: 15px; border-radius: 4px; flex: 0 0 auto;
+            border: 1px solid #0006; display: flex; align-items: center; justify-content: center;
+            font-size: 9px; font-weight: 800; color: #0d1117; }
+        #sbColors .sbColorBar, #draftStats .sbColorBar { flex: 1 1 auto; height: 8px; background: #1a2230; border-radius: 4px; overflow: hidden; }
+        #sbColors .sbColorBar i, #draftStats .sbColorBar i { display: block; height: 100%; }
+        #sbColors .sbColorN, #draftStats .sbColorN { flex: 0 0 auto; font-size: 10px; color: #9ab; min-width: 58px; text-align: right; }
         /* playmat group-by bar + the column headers it draws on the mat */
         #sbMatBar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 4px 8px; font-size: 12px; color: #9fb4c8;
             background: #111a24; border: 1px solid #2b3442; border-bottom: 0; border-radius: 6px 6px 0 0; }
@@ -1902,7 +1905,7 @@ function renderColorStats() {
     el.innerHTML = '<div class="hint" style="margin-bottom:2px">Mana by color' + (total ? '' : ' — none yet') + '</div>';
     defs.forEach(([k,col]) => { const n = pips[k], pct = total ? Math.round(n/total*100) : 0;
         const row = document.createElement('div'); row.className = 'sbColorRow';
-        row.innerHTML = `<span class="sbColorPip" style="background:${col}"></span>`
+        row.innerHTML = `<span class="sbColorPip" style="background:${col}">${k}</span>`
             + `<span class="sbColorBar"><i style="width:${pct}%;background:${col}"></i></span>`
             + `<span class="sbColorN">${n ? n + ' · ' + pct + '%' : '—'}</span>`;
         el.appendChild(row);
@@ -1999,7 +2002,7 @@ function renderDraftStats() {
     const pips = draftPips(pool), cTot = pips.W+pips.U+pips.B+pips.R+pips.G;
     const cdef = [['W','#e9e3c0'],['U','#5aa0e0'],['B','#9a8ca8'],['R','#e06a63'],['G','#5aa86a']];
     const colorsHtml = cdef.map(([kk,col]) => { const n = pips[kk], pct = cTot?Math.round(n/cTot*100):0;
-        return `<div class="sbColorRow"><span class="sbColorPip" style="background:${col}"></span>`
+        return `<div class="sbColorRow"><span class="sbColorPip" style="background:${col}">${kk}</span>`
             + `<span class="sbColorBar"><i style="width:${pct}%;background:${col}"></i></span>`
             + `<span class="sbColorN">${n?n+' · '+pct+'%':'—'}</span></div>`; }).join('');
     const buckets = [0,0,0,0,0,0,0,0]; pool.forEach(c => { if (c.land) return; buckets[Math.min(7,Math.max(0,c.v|0))] += c.q; });
