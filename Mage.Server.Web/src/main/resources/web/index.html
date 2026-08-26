@@ -444,6 +444,8 @@
             background: #16221a; border-left: 1px solid #4a6a3a; border-right: 1px solid #4a6a3a; font-size: 12px; color: #a8d0b0; }
         #sbTrayBar .sbSort { background: #2b3a4a; font-size: 11px; padding: 3px 9px; }
         #sbTrayBar .sbSort.on { background: #2e6a40; }
+        #sbTrayBar .sbSplit { background: #2b3a4a; font-size: 11px; padding: 3px 8px; }
+        #sbTrayBar .sbSplit.on { background: #3a5a86; }
         #sbTray { flex: 1 1 38%; position: relative; overflow: auto; border: 1px solid #4a6a3a; border-top: 0; border-radius: 0 0 6px 6px;
             background: #121a14; touch-action: none; min-height: 90px; }
         #sbTray.free { } /* free mode uses absolute positions; sorted modes use overlapping columns */
@@ -795,6 +797,11 @@
             <button class="sbSort on" data-sort="mana">Mana</button>
             <button class="sbSort" data-sort="type">Type</button>
             <button class="sbSort" data-sort="free">Free</button>
+            <span class="sbSep"></span>
+            <span class="hint">Space:</span>
+            <button class="sbSplit" data-split="mat" title="Give the mat (cards not in the deck) more room">Mat</button>
+            <button class="sbSplit on" data-split="mid" title="Even split">Even</button>
+            <button class="sbSplit" data-split="tray" title="Give the deck tray more room">Deck</button>
             <span style="flex:1"></span>
             <span class="hint">drag a card up out of here to remove it</span>
         </div>
@@ -1731,6 +1738,7 @@ window.openSealedBuilder = function (data) {
     document.querySelectorAll('#sbMatBar .sbGroup').forEach(x => x.classList.toggle('on', x.dataset.group==='free'));
     matColorFilter = new Set(['w','u','b','r','g','c','l']); // reset the colour filter to show everything
     document.querySelectorAll('#sbMatBar .sbFilt').forEach(x => x.classList.add('on'));
+    applyMatSplit(); // restore the saved mat/deck divider position
     loadPoolPrices(); // warm card prices for the value stat + price sort
     setupEl.style.display = 'none';
     document.getElementById('sealedBuilder').style.display = 'flex';
@@ -2085,6 +2093,20 @@ document.querySelectorAll('#sbTrayBar .sbSort').forEach(b => b.onclick = () => {
     sbTraySort = b.dataset.sort;
     document.querySelectorAll('#sbTrayBar .sbSort').forEach(x => x.classList.toggle('on', x===b));
     renderTray();
+});
+// divider position: slide the mat/deck-tray split so you can give either section more room (persisted)
+let matSplit = localStorage.getItem('matSplit') || 'mid';
+const MAT_SPLITS = { mat: ['1 1 82%', '1 1 18%'], mid: ['1 1 62%', '1 1 38%'], tray: ['1 1 25%', '1 1 75%'] };
+function applyMatSplit() {
+    const s = MAT_SPLITS[matSplit] || MAT_SPLITS.mid;
+    const mat = document.getElementById('sbMat'), tray = document.getElementById('sbTray');
+    if (mat) mat.style.flex = s[0];
+    if (tray) tray.style.flex = s[1];
+    document.querySelectorAll('#sbTrayBar .sbSplit').forEach(x => x.classList.toggle('on', x.dataset.split === matSplit));
+    if (sbView === 'mat') renderMat(); // re-flow columns/grid for the new height
+}
+document.querySelectorAll('#sbTrayBar .sbSplit').forEach(b => b.onclick = () => {
+    matSplit = b.dataset.split; localStorage.setItem('matSplit', matSplit); applyMatSplit();
 });
 // playmat "group by" buttons (color / rarity / type / price / free) — re-lay the loose cards on the mat
 document.querySelectorAll('#sbMatBar .sbGroup').forEach(b => b.onclick = () => {
