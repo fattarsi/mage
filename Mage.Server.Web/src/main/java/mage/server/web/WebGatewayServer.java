@@ -1121,7 +1121,7 @@ public class WebGatewayServer {
         // Auto-build a deck from the human's pool and send it back to the builder (do NOT start a game).
         if ("sealedAutoBuild".equals(action)) {
             try {
-                autoBuildSealedIntoTray(ctx);
+                autoBuildSealedIntoTray(ctx, msg);
             } catch (Exception e) {
                 logger.warn("web gateway: sealedAutoBuild failed", e);
                 ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
@@ -1491,13 +1491,35 @@ public class WebGatewayServer {
         logger.info("web gateway: opened sealed pool (" + setCode + ", " + players + " players) for " + ctx.getSessionId());
     }
 
-    /** Auto-build a 40-card deck from the human's open pool and send it back to the builder to inspect (no game). */
-    private void autoBuildSealedIntoTray(WsContext ctx) {
+    /**
+     * Build a 40-card deck from the human's open pool and send it back to the builder to inspect (no game).
+     * If the client passes the cards it has already committed ({@code locked}), the deck is built in THOSE
+     * colours (a "complete build" that finishes around the player's picks); the client keeps its picks and
+     * merges the suggestion to fill out the deck.
+     */
+    private void autoBuildSealedIntoTray(WsContext ctx, JsonObject msg) {
         SealedEvent ev = sealedByWs.get(ctx.getSessionId());
         if (ev == null) {
             throw new IllegalStateException("No sealed pool is open — open packs first.");
         }
-        DeckCardLists deck = DeckFactory.buildDeckFromPool(ev.humanPool, "Sealed deck");
+        // resolve the already-committed cards (by name) to pool cards, so we can build in the player's colours
+        java.util.List<mage.cards.Card> lockedCards = new java.util.ArrayList<>();
+        if (msg != null && msg.has("locked") && msg.get("locked").isJsonArray()) {
+            java.util.Map<String, Integer> want = new java.util.HashMap<>();
+            for (com.google.gson.JsonElement e : msg.getAsJsonArray("locked")) {
+                com.google.gson.JsonObject c = e.getAsJsonObject();
+                if (!c.has("n")) continue;
+                int q = c.has("q") ? Math.max(1, c.get("q").getAsInt()) : 1;
+                want.merge(c.get("n").getAsString(), q, Integer::sum);
+            }
+            for (mage.cards.Card card : ev.humanPool) {
+                Integer left = want.get(card.getName());
+                if (left != null && left > 0) { lockedCards.add(card); want.put(card.getName(), left - 1); }
+            }
+        }
+        java.util.List<mage.constants.ColoredManaSymbol> colors =
+                DeckFactory.pickTwoColors(lockedCards.isEmpty() ? ev.humanPool : lockedCards);
+        DeckCardLists deck = DeckFactory.buildDeckFromPool(ev.humanPool, "Sealed deck", colors);
         // Split the built deck into non-basic spells (matched back to the pool) and basic-land counts.
         String[] basicNames = {"Plains", "Island", "Swamp", "Mountain", "Forest"};
         java.util.Set<String> basicSet = new java.util.HashSet<>(java.util.Arrays.asList(basicNames));

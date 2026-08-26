@@ -83,7 +83,12 @@ public final class DeckFactory {
 
     /** Let the AI build a ~40-card limited deck from a sealed/draft pool (auto-picks its two best colors). */
     public static DeckCardLists buildDeckFromPool(List<Card> pool, String name) {
-        Deck deck = ComputerPlayer.buildDeck(DECK_SIZE, pool, pickTwoColors(pool), false);
+        return buildDeckFromPool(pool, name, pickTwoColors(pool));
+    }
+
+    /** Same, but build in the given colors (e.g. derived from the cards the human already committed to). */
+    public static DeckCardLists buildDeckFromPool(List<Card> pool, String name, List<ColoredManaSymbol> colors) {
+        Deck deck = ComputerPlayer.buildDeck(DECK_SIZE, pool, colors, false);
         DeckCardLists list = new DeckCardLists();
         list.setName(name != null ? name : "sealed");
         for (Card card : deck.getCards()) {
@@ -93,7 +98,7 @@ public final class DeckFactory {
     }
 
     /** Pick the two colors best represented (by non-land card count) in a pool, for AI deck building. */
-    private static List<ColoredManaSymbol> pickTwoColors(List<Card> pool) {
+    public static List<ColoredManaSymbol> pickTwoColors(List<Card> pool) {
         ColoredManaSymbol[] all = {ColoredManaSymbol.W, ColoredManaSymbol.U, ColoredManaSymbol.B,
                 ColoredManaSymbol.R, ColoredManaSymbol.G};
         int[] count = new int[5];

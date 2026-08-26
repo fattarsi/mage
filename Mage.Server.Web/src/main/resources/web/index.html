@@ -912,7 +912,7 @@
         <div id="sbBasics" style="display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0;"></div>
         <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px;">
             <button id="sbAutoLands" class="alt" style="flex:1 1 auto">⛰ Auto-fill lands</button>
-            <button id="sbAuto" class="alt" style="flex:1 1 auto" title="Let the AI build a solid deck from your pool">✨ Auto-build</button>
+            <button id="sbAuto" class="alt" style="flex:1 1 auto" title="Keep the cards already in your deck and finish building the rest around them, in your colours">✨ Complete build</button>
         </div>
         <div style="display:flex; gap:6px;">
             <button id="sbPlay" disabled style="flex:1 1 auto" title="Need at least 40 cards">Play ▸</button>
@@ -2235,28 +2235,33 @@ document.getElementById('sbQuit').onclick = () => {
     showSetup(); // back to the new-game menu
 };
 document.getElementById('sbAuto').onclick = () => {
-    // Auto-build the deck into the tray so it can be inspected/tweaked — it does NOT start the game.
-    send('sealedAutoBuild', undefined, {});
+    // Complete build: keep whatever is already in the deck tray and finish the deck around it (in your
+    // colours). Sends the current picks so the server builds the suggestion in the same colours.
+    send('sealedAutoBuild', undefined, { locked: sbDeck.map(c => ({ n:c.n, s:c.s, c:c.c, q:c.q })) });
 };
-// The server built a deck from the pool; load it into the deck tray (matched back to pool printings) to inspect.
-function applyAutoBuild(data) {
-    sbDeck = [];
-    (data.cards || []).forEach(rc => {
+// Server returned a suggested deck (built in the colours of your picks). KEEP the current tray cards and
+// merge the suggestion to fill out the deck, then top up basic lands to 40 — never dropping your picks.
+function applyCompleteBuild(data) {
+    const targetNonBasic = (data.cards || []).reduce((a, c) => a + (c.q || 1), 0);
+    let have = sbDeck.reduce((a, c) => a + c.q, 0); // cards already committed (kept as-is)
+    for (const rc of (data.cards || [])) {
+        if (have >= targetNonBasic) break;
         let need = rc.q || 1;
         const exact = rc.n + '|' + (rc.s||'') + '|' + (rc.c||'');
-        // prefer the exact printing the server chose, then any other printing of the same card name
-        const cand = sbPoolFull.filter(p => p.n === rc.n).sort((a,b) => (sbKey(a)===exact?-1:0) - (sbKey(b)===exact?-1:0));
-        for (const p of cand) {
-            if (need <= 0) break;
-            const take = Math.min(need, p.q); if (take <= 0) continue;
+        // available copies of this card left in the pool (pool minus what's already in the deck), preferring
+        // the printing the server chose
+        const avail = availablePool().filter(p => p.n === rc.n)
+            .sort((a, b) => (sbKey(a)===exact?-1:0) - (sbKey(b)===exact?-1:0));
+        for (const p of avail) {
+            if (need <= 0 || have >= targetNonBasic) break;
+            const take = Math.min(need, p.q, targetNonBasic - have); if (take <= 0) continue;
             const d = sbDeck.find(x => sbKey(x)===sbKey(p));
             if (d) d.q += take; else sbDeck.push(Object.assign({}, p, { q:take }));
-            need -= take;
+            need -= take; have += take;
         }
-    });
-    const b = data.basics || {};
-    sbBasics = { w:b.w||0, u:b.u||0, b:b.b||0, r:b.r||0, g:b.g||0 };
-    reconcileMat();
+    }
+    autoFillBasics();   // fill basic lands to 40, distributed by the final deck's coloured pips
+    reconcileMat();     // drop the newly-added cards from the mat
     renderSealedBuilder();
 }
 document.getElementById('sbPlay').onclick = () => {
@@ -3751,7 +3756,7 @@ function handle(method, data) {
         case 'GATEWAY_READY': sendBuffer.length = 0; prepareSetup(data); sendSkips(); send('sealedSets'); setPrompt('Ready. Click “New game” to start — or open ⚙ Settings.'); break;
         case 'SEALED_SETS': fillSealedSets(data && data.sets); break;
         case 'SEALED_POOL': openSealedBuilder(data); break;
-        case 'SEALED_AUTOBUILD': applyAutoBuild(data); break;
+        case 'SEALED_AUTOBUILD': applyCompleteBuild(data); break;
         case 'GATEWAY_RECONNECTED':
             setupEl.style.display = 'none'; hideBanner(); setGameActive(true);
             log('Reconnected to your game'); setPrompt('Reconnected — resuming…'); break;
