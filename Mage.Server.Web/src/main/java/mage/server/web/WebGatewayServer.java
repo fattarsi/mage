@@ -221,6 +221,23 @@ public class WebGatewayServer {
         }
     }
     private final Map<String, Tournament> tournamentByWs = new ConcurrentHashMap<>();
+
+    /** A running booster draft: seat 0 is the human; each pick, the human chooses from their pack, the AIs
+     * pick from theirs (heuristic), then all packs pass one seat. After 3 packs the drafted pools hand off to
+     * the same sealed builder + tournament pipeline. */
+    private static final class DraftState {
+        final String setCode; final int seats; final int winsNeeded; final boolean tournament;
+        java.util.List<java.util.List<mage.cards.Card>> packs; // current pack held by each seat
+        final java.util.List<java.util.List<mage.cards.Card>> pools; // cards drafted so far, per seat
+        int round = 0;  // 0..2 (three packs)
+        int pick = 0;   // pick number within the current pack
+        DraftState(String setCode, int seats, int winsNeeded, boolean tournament) {
+            this.setCode = setCode; this.seats = seats; this.winsNeeded = winsNeeded; this.tournament = tournament;
+            this.pools = new java.util.ArrayList<>();
+            for (int i = 0; i < seats; i++) pools.add(new java.util.ArrayList<>());
+        }
+    }
+    private final Map<String, DraftState> draftByWs = new ConcurrentHashMap<>();
     private final ScheduledExecutorService graceScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "web-reconnect-grace");
         t.setDaemon(true);
@@ -1105,6 +1122,28 @@ public class WebGatewayServer {
             ctx.send(JsonCodec.encodeCallback("SEALED_SETS", null, Map.of("sets", boosterableSets())));
             return;
         }
+        // Booster draft: open the first packs and send the human their first pack to pick from.
+        if ("startDraft".equals(action)) {
+            try {
+                startDraftForSession(ctx, ps, sessionId, msg);
+            } catch (Exception e) {
+                logger.warn("web gateway: startDraft failed", e);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
+                        Map.of("message", "Couldn't start draft: " + e.getMessage())));
+            }
+            return;
+        }
+        // Draft: the human picked a card — record it, have the AIs pick, pass the packs, send the next pack.
+        if ("draftPick".equals(action)) {
+            try {
+                handleDraftPick(ctx, ps, sessionId, msg);
+            } catch (Exception e) {
+                logger.warn("web gateway: draftPick failed", e);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
+                        Map.of("message", "Draft pick failed: " + e.getMessage())));
+            }
+            return;
+        }
         // Open 6 packs for the human and each AI; keep the AI pools, send the human's pool to build a deck.
         if ("startSealed".equals(action)) {
             try {
@@ -1494,6 +1533,135 @@ public class WebGatewayServer {
         }
         boosterableSetsCache = out;
         return out;
+    }
+
+    // ---- Booster draft --------------------------------------------------------------------------------
+    private static final int DRAFT_PACKS = 3;
+
+    /** Start a booster draft: open pack 1 for every seat and send the human their pack to pick from. */
+    private void startDraftForSession(WsContext ctx, PlaySession ps, String sessionId, JsonObject msg) throws Exception {
+        String setCode = msg.has("setCode") && !msg.get("setCode").isJsonNull() ? msg.get("setCode").getAsString() : "";
+        int seats = msg.has("players") ? Math.max(2, Math.min(8, msg.get("players").getAsInt())) : 8;
+        int winsNeeded = msg.has("bestOf3") && msg.get("bestOf3").getAsBoolean() ? 2 : 1;
+        boolean tournament = !msg.has("mode") || !"ffa".equals(msg.get("mode").getAsString());
+        DraftState d = new DraftState(setCode, seats, winsNeeded, tournament);
+        d.packs = openRoundPacks(setCode, seats);
+        draftByWs.put(ctx.getSessionId(), d);
+        sendDraftPack(ctx, d);
+        logger.info("web gateway: started draft (" + setCode + ", " + seats + " seats) for " + ctx.getSessionId());
+    }
+
+    private java.util.List<java.util.List<mage.cards.Card>> openRoundPacks(String setCode, int seats) {
+        java.util.List<java.util.List<mage.cards.Card>> packs = new java.util.ArrayList<>();
+        for (int i = 0; i < seats; i++) packs.add(new java.util.ArrayList<>(DeckFactory.openPacks(setCode, 1)));
+        return packs;
+    }
+
+    /** Send the human (seat 0) their current pack + the pool they've drafted so far (for the live stats). */
+    private void sendDraftPack(WsContext ctx, DraftState d) {
+        com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
+        payload.addProperty("pack", d.round + 1);
+        payload.addProperty("pick", d.pick + 1);
+        payload.addProperty("packsTotal", DRAFT_PACKS);
+        payload.addProperty("setCode", d.setCode);
+        payload.add("cards", DeckStore.cardsToJson(d.packs.get(0)));
+        payload.add("pool", DeckStore.cardsToJson(d.pools.get(0)));
+        ctx.send(JsonCodec.encodeCallback("DRAFT_PACK", null, payload));
+    }
+
+    /** Record the human's pick, run the AI picks, pass the packs, then send the next pack (or finish). */
+    private void handleDraftPick(WsContext ctx, PlaySession ps, String sessionId, JsonObject msg) throws Exception {
+        DraftState d = draftByWs.get(ctx.getSessionId());
+        if (d == null) {
+            throw new IllegalStateException("No draft is in progress.");
+        }
+        String n = msg.has("n") ? msg.get("n").getAsString() : null;
+        String s = msg.has("s") && !msg.get("s").isJsonNull() ? msg.get("s").getAsString() : null;
+        String c = msg.has("c") && !msg.get("c").isJsonNull() ? msg.get("c").getAsString() : null;
+        java.util.List<mage.cards.Card> humanPack = d.packs.get(0);
+        mage.cards.Card picked = null;
+        for (mage.cards.Card card : humanPack) {
+            if (card.getName().equals(n)
+                    && (s == null || s.equals(card.getExpansionSetCode()))
+                    && (c == null || c.equals(card.getCardNumber()))) { picked = card; break; }
+        }
+        if (picked == null && !humanPack.isEmpty()) picked = humanPack.get(0); // fallback: first card
+        if (picked != null) { humanPack.remove(picked); d.pools.get(0).add(picked); }
+
+        for (int i = 1; i < d.seats; i++) { // AIs pick from their own packs
+            java.util.List<mage.cards.Card> pack = d.packs.get(i);
+            if (pack.isEmpty()) continue;
+            mage.cards.Card aiCard = aiDraftPick(pack, d.pools.get(i));
+            pack.remove(aiCard); d.pools.get(i).add(aiCard);
+        }
+
+        // pass the packs one seat (alternate direction each pack, like a real table)
+        int dir = (d.round % 2 == 0) ? 1 : -1;
+        java.util.List<java.util.List<mage.cards.Card>> passed = new java.util.ArrayList<>(
+                java.util.Collections.nCopies(d.seats, null));
+        for (int i = 0; i < d.seats; i++) passed.set(((i + dir) % d.seats + d.seats) % d.seats, d.packs.get(i));
+        d.packs = passed;
+        d.pick++;
+
+        if (d.packs.get(0).isEmpty()) { // this pack is done
+            d.round++;
+            if (d.round >= DRAFT_PACKS) { finishDraft(ctx, d); return; }
+            d.packs = openRoundPacks(d.setCode, d.seats);
+            d.pick = 0;
+        }
+        sendDraftPack(ctx, d);
+    }
+
+    /** AI draft pick: take the highest-rarity card, nudged toward the colours it has already drafted, + luck. */
+    private mage.cards.Card aiDraftPick(java.util.List<mage.cards.Card> pack, java.util.List<mage.cards.Card> pool) {
+        int[] col = new int[5]; // W,U,B,R,G counts already drafted
+        for (mage.cards.Card p : pool) addColors(col, p);
+        mage.cards.Card best = pack.get(0); double bestScore = -1;
+        for (mage.cards.Card card : pack) {
+            double score = rarityWeight(card) + Math.random() * 1.5;
+            score += colorAffinity(col, card); // prefer cards in the AI's colours
+            if (score > bestScore) { bestScore = score; best = card; }
+        }
+        return best;
+    }
+
+    private static void addColors(int[] col, mage.cards.Card c) {
+        mage.filter.FilterMana ci = c.getColorIdentity();
+        if (ci == null) return;
+        if (ci.isWhite()) col[0]++; if (ci.isBlue()) col[1]++; if (ci.isBlack()) col[2]++;
+        if (ci.isRed()) col[3]++; if (ci.isGreen()) col[4]++;
+    }
+    private static double colorAffinity(int[] col, mage.cards.Card c) {
+        mage.filter.FilterMana ci = c.getColorIdentity();
+        if (ci == null) return 0.5; // colourless fits anywhere
+        double a = 0;
+        if (ci.isWhite()) a += col[0]; if (ci.isBlue()) a += col[1]; if (ci.isBlack()) a += col[2];
+        if (ci.isRed()) a += col[3]; if (ci.isGreen()) a += col[4];
+        return a * 0.15;
+    }
+    private static double rarityWeight(mage.cards.Card c) {
+        mage.constants.Rarity r = c.getRarity();
+        if (r == mage.constants.Rarity.MYTHIC) return 4;
+        if (r == mage.constants.Rarity.RARE) return 3;
+        if (r == mage.constants.Rarity.UNCOMMON) return 1.5;
+        return 0.5;
+    }
+
+    /** Draft complete: hand the drafted pools to the sealed builder + tournament pipeline. */
+    private void finishDraft(WsContext ctx, DraftState d) {
+        java.util.List<mage.cards.Card> humanPool = d.pools.get(0);
+        java.util.List<java.util.List<mage.cards.Card>> aiPools = new java.util.ArrayList<>();
+        for (int i = 1; i < d.seats; i++) aiPools.add(d.pools.get(i));
+        draftByWs.remove(ctx.getSessionId());
+        sealedByWs.put(ctx.getSessionId(), new SealedEvent(humanPool, aiPools, d.winsNeeded, d.setCode, d.tournament));
+
+        com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
+        payload.addProperty("setCode", d.setCode);
+        payload.addProperty("players", d.seats);
+        payload.add("pool", DeckStore.cardsToJson(humanPool)); // the drafted pool → build a deck from it
+        payload.add("packs", new com.google.gson.JsonArray()); // no packs to open (already drafted)
+        ctx.send(JsonCodec.encodeCallback("SEALED_POOL", null, payload));
+        logger.info("web gateway: draft complete, " + humanPool.size() + " cards drafted -> builder");
     }
 
     /** Open 6 packs for the human + each AI seat; stash the AI pools, send the human's pool to build a deck. */
@@ -1999,6 +2167,7 @@ public class WebGatewayServer {
     private void onClose(WsContext ctx) {
         clients.remove(ctx);
         sealedByWs.remove(ctx.getSessionId());
+        draftByWs.remove(ctx.getSessionId());
         tournamentByWs.remove(ctx.getSessionId()); // bracket state is per live connection (not resumable yet)
 
         // PLAY: keep the game alive for a grace period so a reload can reconnect to it

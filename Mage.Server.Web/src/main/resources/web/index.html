@@ -468,8 +468,30 @@
         .matCard.dragging { opacity: 1; box-shadow: 0 12px 28px #000d; transform: scale(1.04); }
         .matCard .matQ { position: absolute; top: 2px; right: 3px; z-index: 2; background: #2e6a40; color: #fff;
             border-radius: 9px; font-size: 10px; font-weight: 800; padding: 0 5px; }
-        .matCard .matPrice { position: absolute; top: 2px; left: 2px; z-index: 2; background: #14532d; color: #c9f5d0;
+        .matCard .matPrice, .draftCard .matPrice { position: absolute; top: 2px; left: 2px; z-index: 2; background: #14532d; color: #c9f5d0;
             border-radius: 6px; font-size: 9px; font-weight: 700; padding: 0 4px; }
+        /* booster draft screen */
+        #draftScreen { position: fixed; left: 0; top: 44px; right: var(--sidecol-w); bottom: 0; z-index: 46;
+            background: #0d1117; display: flex; flex-direction: column; padding: 6px 8px; gap: 6px; }
+        body.sidecol-left #draftScreen { left: var(--sidecol-w); right: 0; }
+        #draftBar { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; font-size: 13px; }
+        #draftPick { color: #ffd166; font-weight: 700; }
+        #draftBody { display: flex; gap: 8px; flex: 1 1 auto; min-height: 0; }
+        #draftPackWrap { flex: 1 1 auto; overflow: auto; min-width: 0; }
+        #draftPack { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--draft-cw, 132px), 1fr)); gap: 8px; align-content: start; padding: 2px; }
+        #draftPack.picking { opacity: .5; pointer-events: none; }
+        #draftStats { flex: 0 0 208px; overflow: auto; background: #10161d; border: 1px solid #2b3442; border-radius: 8px; padding: 8px; font-size: 12px; color: #cbd5e2; }
+        #draftStats .dsHead { font-weight: 700; color: #9fb4c8; margin: 9px 0 3px; }
+        #draftStats .dsRow { display: flex; justify-content: space-between; gap: 8px; margin: 1px 0; }
+        .draftCard { position: relative; border-radius: 8px; overflow: hidden; cursor: pointer; border: 2px solid #3a4150;
+            aspect-ratio: 5 / 7; background: #232a33; box-shadow: 0 2px 8px #000a; display: flex; align-items: flex-end;
+            justify-content: center; font-size: 10px; color: #cbd5e2; text-align: center; user-select: none; }
+        .draftCard img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+        .draftCard .dcName { position: relative; z-index: 1; background: #000b; width: 100%; padding: 2px 3px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .draftCard:hover { transform: translateY(-3px); box-shadow: 0 10px 22px #000d; border-color: #6a86b8; }
+        .draftCard.r-mythic { border-color: #c8641e; } .draftCard.r-rare { border-color: #b7982e; }
+        .draftCard.r-uncommon { border-color: #8794a4; }
         .dragGhost { position: fixed; z-index: 9997; pointer-events: none; border-radius: 6px; overflow: hidden;
             box-shadow: 0 10px 26px #000d; border: 1px solid #5a6b86; }
         .dragGhost img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -478,7 +500,8 @@
             display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: #cfe; font-weight: 700; }
         .matPack .matPackN { font-size: 11px; color: #9ab; }
         /* while the sealed builder is open, the side column shows deck controls, not game zone buttons */
-        body.deckbuild #sideBtns, body.deckbuild #sideMana { display: none; }
+        body.deckbuild #sideBtns, body.deckbuild #sideMana,
+        body.drafting #sideBtns, body.drafting #sideMana { display: none; }
         body.deckbuild #sbControls { display: block; }
         #sbControls #sbCurve { margin: 0; }
         #matMenu { position: fixed; z-index: 9998; background: #1b2230; border: 1px solid #3a4a63; border-radius: 8px;
@@ -698,6 +721,11 @@
             <label for="sealedSetSel">Set (real booster packs)</label>
             <select id="sealedSetSel"><option value="">loading sets…</option></select>
             <div style="display:flex; gap:12px; align-items:center; margin-top:6px; flex-wrap:wrap;">
+                <label style="margin:0">Event:
+                    <select id="sealedEventType">
+                        <option value="sealed">Sealed (open 6 packs)</option>
+                        <option value="draft">Booster draft (pick &amp; pass)</option>
+                    </select></label>
                 <label style="margin:0">Mode:
                     <select id="sealedMode">
                         <option value="tournament">1v1 tournament</option>
@@ -815,6 +843,20 @@
             <span class="hint">drag a card up out of here to remove it</span>
         </div>
         <div id="sbTray"></div>
+    </div>
+</div>
+<!-- booster draft: pick a card from the current pack (pass & repeat); drafted pool + live stats on the right -->
+<div id="draftScreen" style="display:none">
+    <div id="draftBar">
+        <b style="color:#cde">🃏 Booster Draft</b>
+        <span id="draftPick" class="hint"></span>
+        <span style="flex:1"></span>
+        <span class="hint">tap a card to draft it · press &amp; hold to preview</span>
+        <button id="draftQuit" class="alt" title="Leave the draft">✕ Quit</button>
+    </div>
+    <div id="draftBody">
+        <div id="draftPackWrap"><div id="draftPack"></div></div>
+        <div id="draftStats"></div>
     </div>
 </div>
 <div id="matMenu" style="display:none"></div>
@@ -1720,6 +1762,11 @@ document.getElementById('newGameBtn').onclick = () => { if (readyData) send('ref
             : 'Everyone opens 6 packs and builds a 40-card deck, then all play a single <b>free-for-all</b> game.';
     }
     sealedModeSel.onchange = updateSealedMode; updateSealedMode();
+    const eventTypeSel = document.getElementById('sealedEventType');
+    function updateEventType() {
+        document.getElementById('openPacksBtn').textContent = eventTypeSel.value === 'draft' ? 'Start draft →' : 'Open 6 packs →';
+    }
+    eventTypeSel.onchange = updateEventType; updateEventType();
     document.getElementById('openPacksBtn').onclick = () => {
         const setCode = document.getElementById('sealedSetSel').value;
         if (!setCode) { document.getElementById('setupError').textContent = 'Pick a set first.'; document.getElementById('setupError').style.display = ''; return; }
@@ -1727,8 +1774,8 @@ document.getElementById('newGameBtn').onclick = () => { if (readyData) send('ref
         const bestOf3 = document.getElementById('sealedBo3').checked;
         const mode = sealedModeSel.value;
         setupEl.style.display = 'none';
-        setPrompt('Opening packs…');
-        send('startSealed', undefined, { setCode, players, bestOf3, mode });
+        if (eventTypeSel.value === 'draft') { setPrompt('Starting the draft…'); send('startDraft', undefined, { setCode, players, bestOf3, mode }); }
+        else { setPrompt('Opening packs…'); send('startSealed', undefined, { setCode, players, bestOf3, mode }); }
     };
 })();
 window.fillSealedSets = function (sets, fromCache) {
@@ -1761,6 +1808,8 @@ window.openSealedBuilder = function (data) {
     applyMatSplit(); // restore the saved mat/deck divider position
     loadPoolPrices(); // warm card prices for the value stat + price sort
     setupEl.style.display = 'none';
+    document.getElementById('draftScreen').style.display = 'none'; // leaving the draft (if any) for the builder
+    document.body.classList.remove('drafting'); draft = null;
     document.getElementById('sealedBuilder').style.display = 'flex';
     document.getElementById('sbControls').style.display = 'block';
     document.body.classList.add('deckbuild'); // side column shows deck controls, hides game buttons
@@ -1866,8 +1915,10 @@ let priceRenderT = null;
 function schedulePriceRender() { if (priceRenderT) return; priceRenderT = setTimeout(() => { priceRenderT = null;
     if (document.getElementById('sealedBuilder').style.display !== 'none') renderSealedBuilder(); }, 500); }
 // lazily fetch a USD price for every distinct pool card; cache in localStorage so re-opens are instant
-function loadPoolPrices() {
-    const uniq = {}; sbPoolFull.forEach(c => { uniq[sbKey(c)] = c; });
+function loadPoolPrices() { loadPricesFor(sbPoolFull); }
+// fetch USD prices (once per distinct printing) for any list of {n,s,c} cards; cached in localStorage
+function loadPricesFor(cards) {
+    const uniq = {}; (cards || []).forEach(c => { uniq[sbKey(c)] = c; });
     Object.values(uniq).forEach(c => {
         const key = sbKey(c);
         if (sbPrices[key] !== undefined) return;
@@ -1879,7 +1930,7 @@ function loadPoolPrices() {
             .then(r => r.ok ? r.json() : null)
             .then(d => { const usd = d && d.usd != null ? parseFloat(d.usd) : null; sbPrices[key] = usd;
                 try { localStorage.setItem(lsk, usd == null ? '' : String(usd)); } catch (e) {}
-                schedulePriceRender(); })
+                schedulePriceRender(); if (typeof renderDraftAll === 'function') renderDraftAll(); })
             .catch(() => {});
     });
 }
@@ -1891,6 +1942,94 @@ function renderDeckValue() {
     sbPoolFull.forEach(c => { pv += priceOf(c) * c.q; });
     el.innerHTML = `<b style="color:#8fd29a">Deck value: $${dv.toFixed(2)}</b> <span class="hint">· pool $${pv.toFixed(2)}</span>`;
 }
+
+// ---- Booster draft (client) ---------------------------------------------------------------------------
+let draft = null;          // { pack, pick, packsTotal, cards:[grouped current pack], pool:[grouped drafted] }
+let draftPicking = false;  // true between clicking a card and the next pack arriving
+const dnorm = c => ({ n:c.n, s:c.s||'', c:c.c||'', r:c.r||'', q:c.q||1, mc:c.mc||'', v:c.v||0, land:!!c.land, t:c.t||'other' });
+window.openDraftPack = function (data) {
+    draft = { pack: data.pack||1, pick: data.pick||1, packsTotal: data.packsTotal||3,
+              cards: (data.cards||[]).map(dnorm), pool: (data.pool||[]).map(dnorm) };
+    draftPicking = false;
+    setupEl.style.display = 'none';
+    document.getElementById('sealedBuilder').style.display = 'none';
+    document.getElementById('draftScreen').style.display = 'flex';
+    document.body.classList.add('drafting');
+    loadPricesFor(draft.cards); loadPricesFor(draft.pool);
+    renderDraftAll();
+};
+function renderDraftAll() {
+    if (!draft || document.getElementById('draftScreen').style.display === 'none') return;
+    document.getElementById('draftPick').textContent = 'Pack ' + draft.pack + ' of ' + draft.packsTotal + ' · Pick ' + draft.pick;
+    renderDraftPack(); renderDraftStats();
+}
+function rarRank(r) { r = (r||'').toLowerCase(); return r.startsWith('m')?3:r.startsWith('r')?2:r.startsWith('u')?1:0; }
+function draftCardEl(card) {
+    const el = document.createElement('div'); el.className = 'draftCard ' + rarClass(card.r);
+    el.innerHTML = `<span class="dcName">${msg(card.n)}</span>`;
+    if (artCandidates(sbCardObj(card)).length) { const img = document.createElement('img'); setCardImage(img, sbCardObj(card)); el.insertBefore(img, el.firstChild); }
+    const pv = priceOf(card); const b = document.createElement('div'); b.className = 'matPrice'; b.textContent = pv ? '$'+pv.toFixed(2) : '$–'; el.appendChild(b);
+    el._card = sbCardObj(card);
+    el.onmouseenter = () => showCardViewer(sbCardObj(card), true);        // large preview in the side panel
+    el.oncontextmenu = (e) => { e.preventDefault(); showCardViewer(sbCardObj(card), true); }; // press & hold (tablet)
+    el.onclick = () => pickDraftCard(card);
+    return el;
+}
+function renderDraftPack() {
+    const wrap = document.getElementById('draftPack'); if (!wrap) return;
+    wrap.innerHTML = ''; wrap.classList.toggle('picking', draftPicking);
+    const list = [];
+    draft.cards.forEach(c => { for (let i=0;i<(c.q||1);i++) list.push(c); });
+    list.sort((a,b) => (rarRank(b.r)-rarRank(a.r)) || (a.v-b.v) || (a.n>b.n?1:-1));
+    list.forEach(c => wrap.appendChild(draftCardEl(c)));
+}
+function pickDraftCard(card) {
+    if (draftPicking) return; draftPicking = true;
+    const k = sbKey(card); const d = draft.pool.find(c => sbKey(c)===k);   // optimistic: update stats now
+    if (d) d.q++; else draft.pool.push(Object.assign({}, card, { q:1 }));
+    renderDraftPack(); renderDraftStats();
+    send('draftPick', undefined, { n: card.n, s: card.s, c: card.c });
+}
+function draftPips(pool) { const p = { W:0,U:0,B:0,R:0,G:0 };
+    pool.forEach(c => { if (c.land) return; (String(c.mc||'').match(/[WUBRG]/g)||[]).forEach(s => { if (p[s]!=null) p[s]+=c.q; }); }); return p; }
+function renderDraftStats() {
+    const el = document.getElementById('draftStats'); if (!el || !draft) return;
+    const pool = draft.pool, total = pool.reduce((a,c)=>a+c.q,0);
+    let val = 0; pool.forEach(c => val += priceOf(c) * c.q);
+    const pips = draftPips(pool), cTot = pips.W+pips.U+pips.B+pips.R+pips.G;
+    const cdef = [['W','#e9e3c0'],['U','#5aa0e0'],['B','#9a8ca8'],['R','#e06a63'],['G','#5aa86a']];
+    const colorsHtml = cdef.map(([kk,col]) => { const n = pips[kk], pct = cTot?Math.round(n/cTot*100):0;
+        return `<div class="sbColorRow"><span class="sbColorPip" style="background:${col}"></span>`
+            + `<span class="sbColorBar"><i style="width:${pct}%;background:${col}"></i></span>`
+            + `<span class="sbColorN">${n?n+' · '+pct+'%':'—'}</span></div>`; }).join('');
+    const buckets = [0,0,0,0,0,0,0,0]; pool.forEach(c => { if (c.land) return; buckets[Math.min(7,Math.max(0,c.v|0))] += c.q; });
+    const cmax = Math.max(1, ...buckets);
+    const curveHtml = '<div style="display:flex;gap:3px;align-items:flex-end;height:44px;margin-top:2px">'
+        + buckets.map((n,i) => `<div style="flex:1;display:flex;flex-direction:column;align-items:center">`
+            + `<span style="font-size:8px;color:#8fd29a;height:10px">${n||''}</span>`
+            + `<i style="width:100%;background:#4a7ba8;border-radius:2px 2px 0 0;min-height:2px;height:${Math.round(n/cmax*32)}px;display:block"></i>`
+            + `<span style="font-size:8px;color:#8090a0">${i===7?'7+':i}</span></div>`).join('') + '</div>';
+    const typeOrder = [['creature','Creatures'],['instant','Instants'],['sorcery','Sorceries'],['artifact','Artifacts'],
+        ['enchantment','Enchantments'],['planeswalker','Planeswalkers'],['land','Lands'],['other','Other']];
+    const tc = {}; pool.forEach(c => { const t = c.land?'land':(c.t||'other'); tc[t] = (tc[t]||0)+c.q; });
+    const typesHtml = typeOrder.filter(([k]) => tc[k]).map(([k,label]) => `<div class="dsRow"><span>${label}</span><span>${tc[k]}</span></div>`).join('') || '<span class="hint">—</span>';
+    const rr = { m:0,r:0,u:0,c:0 }; pool.forEach(c => { rr[rarKey(c.r)] += c.q; });
+    const rarHtml = `<div class="dsRow"><span style="color:#f0954a">Mythic</span><span>${rr.m}</span></div>`
+        + `<div class="dsRow"><span style="color:#e6cf6a">Rare</span><span>${rr.r}</span></div>`
+        + `<div class="dsRow"><span style="color:#b9c6d4">Uncommon</span><span>${rr.u}</span></div>`
+        + `<div class="dsRow"><span>Common</span><span>${rr.c}</span></div>`;
+    el.innerHTML = `<div style="font-weight:700">Drafted: ${total} card${total===1?'':'s'}</div>`
+        + `<div class="dsRow"><span>Value</span><span style="color:#8fd29a">$${val.toFixed(2)}</span></div>`
+        + `<div class="dsHead">Colors (pips)</div>${colorsHtml}`
+        + `<div class="dsHead">Mana curve</div>${curveHtml}`
+        + `<div class="dsHead">Types</div>${typesHtml}`
+        + `<div class="dsHead">Rarity</div>${rarHtml}`;
+}
+document.getElementById('draftQuit').onclick = () => {
+    if (!confirm('Leave the draft? Your picks will be discarded.')) return;
+    draft = null; document.body.classList.remove('drafting');
+    document.getElementById('draftScreen').style.display = 'none'; showSetup();
+};
 // fill basic lands to reach 40, distributed by the coloured pips of the non-land cards in the deck
 function autoFillBasics() {
     const need = Math.max(0, 40 - sbDeck.reduce((a,c)=>a+c.q,0));
@@ -3833,6 +3972,7 @@ function handle(method, data) {
         case 'SEALED_SETS': fillSealedSets(data && data.sets); break;
         case 'SEALED_POOL': openSealedBuilder(data); break;
         case 'SEALED_AUTOBUILD': applyCompleteBuild(data); break;
+        case 'DRAFT_PACK': openDraftPack(data); break;
         case 'GATEWAY_RECONNECTED':
             setupEl.style.display = 'none'; hideBanner(); setGameActive(true);
             log('Reconnected to your game'); setPrompt('Reconnected — resuming…'); break;
