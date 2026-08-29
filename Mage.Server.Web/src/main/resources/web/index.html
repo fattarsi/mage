@@ -471,35 +471,61 @@
         .matCard.dragging { opacity: 1; box-shadow: 0 12px 28px #000d; transform: scale(1.04); }
         .matCard .matQ { position: absolute; top: 2px; right: 3px; z-index: 2; background: #2e6a40; color: #fff;
             border-radius: 9px; font-size: 10px; font-weight: 800; padding: 0 5px; }
-        .matCard .matPrice, .draftCard .matPrice { position: absolute; top: 2px; left: 2px; z-index: 2; background: #14532d; color: #c9f5d0;
+        .matCard .matPrice, .dCard .matPrice { position: absolute; top: 2px; left: 2px; z-index: 2; background: #14532d; color: #c9f5d0;
             border-radius: 6px; font-size: 9px; font-weight: 700; padding: 0 4px; }
-        /* booster draft screen */
-        #draftScreen { position: fixed; left: 0; top: 44px; right: var(--sidecol-w); bottom: 0; z-index: 46;
+        /* booster draft — three columns (left = pack, middle = preview, right = drafted pool); full-width */
+        #draftScreen { position: fixed; left: 0; top: 44px; right: 0; bottom: 0; z-index: 47;
             background: #0d1117; display: flex; flex-direction: column; padding: 6px 8px; gap: 6px; }
-        body.sidecol-left #draftScreen { left: var(--sidecol-w); right: 0; }
+        body.drafting #sidecol { display: none; }
         #draftBar { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; font-size: 13px; }
         #draftPick { color: #ffd166; font-weight: 700; }
-        #draftBody { display: flex; gap: 8px; flex: 1 1 auto; min-height: 0; }
-        #draftPackWrap { flex: 1 1 auto; overflow: auto; min-width: 0; }
-        #draftPack { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--draft-cw, 132px), 1fr)); gap: 8px; align-content: start; padding: 2px; }
-        #draftPack.picking { opacity: .5; pointer-events: none; }
-        #draftStats { flex: 0 0 208px; overflow: auto; background: #10161d; border: 1px solid #2b3442; border-radius: 8px; padding: 8px; font-size: 12px; color: #cbd5e2; }
-        #draftStats .dsHead { font-weight: 700; color: #9fb4c8; margin: 9px 0 3px; }
+        #draftCols { display: flex; gap: 8px; flex: 1 1 auto; min-height: 0; }
+        .draftCol { display: flex; flex-direction: column; min-width: 150px; min-height: 0; background: #10161d;
+            border: 1px solid #2b3442; border-radius: 8px; overflow: hidden; transition: flex-grow .18s ease; }
+        #draftMid { min-width: 200px; align-items: center; justify-content: center; padding: 8px; background: #0b0f15; }
+        .dColHead { font-size: 11px; font-weight: 700; color: #9fb4c8; padding: 5px 8px 2px; }
+        .dSortBar { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 6px; border-bottom: 1px solid #1c2530; }
+        .dSortBar .dSort { background: #243244; font-size: 11px; padding: 3px 8px; }
+        .dSortBar .dSort.on { background: #2f5a86; }
+        .dList { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 4px; }
+        .dList.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--dcw,90px), 1fr)); gap: 6px; align-content: start; }
+        .dList.picking { opacity: .5; pointer-events: none; }
+        .dSlider { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-top: 1px solid #1c2530; }
+        .dSlider input { flex: 1 1 auto; }
+        #draftStats { flex: 0 0 auto; overflow: auto; max-height: 42%; padding: 8px; font-size: 12px; color: #cbd5e2; border-bottom: 1px solid #1c2530; }
+        #draftStats .dsHead { font-weight: 700; color: #9fb4c8; margin: 8px 0 3px; }
         #draftStats .dsRow { display: flex; justify-content: space-between; gap: 8px; margin: 1px 0; }
-        .draftCard { position: relative; border-radius: 8px; overflow: hidden; cursor: pointer; border: 2px solid #3a4150;
-            aspect-ratio: 5 / 7; background: #232a33; box-shadow: 0 2px 8px #000a; display: flex; align-items: flex-end;
-            justify-content: center; font-size: 10px; color: #cbd5e2; text-align: center; user-select: none; }
-        .draftCard img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-        .draftCard .dcName { position: relative; z-index: 1; background: #000b; width: 100%; padding: 2px 3px;
+        /* grid cards */
+        .dCard { position: relative; border-radius: 7px; overflow: hidden; cursor: grab; border: 2px solid #3a4150;
+            aspect-ratio: 5 / 7; background: #232a33; box-shadow: 0 2px 6px #000a; display: flex; align-items: flex-end;
+            justify-content: center; font-size: 9px; color: #cbd5e2; text-align: center; user-select: none; touch-action: pan-y; }
+        .dCard img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+        .dCard .dcName { position: relative; z-index: 1; background: #000b; width: 100%; padding: 1px 3px;
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        .draftCard:hover { transform: translateY(-3px); box-shadow: 0 10px 22px #000d; border-color: #6a86b8; }
-        .draftCard.r-mythic { border-color: #c8641e; } .draftCard.r-rare { border-color: #b7982e; }
-        .draftCard.r-uncommon { border-color: #8794a4; }
-        /* two-tap pick: first tap highlights + previews, second tap on the same card confirms */
-        .draftCard.sel { border-color: #ffd166 !important; box-shadow: 0 0 0 3px #ffd16699, 0 10px 24px #000d; transform: translateY(-3px); }
-        .draftCard .dcConfirm { display: none; position: absolute; top: 4px; left: 50%; transform: translateX(-50%); z-index: 3;
-            background: #ffd166; color: #0d1117; font-size: 9px; font-weight: 800; padding: 1px 7px; border-radius: 9px; white-space: nowrap; }
-        .draftCard.sel .dcConfirm { display: block; }
+        .dCard.r-mythic { border-color: #c8641e; } .dCard.r-rare { border-color: #b7982e; } .dCard.r-uncommon { border-color: #8794a4; }
+        .dCard.dragging { position: fixed; z-index: 99999; box-shadow: 0 12px 28px #000d; transform: scale(1.04); opacity: .95; }
+        .dCard .matQ { position: absolute; top: 2px; right: 3px; z-index: 2; background: #2e6a40; color: #fff; border-radius: 9px; font-size: 10px; font-weight: 800; padding: 0 5px; }
+        /* list / thumbnail rows */
+        .dRow { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 5px; cursor: grab;
+            border-left: 3px solid transparent; user-select: none; touch-action: pan-y; }
+        .dRow:nth-child(even) { background: #141c26; }
+        .dRow.r-mythic { border-left-color: #c8641e; } .dRow.r-rare { border-left-color: #b7982e; } .dRow.r-uncommon { border-left-color: #8794a4; }
+        .dRow .dThumb { flex: 0 0 auto; width: calc(var(--dth,0px) * .72); height: var(--dth,0px); border-radius: 3px; overflow: hidden; background: #232a33; }
+        .dRow .dThumb img { width: 100%; height: 100%; object-fit: cover; }
+        .dRow .dMana { flex: 0 0 auto; display: flex; gap: 1px; }
+        .dRow .dRowName { flex: 1 1 auto; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .dRow .dRowName .dQty { color: #8fd29a; font-weight: 700; }
+        .dRow .dRowPrice { flex: 0 0 auto; font-size: 10px; color: #8fd29a; }
+        .dRow.willpick { background: #2e6a40 !important; }
+        /* highlight the previewed card, and its duplicate on the other side */
+        .dCard.previewing, .dRow.previewing { outline: 2px solid #ffd166; outline-offset: -2px; background: #2a2c17; }
+        .dCard.dup, .dRow.dup { outline: 2px solid #38b2c4; outline-offset: -2px; }
+        /* middle preview */
+        #draftPreview { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 100%; max-height: 100%; }
+        #draftPreview img { max-width: 100%; max-height: 62vh; border-radius: 12px; box-shadow: 0 10px 30px #000c; object-fit: contain; }
+        #draftPreview .dpName { font-size: 15px; font-weight: 700; color: #e7eef7; text-align: center; }
+        #draftPreview .dpMeta { font-size: 12px; color: #9fb4c8; text-align: center; }
+        #draftPreview .dpEmpty { color: #667; font-size: 13px; }
         .dragGhost { position: fixed; z-index: 9997; pointer-events: none; border-radius: 6px; overflow: hidden;
             box-shadow: 0 10px 26px #000d; border: 1px solid #5a6b86; }
         .dragGhost img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -853,18 +879,42 @@
         <div id="sbTray"></div>
     </div>
 </div>
-<!-- booster draft: pick a card from the current pack (pass & repeat); drafted pool + live stats on the right -->
+<!-- booster draft: three columns — left = the pack (drag a card to the middle to draft), middle = preview,
+     right = your drafted pool + stats. Each side sorts + a density slider (list ↔ card previews). -->
 <div id="draftScreen" style="display:none">
     <div id="draftBar">
         <b style="color:#cde">🃏 Booster Draft</b>
         <span id="draftPick" class="hint"></span>
         <span style="flex:1"></span>
-        <span class="hint">tap a card to draft it · press &amp; hold to preview</span>
+        <span class="hint">drag a card to the middle to draft it · tap to preview</span>
         <button id="draftQuit" class="alt" title="Leave the draft">✕ Quit</button>
     </div>
-    <div id="draftBody">
-        <div id="draftPackWrap"><div id="draftPack"></div></div>
-        <div id="draftStats"></div>
+    <div id="draftCols">
+        <div class="draftCol" id="draftLeft">
+            <div class="dColHead">Pack</div>
+            <div class="dSortBar" data-side="left">
+                <button class="dSort" data-sort="color">Color</button>
+                <button class="dSort on" data-sort="mana">Mana</button>
+                <button class="dSort" data-sort="type">Type</button>
+                <button class="dSort" data-sort="rarity">Rarity</button>
+                <button class="dSort" data-sort="price">Price</button>
+            </div>
+            <div class="dList" id="dListLeft"></div>
+            <div class="dSlider"><span class="hint">list</span><input type="range" min="0" max="100" id="dDensLeft"><span class="hint">cards</span></div>
+        </div>
+        <div class="draftCol" id="draftMid"><div id="draftPreview"></div></div>
+        <div class="draftCol" id="draftRight">
+            <div id="draftStats"></div>
+            <div class="dSortBar" data-side="right">
+                <button class="dSort" data-sort="color">Color</button>
+                <button class="dSort on" data-sort="mana">Mana</button>
+                <button class="dSort" data-sort="type">Type</button>
+                <button class="dSort" data-sort="rarity">Rarity</button>
+                <button class="dSort" data-sort="price">Price</button>
+            </div>
+            <div class="dList" id="dListRight"></div>
+            <div class="dSlider"><span class="hint">list</span><input type="range" min="0" max="100" id="dDensRight"><span class="hint">cards</span></div>
+        </div>
     </div>
 </div>
 <div id="matMenu" style="display:none"></div>
@@ -1951,15 +2001,18 @@ function renderDeckValue() {
     el.innerHTML = `<b style="color:#8fd29a">Deck value: $${dv.toFixed(2)}</b> <span class="hint">· pool $${pv.toFixed(2)}</span>`;
 }
 
-// ---- Booster draft (client) ---------------------------------------------------------------------------
-let draft = null;          // { pack, pick, packsTotal, cards:[grouped current pack], pool:[grouped drafted] }
-let draftPicking = false;  // true between clicking a card and the next pack arriving
-let draftSelectedKey = null; // first tap highlights a card; a second tap on it confirms the pick
+// ---- Booster draft (client): three columns — pack (drag to middle to pick) · preview · drafted pool -----
+let draft = null;          // { pack, pick, packsTotal, cards:[grouped pack], pool:[grouped drafted] }
+let draftPicking = false;  // true between picking a card and the next pack arriving
+let draftSort = { left: 'mana', right: 'mana' };
+let draftDens = { left: +(localStorage.getItem('dDensL')) || 62, right: +(localStorage.getItem('dDensR')) || 28 };
+let draftActive = 'left';  // which column is expanded (last interacted)
+let draftPreview = null;   // { name, side, card } currently shown in the middle
 const dnorm = c => ({ n:c.n, s:c.s||'', c:c.c||'', r:c.r||'', q:c.q||1, mc:c.mc||'', v:c.v||0, land:!!c.land, t:c.t||'other' });
 window.openDraftPack = function (data) {
     draft = { pack: data.pack||1, pick: data.pick||1, packsTotal: data.packsTotal||3,
               cards: (data.cards||[]).map(dnorm), pool: (data.pool||[]).map(dnorm) };
-    draftPicking = false; draftSelectedKey = null;
+    draftPicking = false;
     setupEl.style.display = 'none';
     document.getElementById('sealedBuilder').style.display = 'none';
     document.getElementById('draftScreen').style.display = 'flex';
@@ -1970,46 +2023,152 @@ window.openDraftPack = function (data) {
 function renderDraftAll() {
     if (!draft || document.getElementById('draftScreen').style.display === 'none') return;
     document.getElementById('draftPick').textContent = 'Pack ' + draft.pack + ' of ' + draft.packsTotal + ' · Pick ' + draft.pick;
-    renderDraftPack(); renderDraftStats();
+    renderDraftColumn('left'); renderDraftColumn('right'); renderDraftStats();
+    updateDraftWidths();
+    renderDraftPreview(draftPreview ? draftPreview.card : null);
+    applyDraftHighlights();
 }
+// density slider → view mode + sizes
+function densMode(d) { return d < 20 ? 'list' : d < 46 ? 'rows' : 'grid'; }
+function gridW(d) { return Math.round(56 + Math.max(0, d - 46) * 1.3); }        // grid card min-width
+function rowThumbH(d) { return Math.round(20 + Math.max(0, d - 20) * 1.3); }     // thumbnail-row image height
 function rarRank(r) { r = (r||'').toLowerCase(); return r.startsWith('m')?3:r.startsWith('r')?2:r.startsWith('u')?1:0; }
-function draftCardEl(card) {
-    const el = document.createElement('div'); el.className = 'draftCard ' + rarClass(card.r);
-    el.innerHTML = `<span class="dcName">${msg(card.n)}</span><div class="dcConfirm">tap again to pick ✓</div>`;
-    if (artCandidates(sbCardObj(card)).length) { const img = document.createElement('img'); setCardImage(img, sbCardObj(card)); el.insertBefore(img, el.firstChild); }
-    const pv = priceOf(card); const b = document.createElement('div'); b.className = 'matPrice'; b.textContent = pv ? '$'+pv.toFixed(2) : '$–'; el.appendChild(b);
-    el._card = sbCardObj(card);
-    el.onmouseenter = () => showCardViewer(sbCardObj(card), true);        // large preview in the side panel (desktop)
-    el.oncontextmenu = (e) => { e.preventDefault(); showCardViewer(sbCardObj(card), true); };
-    el.onclick = () => selectDraftCard(card, el);
+function colorRank(c) { if (c.land) return 7; const s = new Set(String(c.mc||'').match(/[WUBRG]/g)||[]);
+    if (!s.size) return 6; if (s.size > 1) return 5; return { W:0,U:1,B:2,R:3,G:4 }[[...s][0]]; }
+function sortCards(cards, mode) {
+    const byName = (a,b) => a.n>b.n?1:-1, byV = (a,b) => (a.v-b.v) || byName(a,b);
+    const arr = cards.slice();
+    if (mode === 'price') arr.sort((a,b) => (priceOf(b)-priceOf(a)) || byV(a,b));
+    else if (mode === 'rarity') arr.sort((a,b) => (rarRank(b.r)-rarRank(a.r)) || byV(a,b));
+    else if (mode === 'color') arr.sort((a,b) => (colorRank(a)-colorRank(b)) || byV(a,b));
+    else if (mode === 'type') { const to = {creature:0,planeswalker:1,instant:2,sorcery:3,artifact:4,enchantment:5,land:6,other:7};
+        const tk = c => to[c.land?'land':(c.t||'other')] ?? 7;
+        arr.sort((a,b) => (tk(a)-tk(b)) || byV(a,b)); }
+    else arr.sort(byV); // mana
+    return arr;
+}
+function renderDraftColumn(side) {
+    const listEl = document.getElementById(side==='left'?'dListLeft':'dListRight'); if (!listEl) return;
+    const d = draftDens[side], mode = densMode(d);
+    listEl.className = 'dList ' + mode;
+    listEl.style.setProperty('--dcw', gridW(d)+'px');
+    listEl.style.setProperty('--dth', rowThumbH(d)+'px');
+    if (side==='left') listEl.classList.toggle('picking', draftPicking);
+    listEl.innerHTML = '';
+    sortCards(side==='left'?draft.cards:draft.pool, draftSort[side]).forEach(card => listEl.appendChild(draftItemEl(card, side, mode)));
+    document.querySelectorAll('.dSortBar[data-side="'+side+'"] .dSort').forEach(b => b.classList.toggle('on', b.dataset.sort===draftSort[side]));
+}
+function draftItemEl(card, side, mode) {
+    const pv = priceOf(card), obj = sbCardObj(card); let el;
+    if (mode === 'grid') {
+        el = document.createElement('div'); el.className = 'dCard ' + rarClass(card.r);
+        el.innerHTML = `<span class="dcName">${msg(card.n)}</span>`;
+        if (artCandidates(obj).length) { const img = document.createElement('img'); setCardImage(img, obj); el.insertBefore(img, el.firstChild); }
+        const b = document.createElement('div'); b.className = 'matPrice'; b.textContent = pv ? '$'+pv.toFixed(2) : '$–'; el.appendChild(b);
+        if (card.q > 1) { const q = document.createElement('div'); q.className = 'matQ'; q.textContent = '×'+card.q; el.appendChild(q); }
+    } else {
+        el = document.createElement('div'); el.className = 'dRow ' + rarClass(card.r);
+        el.innerHTML = (mode==='rows'?'<span class="dThumb"></span>':'')
+            + `<span class="dMana">${card.mc?manaPips(card.mc):''}</span>`
+            + `<span class="dRowName">${msg(card.n)}${card.q>1?' <span class="dQty">×'+card.q+'</span>':''}</span>`
+            + `<span class="dRowPrice">${pv?'$'+pv.toFixed(2):''}</span>`;
+        if (mode==='rows') { const t = el.querySelector('.dThumb'); if (t && artCandidates(obj).length) { const img = document.createElement('img'); setCardImage(img, obj); t.appendChild(img); } }
+    }
+    el.dataset.name = card.n; el._card = obj;
+    if (side === 'left') attachLeftItem(el, card); else el.onclick = () => previewDraft(card, 'right');
     return el;
 }
-// First tap: highlight the card + show a big preview. Second tap on the SAME card: confirm the pick.
-function selectDraftCard(card, el) {
-    if (draftPicking) return;
-    const key = sbKey(card);
-    if (draftSelectedKey === key) { pickDraftCard(card); return; } // second tap → pick
-    draftSelectedKey = key;
-    document.querySelectorAll('#draftPack .draftCard.sel').forEach(x => x.classList.remove('sel'));
-    el.classList.add('sel');
-    showCardViewer(sbCardObj(card), true);
+function overMid(x, y) { const r = document.getElementById('draftMid').getBoundingClientRect(); return x>=r.left && x<=r.right && y>=r.top && y<=r.bottom; }
+// Left column items: tap = preview; drag toward the middle (grid) or swipe right (rows/list) = draft the card.
+function attachLeftItem(el, card) {
+    el.addEventListener('pointerdown', e => {
+        if (draftPicking) return;
+        const startX = e.clientX, startY = e.clientY, mode = densMode(draftDens.left);
+        const listEl = document.getElementById('dListLeft'), mid = document.getElementById('draftMid');
+        const thr = mode==='grid' ? 0 : Math.min(150, listEl.clientWidth * 0.4);
+        let dragging = false, aborted = false;
+        try { el.setPointerCapture(e.pointerId); } catch (_) {}
+        const onMove = ev => {
+            if (aborted) return;
+            const dx = ev.clientX-startX, dy = ev.clientY-startY;
+            if (!dragging) {
+                if (Math.abs(dx)<7 && Math.abs(dy)<7) return;
+                if (Math.abs(dy) > Math.abs(dx)*1.4) { aborted = true; return; } // vertical → let the list scroll
+                dragging = true;
+                if (mode==='grid') { const r = el.getBoundingClientRect(); el._ox = ev.clientX-r.left; el._oy = ev.clientY-r.top;
+                    el.style.width = r.width+'px'; el.style.height = r.height+'px'; el.style.left = r.left+'px'; el.style.top = r.top+'px'; }
+                el.classList.add('dragging');
+            }
+            ev.preventDefault();
+            if (mode==='grid') { el.style.left=(ev.clientX-el._ox)+'px'; el.style.top=(ev.clientY-el._oy)+'px'; mid.classList.toggle('over', overMid(ev.clientX,ev.clientY)); }
+            else { const t = Math.max(0, dx); el.style.transform = 'translateX('+t+'px)'; el.classList.toggle('willpick', t>=thr); }
+        };
+        const onUp = ev => {
+            cleanup(); mid.classList.remove('over');
+            if (!dragging) { previewDraft(card, 'left'); return; }        // a tap
+            const picked = mode==='grid' ? overMid(ev.clientX,ev.clientY) : ((ev.clientX-startX) >= thr);
+            if (picked) doDraftPick(card); else renderDraftColumn('left'); // snap back
+        };
+        const onCancel = () => { cleanup(); if (dragging) renderDraftColumn('left'); }; // scroll took over
+        const cleanup = () => { document.removeEventListener('pointermove',onMove,true);
+            document.removeEventListener('pointerup',onUp,true); document.removeEventListener('pointercancel',onCancel,true); };
+        document.addEventListener('pointermove', onMove, true);
+        document.addEventListener('pointerup', onUp, true);
+        document.addEventListener('pointercancel', onCancel, true);
+    });
 }
-function renderDraftPack() {
-    const wrap = document.getElementById('draftPack'); if (!wrap) return;
-    wrap.innerHTML = ''; wrap.classList.toggle('picking', draftPicking);
-    const list = [];
-    draft.cards.forEach(c => { for (let i=0;i<(c.q||1);i++) list.push(c); });
-    list.sort((a,b) => (rarRank(b.r)-rarRank(a.r)) || (a.v-b.v) || (a.n>b.n?1:-1));
-    list.forEach(c => { const el = draftCardEl(c); // keep the highlight across re-renders (e.g. price arrivals)
-        if (draftSelectedKey && sbKey(c) === draftSelectedKey) el.classList.add('sel'); wrap.appendChild(el); });
+function previewDraft(card, side) {
+    draftPreview = { name: card.n, side, card };
+    if (draftActive !== side) { draftActive = side; updateDraftWidths(); }
+    renderDraftPreview(card); applyDraftHighlights();
 }
-function pickDraftCard(card) {
-    if (draftPicking) return; draftPicking = true; draftSelectedKey = null;
-    const k = sbKey(card); const d = draft.pool.find(c => sbKey(c)===k);   // optimistic: update stats now
+function renderDraftPreview(card) {
+    const el = document.getElementById('draftPreview'); if (!el) return;
+    if (!card) { el.innerHTML = '<span class="dpEmpty">Tap a card to preview it here.</span>'; return; }
+    const obj = sbCardObj(card), pv = priceOf(card);
+    const typeLbl = card.land ? 'Land' : (card.t ? card.t.charAt(0).toUpperCase()+card.t.slice(1) : '');
+    el.innerHTML = (artCandidates(obj).length ? '<img alt="">' : '')
+        + `<div class="dpName">${msg(card.n)} ${card.mc?manaPips(card.mc):''}</div>`
+        + `<div class="dpMeta">${typeLbl}${card.r?' · '+esc(card.r):''}${pv?' · $'+pv.toFixed(2):''}</div>`;
+    const img = el.querySelector('img'); if (img) setCardImage(img, obj);
+}
+// highlight the previewed card and, on the OTHER column, any copy you already have (a duplicate)
+function applyDraftHighlights() {
+    const name = draftPreview && draftPreview.name, pside = draftPreview && draftPreview.side;
+    ['left','right'].forEach(side => {
+        const listEl = document.getElementById(side==='left'?'dListLeft':'dListRight'); if (!listEl) return;
+        listEl.querySelectorAll('[data-name]').forEach(el => {
+            const match = name && el.dataset.name === name;
+            el.classList.toggle('previewing', !!match && side===pside);
+            el.classList.toggle('dup', !!match && side!==pside);
+        });
+    });
+}
+function colFlex(side) { let f = densMode(draftDens[side])==='grid' ? 1.5 : 1.0; if (draftActive===side) f += 0.9; return f + ' 1 0'; }
+function updateDraftWidths() {
+    document.getElementById('draftLeft').style.flex = colFlex('left');
+    document.getElementById('draftRight').style.flex = colFlex('right');
+    document.getElementById('draftMid').style.flex = '1.25 1 0';
+}
+function doDraftPick(card) {
+    if (draftPicking) return; draftPicking = true;
+    const k = sbKey(card); const d = draft.pool.find(c => sbKey(c)===k);   // optimistic: update the pool now
     if (d) d.q++; else draft.pool.push(Object.assign({}, card, { q:1 }));
-    renderDraftPack(); renderDraftStats();
+    draftPreview = { name: card.n, side: 'right', card };
+    renderDraftColumn('left'); renderDraftColumn('right'); renderDraftStats();
+    renderDraftPreview(card); applyDraftHighlights();
     send('draftPick', undefined, { n: card.n, s: card.s, c: card.c });
 }
+// sort buttons + density sliders (wired once; the elements are static)
+function wireDraftControls() {
+    document.querySelectorAll('.dSortBar').forEach(bar => { const side = bar.dataset.side;
+        bar.querySelectorAll('.dSort').forEach(b => b.onclick = () => { draftSort[side] = b.dataset.sort; draftActive = side; renderDraftColumn(side); updateDraftWidths(); }); });
+    const dl = document.getElementById('dDensLeft'), dr = document.getElementById('dDensRight');
+    dl.value = draftDens.left; dr.value = draftDens.right;
+    dl.oninput = () => { draftDens.left = +dl.value; localStorage.setItem('dDensL', dl.value); draftActive='left'; renderDraftColumn('left'); updateDraftWidths(); };
+    dr.oninput = () => { draftDens.right = +dr.value; localStorage.setItem('dDensR', dr.value); draftActive='right'; renderDraftColumn('right'); updateDraftWidths(); };
+}
+wireDraftControls();
 function draftPips(pool) { const p = { W:0,U:0,B:0,R:0,G:0 };
     pool.forEach(c => { if (c.land) return; (String(c.mc||'').match(/[WUBRG]/g)||[]).forEach(s => { if (p[s]!=null) p[s]+=c.q; }); }); return p; }
 function renderDraftStats() {
