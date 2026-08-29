@@ -504,6 +504,8 @@
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .dCard.r-mythic { border-color: #c8641e; } .dCard.r-rare { border-color: #b7982e; } .dCard.r-uncommon { border-color: #8794a4; }
         .dCard.dragging { position: fixed; z-index: 99999; box-shadow: 0 12px 28px #000d; transform: scale(1.04); opacity: .95; }
+        .dCard.dragging.willpick { box-shadow: 0 0 0 3px #2e6a40, 0 12px 28px #000d; }
+        #draftMid.over { outline: 3px dashed #2e6a40; outline-offset: -6px; }
         .dCard .matQ { position: absolute; top: 2px; right: 3px; z-index: 2; background: #2e6a40; color: #fff; border-radius: 9px; font-size: 10px; font-weight: 800; padding: 0 5px; }
         /* list / thumbnail rows */
         .dRow { display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 5px; cursor: grab;
@@ -2088,26 +2090,33 @@ function attachLeftItem(el, card) {
         const thr = mode==='grid' ? 0 : Math.min(150, listEl.clientWidth * 0.4);
         let dragging = false, aborted = false;
         try { el.setPointerCapture(e.pointerId); } catch (_) {}
+        // "would this release draft the card?" — forgiving: a decent rightward drag OR reaching the middle column.
+        const wouldPick = curX => {
+            const dx = curX - startX;
+            if (mode === 'grid') { const midLeft = document.getElementById('draftMid').getBoundingClientRect().left;
+                return curX >= midLeft - 8 || dx >= Math.min(200, listEl.clientWidth * 0.5); }
+            return dx >= thr;
+        };
         const onMove = ev => {
             if (aborted) return;
             const dx = ev.clientX-startX, dy = ev.clientY-startY;
             if (!dragging) {
-                if (Math.abs(dx)<7 && Math.abs(dy)<7) return;
-                if (Math.abs(dy) > Math.abs(dx)*1.4) { aborted = true; return; } // vertical → let the list scroll
+                if (Math.abs(dx)<6 && Math.abs(dy)<6) return;
+                if (Math.abs(dy) > Math.abs(dx)*1.6) { aborted = true; return; } // clearly vertical → let the list scroll
                 dragging = true;
                 if (mode==='grid') { const r = el.getBoundingClientRect(); el._ox = ev.clientX-r.left; el._oy = ev.clientY-r.top;
                     el.style.width = r.width+'px'; el.style.height = r.height+'px'; el.style.left = r.left+'px'; el.style.top = r.top+'px'; }
                 el.classList.add('dragging');
             }
             ev.preventDefault();
-            if (mode==='grid') { el.style.left=(ev.clientX-el._ox)+'px'; el.style.top=(ev.clientY-el._oy)+'px'; mid.classList.toggle('over', overMid(ev.clientX,ev.clientY)); }
-            else { const t = Math.max(0, dx); el.style.transform = 'translateX('+t+'px)'; el.classList.toggle('willpick', t>=thr); }
+            const pick = wouldPick(ev.clientX);
+            if (mode==='grid') { el.style.left=(ev.clientX-el._ox)+'px'; el.style.top=(ev.clientY-el._oy)+'px'; mid.classList.toggle('over', pick); el.classList.toggle('willpick', pick); }
+            else { el.style.transform = 'translateX('+Math.max(0, dx)+'px)'; el.classList.toggle('willpick', pick); }
         };
         const onUp = ev => {
             cleanup(); mid.classList.remove('over');
             if (!dragging) { previewDraft(card, 'left'); return; }        // a tap
-            const picked = mode==='grid' ? overMid(ev.clientX,ev.clientY) : ((ev.clientX-startX) >= thr);
-            if (picked) doDraftPick(card); else renderDraftColumn('left'); // snap back
+            if (wouldPick(ev.clientX)) doDraftPick(card); else renderDraftColumn('left'); // snap back
         };
         const onCancel = () => { cleanup(); if (dragging) renderDraftColumn('left'); }; // scroll took over
         const cleanup = () => { document.removeEventListener('pointermove',onMove,true);
@@ -2144,7 +2153,10 @@ function applyDraftHighlights() {
         });
     });
 }
-function colFlex(side) { let f = densMode(draftDens[side])==='grid' ? 1.5 : 1.0; if (draftActive===side) f += 0.9; return f + ' 1 0'; }
+function colFlex(side) { const grid = densMode(draftDens[side])==='grid';
+    let f = grid ? 1.4 : 0.85;                       // list/row columns are narrower than card grids
+    if (draftActive===side) f += grid ? 0.55 : 0.35; // active column widens (~40% less than before)
+    return f + ' 1 0'; }
 function updateDraftWidths() {
     document.getElementById('draftLeft').style.flex = colFlex('left');
     document.getElementById('draftRight').style.flex = colFlex('right');
