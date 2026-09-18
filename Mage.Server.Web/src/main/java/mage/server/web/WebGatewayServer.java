@@ -1254,6 +1254,10 @@ public class WebGatewayServer {
                         if (msg.has("autoOrderTriggers")) {
                             u.getUserData().setAutoOrderTrigger(msg.get("autoOrderTriggers").getAsBoolean());
                         }
+                        logger.info("web.diag setSkips user=" + u.getName() + "/" + userId // TEMP: priority-skip diagnosis
+                                + " stepMode=" + (msg.has("stepMode") ? msg.get("stepMode").getAsString() : "?")
+                                + " oppMain2=" + sk.getOpponentTurn().isMain2() + " oppEnd=" + sk.getOpponentTurn().isEndOfTurn()
+                                + " oppBeforeCombat=" + sk.getOpponentTurn().isBeforeCombat());
                     });
                 }
             } catch (Exception e) {
@@ -1270,6 +1274,7 @@ public class WebGatewayServer {
         try {
             switch (action) {
                 case "playerBoolean":
+                    logger.info("web.diag playerBoolean=" + msg.get("value").getAsBoolean() + " game=" + gameId); // TEMP: priority-skip diagnosis
                     server.sendPlayerBoolean(gameId, sessionId, msg.get("value").getAsBoolean());
                     break;
                 case "playerUUID":
@@ -1290,6 +1295,7 @@ public class WebGatewayServer {
                     // some actions carry an integer payload (e.g. ROLLBACK_TURNS = how many turns back;
                     // 0 = start of the current turn). Everything else passes null.
                     Object data = msg.has("amount") ? (Object) Integer.valueOf(msg.get("amount").getAsInt()) : null;
+                    logger.info("web.diag playerAction=" + pa + " game=" + gameId); // TEMP: priority-skip diagnosis
                     server.sendPlayerAction(pa, gameId, sessionId, data);
                     break;
                 }

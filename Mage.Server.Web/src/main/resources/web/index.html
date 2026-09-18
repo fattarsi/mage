@@ -1497,6 +1497,7 @@ function stickyReached(gv) {
     return true;
 }
 function trySticky(method, gv) {
+    if (holdPriority) return; // holding priority = stop at every step; never auto-continue a skip
     if (!stickySkip || method !== 'GAME_SELECT' || !gv) return;
     // HARD STOP: a breakpoint always wins over any armed skip (unless we just armed on this very frame).
     if (atBreakpoint(gv) && !stickyBypassBP) {
@@ -1558,6 +1559,10 @@ holdBtn.onclick = () => {
     if (holdPriority) {
         holdPrevStepMode = stepModeSel.value;                 // remember, so we can restore on toggle-off
         if (stepModeSel.value !== 'all') { stepModeSel.value = 'all'; sendSkips(); } // stop at every step
+        // Kill any skip that's running so it can't keep auto-passing you past steps: disarm the client-side
+        // sticky skip / run-to-breakpoint AND cancel the server-side skip flags (passedTurn/passedAllTurns/…).
+        stickySkip = null; advancing = false; stickyBypassBP = false; updateSkipUI(); updateAdvanceBtn();
+        act('PASS_PRIORITY_CANCEL_ALL_ACTIONS');
         if (priorityActive) send('playerAction', 'HOLD_PRIORITY');
     } else {
         // restore the prior step mode, but don't clobber a manual change made while hold was on
@@ -3259,6 +3264,7 @@ const ADVANCE_STOP = new Set(['GAME_TARGET','GAME_ASK','GAME_PLAY_MANA','GAME_PL
     'GAME_CHOOSE_ABILITY','GAME_CHOOSE_PILE','GAME_GET_AMOUNT','GAME_GET_MULTI_AMOUNT','GAME_OVER','END_GAME_INFO']);
 function stopAdvance() { advancing = false; updateAdvanceBtn(); }
 function tryAdvance(method, gv) {
+    if (holdPriority) return; // holding priority = stop at every step
     if (!advancing) return;
     if (ADVANCE_STOP.has(method)) { stopAdvance(); return; }   // a decision that needs you
     if (method !== 'GAME_SELECT') return;                      // GAME_UPDATE/INIT/etc. — keep advancing, wait for next
