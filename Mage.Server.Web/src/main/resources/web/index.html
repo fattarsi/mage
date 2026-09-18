@@ -3029,6 +3029,11 @@ function onSocketMessage(ev) {
             playDissolve(leaving);     // burn away the ghosts of destroyed/bounced permanents
             playAttacks(gv);           // swing attackers at combat-damage time (coincides with life loss)
         }
+        // TEMP diagnostic: on each priority frame, report the step + skip state so we can see exactly where
+        // (and whether) the engine hands us priority — and what's auto-passing when it doesn't.
+        if (priorityActive && (gv || lastGameView)) { const g = gv || lastGameView; const me = (g.players||[]).find(p => p.controlled);
+            send('diag', undefined, { step: g.step, turn: g.turn, mt: !!(me && g.activePlayerId===me.playerId),
+                hold: holdPriority, sticky: stickySkip ? stickySkip.action : '', adv: advancing, stack: g.stack ? Object.keys(g.stack).length : 0 }); }
         // Some decision frames (e.g. the London mulligan "put a card on the bottom" target, or any
         // "choose a target" that picks from hand/battlefield) carry NO gameView but DO update the set
         // of valid targets. Re-render the last board so those targets get highlighted/clickable —

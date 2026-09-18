@@ -1116,6 +1116,16 @@ public class WebGatewayServer {
             return;
         }
 
+        if ("diag".equals(action)) { // TEMP: priority-skip diagnosis — report each priority frame's step + skip state
+            logger.info("web.diag frame step=" + (msg.has("step") && !msg.get("step").isJsonNull() ? msg.get("step").getAsString() : "?")
+                    + " turn=" + (msg.has("turn") ? msg.get("turn").getAsString() : "?")
+                    + " myTurn=" + (msg.has("mt") && msg.get("mt").getAsBoolean())
+                    + " hold=" + (msg.has("hold") && msg.get("hold").getAsBoolean())
+                    + " sticky=" + (msg.has("sticky") ? msg.get("sticky").getAsString() : "")
+                    + " adv=" + (msg.has("adv") && msg.get("adv").getAsBoolean())
+                    + " stack=" + (msg.has("stack") ? msg.get("stack").getAsString() : "?"));
+            return;
+        }
         // ---- Sealed (limited) events ---------------------------------------------------------------
         // List the sets that have real booster packs (for the sealed set picker).
         if ("sealedSets".equals(action)) {
