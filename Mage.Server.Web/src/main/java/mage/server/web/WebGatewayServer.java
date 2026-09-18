@@ -17,6 +17,7 @@ import mage.cards.decks.DeckValidatorFactory;
 import mage.constants.ManaType;
 import mage.constants.PlayerAction;
 import mage.players.net.SkipPrioritySteps;
+import mage.players.net.UserData;
 import mage.players.net.UserSkipPrioritySteps;
 import mage.interfaces.MageServer;
 import mage.server.DisconnectReason;
@@ -1241,7 +1242,13 @@ public class WebGatewayServer {
                 UUID userId = managerFactory.sessionManager().getSession(sessionId).map(s -> s.getUserId()).orElse(null);
                 if (userId != null) {
                     managerFactory.userManager().getUser(userId).ifPresent(u -> {
-                        UserSkipPrioritySteps sk = u.getUserData().getUserSkipPrioritySteps();
+                        // IMPORTANT: the web gateway never sends a setUserData, so User.userData stays null and
+                        // User.getUserData() returns a fresh THROWAWAY default view on every call — mutating it
+                        // is lost, and the game reads defaults. Capture one UserData, apply everything to it,
+                        // then setUserData(it) to PERSIST it so getUserData() returns it from here on (and the
+                        // game, which holds this same reference from table-join, honours these settings live).
+                        UserData ud = u.getUserData();
+                        UserSkipPrioritySteps sk = ud.getUserSkipPrioritySteps();
                         // These control where the F-key SKIP actions (Next turn / My next turn / …) stop.
                         if (msg.has("stopNewStack")) sk.setStopOnStackNewObjects(msg.get("stopNewStack").getAsBoolean());
                         if (msg.has("stopBlockers")) sk.setStopOnDeclareBlockersWithAnyPermanents(msg.get("stopBlockers").getAsBoolean());
@@ -1262,8 +1269,9 @@ public class WebGatewayServer {
                         // Auto-order identical triggers (same rule text + same targets) instead of making
                         // the player click through a "which goes first" dialog for interchangeable triggers.
                         if (msg.has("autoOrderTriggers")) {
-                            u.getUserData().setAutoOrderTrigger(msg.get("autoOrderTriggers").getAsBoolean());
+                            ud.setAutoOrderTrigger(msg.get("autoOrderTriggers").getAsBoolean());
                         }
+                        u.setUserData(ud); // persist (see note above) — without this, none of the settings stick
                         logger.info("web.diag setSkips user=" + u.getName() + "/" + userId // TEMP: priority-skip diagnosis
                                 + " stepMode=" + (msg.has("stepMode") ? msg.get("stepMode").getAsString() : "?")
                                 + " oppMain2=" + sk.getOpponentTurn().isMain2() + " oppEnd=" + sk.getOpponentTurn().isEndOfTurn()
