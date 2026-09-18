@@ -1543,15 +1543,29 @@ rollbackBtn.title = 'Roll the game back to the start of the previous turn (up to
 rollbackBtn.onclick = () => { if (confirm('Roll the game back to the start of the previous turn?')) send('playerAction', 'ROLLBACK_TURNS', { amount: 1 }); };
 rollbackBtn.style.display = 'none';
 skipbar.appendChild(rollbackBtn);
-// Hold priority toggle — keep priority after casting so you can double-spell / respond at instant speed.
+// Hold priority toggle. While ON it does two things so the game never runs past you:
+//   1) you STOP at every step (both turns) — so passing on an opponent's turn stops at their end step
+//      instead of skipping to your next turn (the "Get priority at → Every step" setting, forced on);
+//   2) you KEEP priority after casting, so you can stack multiple spells/responses before passing.
+// Turning it off restores your previous "Get priority at" choice (unless you changed it by hand meanwhile).
+let holdPrevStepMode = null;
 const holdBtn = document.createElement('button');
 holdBtn.id = 'holdBtn'; holdBtn.className = 'holdctl'; holdBtn.textContent = '⏸ Hold priority';
-holdBtn.title = 'Keep priority after you cast (so you can stack multiple spells/responses before passing). Toggle off, then pass, when done.';
+holdBtn.title = 'Hold at every step: you get priority at every step (both turns) so a pass never skips past a step (e.g. an opponent’s end step), AND you keep priority after casting so you can stack spells. Use the skip buttons to jump ahead; toggle off to pass normally.';
 holdBtn.onclick = () => {
     holdPriority = !holdPriority;
     holdBtn.classList.toggle('on', holdPriority);
-    if (holdPriority) { if (priorityActive) send('playerAction', 'HOLD_PRIORITY'); }
-    else send('playerAction', 'UNHOLD_PRIORITY');
+    if (holdPriority) {
+        holdPrevStepMode = stepModeSel.value;                 // remember, so we can restore on toggle-off
+        if (stepModeSel.value !== 'all') { stepModeSel.value = 'all'; sendSkips(); } // stop at every step
+        if (priorityActive) send('playerAction', 'HOLD_PRIORITY');
+    } else {
+        // restore the prior step mode, but don't clobber a manual change made while hold was on
+        if (stepModeSel.value === 'all' && holdPrevStepMode && holdPrevStepMode !== 'all') {
+            stepModeSel.value = holdPrevStepMode; sendSkips();
+        }
+        send('playerAction', 'UNHOLD_PRIORITY');
+    }
 };
 skipbar.appendChild(holdBtn);
 document.addEventListener('keydown', (e) => {
