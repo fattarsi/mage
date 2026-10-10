@@ -754,13 +754,20 @@
             <button id="modeSealed" type="button" class="modebtn">🎴 Sealed / Prerelease</button>
         </div>
         <div id="sealedSetup" style="display:none">
-            <label for="sealedSetSel">Set (real booster packs)</label>
-            <select id="sealedSetSel"><option value="">loading sets…</option></select>
+            <div id="sealedSetRow">
+                <label for="sealedSetSel">Set (real booster packs)</label>
+                <select id="sealedSetSel"><option value="">loading sets…</option></select>
+            </div>
+            <div id="cardsSetRow" style="display:none">
+                <label for="cardsSetSel">Set (any set — cards from Scryfall)</label>
+                <select id="cardsSetSel"><option value="">loading sets…</option></select>
+            </div>
             <div style="display:flex; gap:12px; align-items:center; margin-top:6px; flex-wrap:wrap;">
                 <label style="margin:0">Event:
                     <select id="sealedEventType">
                         <option value="sealed">Sealed (open 6 packs)</option>
                         <option value="draft">Booster draft (pick &amp; pass)</option>
+                        <option value="cardsdraft">Cards-only draft (any set · no play)</option>
                     </select></label>
                 <label style="margin:0">Mode:
                     <select id="sealedMode">
@@ -1842,18 +1849,33 @@ document.getElementById('newGameBtn').onclick = () => { if (readyData) send('ref
     }
     sealedModeSel.onchange = updateSealedMode; updateSealedMode();
     const eventTypeSel = document.getElementById('sealedEventType');
+    let cardsSetsRequested = false;
     function updateEventType() {
-        document.getElementById('openPacksBtn').textContent = eventTypeSel.value === 'draft' ? 'Start draft →' : 'Open 6 packs →';
+        const cards = eventTypeSel.value === 'cardsdraft';
+        document.getElementById('sealedSetRow').style.display = cards ? 'none' : '';
+        document.getElementById('cardsSetRow').style.display = cards ? '' : 'none';
+        // mode (tournament/FFA) + Bo3 only matter when you'll actually play — hide them for cards-only
+        document.getElementById('sealedMode').closest('label').style.display = cards ? 'none' : '';
+        if (cards) document.getElementById('sealedBo3Wrap').style.display = 'none';
+        document.getElementById('sealedModeHint').innerHTML = cards
+            ? 'Draft any set using cards from Scryfall — even ones XMage hasn’t implemented yet. The AI drafts in its colours. You <b>can’t play</b> the result (the cards aren’t coded), but you can build &amp; review a 40-card deck with full stats.'
+            : '';
+        if (!cards) updateSealedMode();
+        document.getElementById('openPacksBtn').textContent =
+            cards ? 'Start cards draft →' : eventTypeSel.value === 'draft' ? 'Start draft →' : 'Open 6 packs →';
+        if (cards && !cardsSetsRequested) { cardsSetsRequested = true; send('scryfallSets'); } // populate the dropdown
     }
     eventTypeSel.onchange = updateEventType; updateEventType();
     document.getElementById('openPacksBtn').onclick = () => {
-        const setCode = document.getElementById('sealedSetSel').value;
+        const cards = eventTypeSel.value === 'cardsdraft';
+        const setCode = cards ? document.getElementById('cardsSetSel').value : document.getElementById('sealedSetSel').value;
         if (!setCode) { document.getElementById('setupError').textContent = 'Pick a set first.'; document.getElementById('setupError').style.display = ''; return; }
         const players = Math.max(2, Math.min(8, parseInt(document.getElementById('sealedPlayers').value) || 2));
         const bestOf3 = document.getElementById('sealedBo3').checked;
         const mode = sealedModeSel.value;
         setupEl.style.display = 'none';
-        if (eventTypeSel.value === 'draft') { setPrompt('Starting the draft…'); send('startDraft', undefined, { setCode, players, bestOf3, mode }); }
+        if (cards) { setPrompt('Loading the set from Scryfall…'); send('startCardsDraft', undefined, { setCode, players }); }
+        else if (eventTypeSel.value === 'draft') { setPrompt('Starting the draft…'); send('startDraft', undefined, { setCode, players, bestOf3, mode }); }
         else { setPrompt('Opening packs…'); send('startSealed', undefined, { setCode, players, bestOf3, mode }); }
     };
 })();
@@ -1869,13 +1891,28 @@ window.fillSealedSets = function (sets, fromCache) {
 };
 // show the cached set list immediately on load (the server refreshes it on connect)
 try { const cs = JSON.parse(localStorage.getItem('sealedSets') || 'null'); if (cs) window.fillSealedSets(cs, true); } catch (e) {}
+// cards-only draft: the Scryfall set dropdown (any set, newest first)
+window.fillCardsSets = function (sets) {
+    const sel = document.getElementById('cardsSetSel'); if (!sel) return;
+    if (!sets || !sets.length) { sel.innerHTML = '<option value="">couldn’t load sets — try again</option>'; return; }
+    const keep = sel.value; sel.innerHTML = '';
+    sets.forEach(s => { const o = document.createElement('option'); o.value = s.code;
+        o.textContent = s.name + ' (' + String(s.code).toUpperCase() + (s.released ? ', ' + s.released.slice(0,4) : '') + ')'; sel.appendChild(o); });
+    if (keep) sel.value = keep;
+    try { localStorage.setItem('scryfallSets', JSON.stringify(sets)); } catch (e) {}
+};
+try { const cs = JSON.parse(localStorage.getItem('scryfallSets') || 'null'); if (cs) window.fillCardsSets(cs); } catch (e) {}
 
 // canonical deck-builder state: sbPoolFull = all pool cards (grouped, immutable qty); sbDeck = deck (grouped);
 // both the List view and the Playmat derive from these. Cards are {n,s,c,r,q,mc,v,land}.
 let sbPoolFull = [], sbDeck = [], sbBasics = { w:0,u:0,b:0,r:0,g:0 };
-let sbPacksRaw = [], sbView = 'mat';
+let sbPacksRaw = [], sbView = 'mat', sbNoPlay = false;
 window.openSealedBuilder = function (data) {
     const norm = c => ({ n:c.n, s:c.s||'', c:c.c||'', r:c.r||'', q:c.q||1, mc:c.mc||'', v:c.v||0, land:!!c.land, t:c.t||'other' });
+    sbNoPlay = !!(data && data.noPlay); // cards-only draft: no engine cards → build/review only, no game
+    // Play + "Complete build" (server AI-build) need implemented engine cards; hide them for cards-only.
+    document.getElementById('sbPlay').style.display = sbNoPlay ? 'none' : '';
+    document.getElementById('sbAuto').style.display = sbNoPlay ? 'none' : '';
     sbPoolFull = (data && data.pool ? data.pool : []).map(norm);
     sbPacksRaw = (data && data.packs ? data.packs : []).map(p => p.map(norm));
     sbDeck = []; sbBasics = { w:0,u:0,b:0,r:0,g:0 };
@@ -1935,7 +1972,8 @@ function renderSealedBuilder() {
     document.getElementById('sbCount').innerHTML = (total >= 40
         ? `<b style="color:#8fd29a">${total} cards</b> — ready`
         : `<b style="color:#e0a06a">${total} cards</b> — need ${40-total} more`)
-        + ` <span class="hint">· ${spells} spells · ${lands} lands</span>`;
+        + ` <span class="hint">· ${spells} spells · ${lands} lands</span>`
+        + (sbNoPlay ? `<div class="hint" style="color:#c7a; margin-top:3px">Cards-only draft — review/build your deck (these cards aren’t implemented, so there’s no game to play).</div>` : '');
     const play = document.getElementById('sbPlay'); play.disabled = total < 40; play.textContent = 'Play ▸';
     renderManaCurve();
     renderColorStats();
@@ -3029,11 +3067,6 @@ function onSocketMessage(ev) {
             playDissolve(leaving);     // burn away the ghosts of destroyed/bounced permanents
             playAttacks(gv);           // swing attackers at combat-damage time (coincides with life loss)
         }
-        // TEMP diagnostic: on each priority frame, report the step + skip state so we can see exactly where
-        // (and whether) the engine hands us priority — and what's auto-passing when it doesn't.
-        if (priorityActive && (gv || lastGameView)) { const g = gv || lastGameView; const me = (g.players||[]).find(p => p.controlled);
-            send('diag', undefined, { step: g.step, turn: g.turn, mt: !!(me && g.activePlayerId===me.playerId),
-                hold: holdPriority, sticky: stickySkip ? stickySkip.action : '', adv: advancing, stack: g.stack ? Object.keys(g.stack).length : 0 }); }
         // Some decision frames (e.g. the London mulligan "put a card on the bottom" target, or any
         // "choose a target" that picks from hand/battlefield) carry NO gameView but DO update the set
         // of valid targets. Re-render the last board so those targets get highlighted/clickable —
@@ -4186,6 +4219,7 @@ function handle(method, data) {
         case 'GATEWAY_HELLO': setPrompt('Connected.'); break;
         case 'GATEWAY_READY': sendBuffer.length = 0; prepareSetup(data); sendSkips(); send('sealedSets'); setPrompt('Ready. Click “New game” to start — or open ⚙ Settings.'); break;
         case 'SEALED_SETS': fillSealedSets(data && data.sets); break;
+        case 'SCRYFALL_SETS': fillCardsSets(data && data.sets); break;
         case 'SEALED_POOL': openSealedBuilder(data); break;
         case 'SEALED_AUTOBUILD': applyCompleteBuild(data); break;
         case 'DRAFT_PACK': openDraftPack(data); break;

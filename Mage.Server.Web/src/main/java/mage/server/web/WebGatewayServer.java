@@ -239,6 +239,25 @@ public class WebGatewayServer {
         }
     }
     private final Map<String, DraftState> draftByWs = new ConcurrentHashMap<>();
+
+    /** A cards-only draft: cards come from Scryfall METADATA (name/cost/color/rarity/type), not the engine, so
+     * a set that XMage hasn't implemented can still be drafted for practice — you just can't play the result. */
+    private static final class CardsDraftState {
+        final String setCode; final int seats;
+        final java.util.List<JsonObject> pool;               // the whole set's draftable cards (metadata)
+        java.util.List<java.util.List<JsonObject>> packs;    // current pack held by each seat
+        final java.util.List<java.util.List<JsonObject>> pools; // cards drafted so far, per seat
+        int round = 0, pick = 0;
+        CardsDraftState(String setCode, int seats, java.util.List<JsonObject> pool) {
+            this.setCode = setCode; this.seats = seats; this.pool = pool;
+            this.pools = new java.util.ArrayList<>();
+            for (int i = 0; i < seats; i++) pools.add(new java.util.ArrayList<>());
+        }
+    }
+    private final Map<String, CardsDraftState> cardsDraftByWs = new ConcurrentHashMap<>();
+    private final Map<String, java.util.List<JsonObject>> cardsSetPoolCache = new ConcurrentHashMap<>(); // set code → metadata pool
+    private volatile com.google.gson.JsonArray scryfallSetsCache = null;
+
     private final ScheduledExecutorService graceScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "web-reconnect-grace");
         t.setDaemon(true);
@@ -1117,16 +1136,6 @@ public class WebGatewayServer {
             return;
         }
 
-        if ("diag".equals(action)) { // TEMP: priority-skip diagnosis — report each priority frame's step + skip state
-            logger.info("web.diag frame step=" + (msg.has("step") && !msg.get("step").isJsonNull() ? msg.get("step").getAsString() : "?")
-                    + " turn=" + (msg.has("turn") ? msg.get("turn").getAsString() : "?")
-                    + " myTurn=" + (msg.has("mt") && msg.get("mt").getAsBoolean())
-                    + " hold=" + (msg.has("hold") && msg.get("hold").getAsBoolean())
-                    + " sticky=" + (msg.has("sticky") ? msg.get("sticky").getAsString() : "")
-                    + " adv=" + (msg.has("adv") && msg.get("adv").getAsBoolean())
-                    + " stack=" + (msg.has("stack") ? msg.get("stack").getAsString() : "?"));
-            return;
-        }
         // ---- Sealed (limited) events ---------------------------------------------------------------
         // List the sets that have real booster packs (for the sealed set picker).
         if ("sealedSets".equals(action)) {
@@ -1144,10 +1153,34 @@ public class WebGatewayServer {
             }
             return;
         }
+        // Cards-only draft: list the sets available on Scryfall (for the dropdown).
+        if ("scryfallSets".equals(action)) {
+            try {
+                com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
+                payload.add("sets", scryfallSets());
+                ctx.send(JsonCodec.encodeCallback("SCRYFALL_SETS", null, payload));
+            } catch (Exception e) {
+                logger.warn("web gateway: scryfallSets failed", e);
+            }
+            return;
+        }
+        // Cards-only draft: draft a set from Scryfall metadata (any set; can't be played afterwards).
+        if ("startCardsDraft".equals(action)) {
+            try {
+                startCardsDraft(ctx, ps, sessionId, msg);
+            } catch (Exception e) {
+                logger.warn("web gateway: startCardsDraft failed", e);
+                ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
+                        Map.of("message", "Couldn't start cards-only draft: " + e.getMessage())));
+            }
+            return;
+        }
         // Draft: the human picked a card — record it, have the AIs pick, pass the packs, send the next pack.
+        // Routes to whichever draft is active for this session (engine-set draft vs cards-only draft).
         if ("draftPick".equals(action)) {
             try {
-                handleDraftPick(ctx, ps, sessionId, msg);
+                if (cardsDraftByWs.containsKey(ctx.getSessionId())) handleCardsDraftPick(ctx, sessionId, msg);
+                else handleDraftPick(ctx, ps, sessionId, msg);
             } catch (Exception e) {
                 logger.warn("web gateway: draftPick failed", e);
                 ctx.send(JsonCodec.encodeCallback("GATEWAY_ERROR", null,
@@ -1272,10 +1305,6 @@ public class WebGatewayServer {
                             ud.setAutoOrderTrigger(msg.get("autoOrderTriggers").getAsBoolean());
                         }
                         u.setUserData(ud); // persist (see note above) — without this, none of the settings stick
-                        logger.info("web.diag setSkips user=" + u.getName() + "/" + userId // TEMP: priority-skip diagnosis
-                                + " stepMode=" + (msg.has("stepMode") ? msg.get("stepMode").getAsString() : "?")
-                                + " oppMain2=" + sk.getOpponentTurn().isMain2() + " oppEnd=" + sk.getOpponentTurn().isEndOfTurn()
-                                + " oppBeforeCombat=" + sk.getOpponentTurn().isBeforeCombat());
                     });
                 }
             } catch (Exception e) {
@@ -1292,7 +1321,6 @@ public class WebGatewayServer {
         try {
             switch (action) {
                 case "playerBoolean":
-                    logger.info("web.diag playerBoolean=" + msg.get("value").getAsBoolean() + " game=" + gameId); // TEMP: priority-skip diagnosis
                     server.sendPlayerBoolean(gameId, sessionId, msg.get("value").getAsBoolean());
                     break;
                 case "playerUUID":
@@ -1313,7 +1341,6 @@ public class WebGatewayServer {
                     // some actions carry an integer payload (e.g. ROLLBACK_TURNS = how many turns back;
                     // 0 = start of the current turn). Everything else passes null.
                     Object data = msg.has("amount") ? (Object) Integer.valueOf(msg.get("amount").getAsInt()) : null;
-                    logger.info("web.diag playerAction=" + pa + " game=" + gameId); // TEMP: priority-skip diagnosis
                     server.sendPlayerAction(pa, gameId, sessionId, data);
                     break;
                 }
@@ -1686,6 +1713,259 @@ public class WebGatewayServer {
         payload.add("packs", new com.google.gson.JsonArray()); // no packs to open (already drafted)
         ctx.send(JsonCodec.encodeCallback("SEALED_POOL", null, payload));
         logger.info("web gateway: draft complete, " + humanPool.size() + " cards drafted -> builder");
+    }
+
+    // ---- Cards-only draft (Scryfall metadata; practice drafting a set the engine hasn't implemented) -------
+    /** Sets available to draft, from Scryfall — real draftable set types with a reasonable card count, newest first. */
+    private com.google.gson.JsonArray scryfallSets() {
+        if (scryfallSetsCache != null) return scryfallSetsCache;
+        com.google.gson.JsonArray out = new com.google.gson.JsonArray();
+        try {
+            HttpURLConnection conn = openScryfall("https://api.scryfall.com/sets", "application/json");
+            if (conn != null) {
+                String json; try (InputStream in = conn.getInputStream()) { json = new String(in.readAllBytes(), StandardCharsets.UTF_8); }
+                conn.disconnect();
+                JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+                java.util.Set<String> keep = new java.util.HashSet<>(java.util.Arrays.asList("core", "expansion", "masters", "draft_innovation"));
+                java.util.List<JsonObject> sets = new java.util.ArrayList<>();
+                if (root.has("data")) for (com.google.gson.JsonElement e : root.getAsJsonArray("data")) {
+                    JsonObject s = e.getAsJsonObject();
+                    String type = s.has("set_type") ? s.get("set_type").getAsString() : "";
+                    int cc = s.has("card_count") ? s.get("card_count").getAsInt() : 0;
+                    boolean digital = s.has("digital") && s.get("digital").getAsBoolean();
+                    if (!keep.contains(type) || cc < 60 || digital) continue;
+                    sets.add(s);
+                }
+                sets.sort((a, b) -> rel(b).compareTo(rel(a))); // newest first
+                for (JsonObject s : sets) {
+                    JsonObject o = new JsonObject();
+                    o.addProperty("code", s.get("code").getAsString());
+                    o.addProperty("name", s.get("name").getAsString());
+                    o.addProperty("released", rel(s));
+                    out.add(o);
+                    if (out.size() >= 120) break;
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("web gateway: scryfallSets failed", e);
+        }
+        if (out.size() > 0) scryfallSetsCache = out;
+        return out;
+    }
+    private static String rel(JsonObject s) { return s.has("released_at") && !s.get("released_at").isJsonNull() ? s.get("released_at").getAsString() : ""; }
+
+    /** Fetch a whole set's draftable cards from Scryfall as lightweight metadata (cached per set). */
+    private java.util.List<JsonObject> fetchScryfallSetCards(String setCode) {
+        java.util.List<JsonObject> cached = cardsSetPoolCache.get(setCode);
+        if (cached != null) return cached;
+        java.util.List<JsonObject> out = new java.util.ArrayList<>();
+        try {
+            String url = "https://api.scryfall.com/cards/search?q=" + java.net.URLEncoder.encode("set:" + setCode, "UTF-8")
+                    + "&unique=cards&order=set";
+            int guard = 0;
+            while (url != null && guard++ < 12) {
+                HttpURLConnection conn = openScryfall(url, "application/json");
+                if (conn == null) break;
+                String json; try (InputStream in = conn.getInputStream()) { json = new String(in.readAllBytes(), StandardCharsets.UTF_8); }
+                conn.disconnect();
+                JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+                if (root.has("data")) for (com.google.gson.JsonElement e : root.getAsJsonArray("data")) {
+                    JsonObject meta = scryfallCardToMeta(e.getAsJsonObject(), setCode);
+                    if (meta != null) out.add(meta);
+                }
+                url = (root.has("has_more") && root.get("has_more").getAsBoolean() && root.has("next_page") && !root.get("next_page").isJsonNull())
+                        ? root.get("next_page").getAsString() : null;
+            }
+        } catch (Exception e) {
+            logger.warn("web gateway: fetchScryfallSetCards failed for " + setCode, e);
+        }
+        if (!out.isEmpty()) cardsSetPoolCache.put(setCode, out);
+        return out;
+    }
+
+    /** Map one Scryfall card to our draft metadata shape {n,s,c,r,mc,v,land,t}; skip tokens / basic lands. */
+    private JsonObject scryfallCardToMeta(JsonObject c, String setCode) {
+        String layout = c.has("layout") ? c.get("layout").getAsString() : "";
+        if (layout.contains("token") || layout.equals("emblem") || layout.equals("art_series") || layout.equals("scheme") || layout.equals("planar")) return null;
+        String typeLine = c.has("type_line") && !c.get("type_line").isJsonNull() ? c.get("type_line").getAsString() : "";
+        String mc = c.has("mana_cost") && !c.get("mana_cost").isJsonNull() ? c.get("mana_cost").getAsString() : "";
+        if ((mc.isEmpty() || typeLine.isEmpty()) && c.has("card_faces") && c.getAsJsonArray("card_faces").size() > 0) {
+            JsonObject f0 = c.getAsJsonArray("card_faces").get(0).getAsJsonObject();
+            if (mc.isEmpty() && f0.has("mana_cost")) mc = f0.get("mana_cost").getAsString();
+            if (typeLine.isEmpty() && f0.has("type_line")) typeLine = f0.get("type_line").getAsString();
+        }
+        if (typeLine.contains("Basic Land")) return null;
+        JsonObject o = new JsonObject();
+        o.addProperty("n", c.has("name") ? c.get("name").getAsString() : "?");
+        o.addProperty("s", setCode);
+        o.addProperty("c", c.has("collector_number") ? c.get("collector_number").getAsString() : "");
+        String rar = c.has("rarity") ? c.get("rarity").getAsString() : "common";
+        o.addProperty("r", rar.isEmpty() ? "Common" : Character.toUpperCase(rar.charAt(0)) + rar.substring(1));
+        o.addProperty("mc", mc);
+        o.addProperty("v", c.has("cmc") && !c.get("cmc").isJsonNull() ? (int) c.get("cmc").getAsDouble() : 0);
+        o.addProperty("land", typeLine.contains("Land"));
+        o.addProperty("t", typeCategoryFromLine(typeLine));
+        return o;
+    }
+    private static String typeCategoryFromLine(String t) {
+        if (t == null) return "other";
+        if (t.contains("Creature")) return "creature";
+        if (t.contains("Planeswalker")) return "planeswalker";
+        if (t.contains("Instant")) return "instant";
+        if (t.contains("Sorcery")) return "sorcery";
+        if (t.contains("Artifact")) return "artifact";
+        if (t.contains("Enchantment")) return "enchantment";
+        if (t.contains("Land")) return "land";
+        return "other";
+    }
+
+    private void startCardsDraft(WsContext ctx, PlaySession ps, String sessionId, JsonObject msg) throws Exception {
+        String setCode = msg.has("setCode") && !msg.get("setCode").isJsonNull() ? msg.get("setCode").getAsString().toLowerCase() : "";
+        int seats = msg.has("players") ? Math.max(2, Math.min(8, msg.get("players").getAsInt())) : 8;
+        java.util.List<JsonObject> pool = fetchScryfallSetCards(setCode);
+        if (pool == null || pool.size() < 15) {
+            throw new IllegalStateException("Couldn't find enough cards for set '" + setCode + "' on Scryfall.");
+        }
+        draftByWs.remove(ctx.getSessionId());
+        CardsDraftState d = new CardsDraftState(setCode, seats, pool);
+        d.packs = openCardsRoundPacks(pool, seats);
+        cardsDraftByWs.put(ctx.getSessionId(), d);
+        sendCardsDraftPack(ctx, d);
+        logger.info("web gateway: started cards-only draft (" + setCode + ", " + seats + " seats, pool=" + pool.size() + ")");
+    }
+
+    private java.util.List<java.util.List<JsonObject>> openCardsRoundPacks(java.util.List<JsonObject> pool, int seats) {
+        java.util.List<java.util.List<JsonObject>> packs = new java.util.ArrayList<>();
+        for (int i = 0; i < seats; i++) packs.add(buildCardsPack(pool));
+        return packs;
+    }
+    /** Approximate booster: 1 rare (mythic ~1/8), 3 uncommons, 10 commons — no dupes within a pack. */
+    private java.util.List<JsonObject> buildCardsPack(java.util.List<JsonObject> pool) {
+        java.util.List<JsonObject> commons = new java.util.ArrayList<>(), uncommons = new java.util.ArrayList<>(),
+                rares = new java.util.ArrayList<>(), mythics = new java.util.ArrayList<>();
+        for (JsonObject c : pool) {
+            String r = c.get("r").getAsString().toLowerCase();
+            if (r.startsWith("m")) mythics.add(c); else if (r.startsWith("r")) rares.add(c);
+            else if (r.startsWith("u")) uncommons.add(c); else commons.add(c);
+        }
+        java.util.List<JsonObject> pack = new java.util.ArrayList<>();
+        boolean mythic = !mythics.isEmpty() && Math.random() < 0.125;
+        addRandom(pack, (mythic || rares.isEmpty()) ? mythics : rares, 1);
+        addRandom(pack, uncommons, 3);
+        addRandom(pack, commons, 10);
+        return pack;
+    }
+    private static void addRandom(java.util.List<JsonObject> pack, java.util.List<JsonObject> src, int n) {
+        if (src.isEmpty()) return;
+        java.util.List<JsonObject> copy = new java.util.ArrayList<>(src);
+        java.util.Collections.shuffle(copy);
+        for (int i = 0; i < n && i < copy.size(); i++) pack.add(copy.get(i));
+    }
+
+    private void sendCardsDraftPack(WsContext ctx, CardsDraftState d) {
+        com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
+        payload.addProperty("pack", d.round + 1);
+        payload.addProperty("pick", d.pick + 1);
+        payload.addProperty("packsTotal", DRAFT_PACKS);
+        payload.addProperty("setCode", d.setCode);
+        com.google.gson.JsonArray cards = new com.google.gson.JsonArray();
+        for (JsonObject c : d.packs.get(0)) cards.add(c);   // current pack (unique cards) — flat
+        payload.add("cards", cards);
+        payload.add("pool", groupMeta(d.pools.get(0)));      // drafted so far — grouped with qty
+        ctx.send(JsonCodec.encodeCallback("DRAFT_PACK", null, payload));
+    }
+    /** Group metadata cards by printing into [{…,q}] (so a card drafted twice shows ×2 in the pool/stats). */
+    private static com.google.gson.JsonArray groupMeta(java.util.List<JsonObject> cards) {
+        java.util.LinkedHashMap<String, int[]> counts = new java.util.LinkedHashMap<>();
+        java.util.LinkedHashMap<String, JsonObject> sample = new java.util.LinkedHashMap<>();
+        for (JsonObject c : cards) {
+            String key = c.get("n").getAsString() + "|" + c.get("s").getAsString() + "|" + c.get("c").getAsString();
+            counts.computeIfAbsent(key, k -> new int[1])[0]++;
+            sample.putIfAbsent(key, c);
+        }
+        com.google.gson.JsonArray out = new com.google.gson.JsonArray();
+        for (java.util.Map.Entry<String, int[]> e : counts.entrySet()) {
+            JsonObject o = sample.get(e.getKey()).deepCopy();
+            if (e.getValue()[0] > 1) o.addProperty("q", e.getValue()[0]);
+            out.add(o);
+        }
+        return out;
+    }
+
+    private void handleCardsDraftPick(WsContext ctx, String sessionId, JsonObject msg) {
+        CardsDraftState d = cardsDraftByWs.get(ctx.getSessionId());
+        if (d == null) {
+            throw new IllegalStateException("No cards-only draft is in progress.");
+        }
+        String n = msg.has("n") ? msg.get("n").getAsString() : null;
+        String c = msg.has("c") && !msg.get("c").isJsonNull() ? msg.get("c").getAsString() : null;
+        java.util.List<JsonObject> humanPack = d.packs.get(0);
+        JsonObject picked = null;
+        for (JsonObject card : humanPack) {
+            if (card.get("n").getAsString().equals(n) && (c == null || c.equals(card.get("c").getAsString()))) { picked = card; break; }
+        }
+        if (picked == null && !humanPack.isEmpty()) picked = humanPack.get(0);
+        if (picked != null) { humanPack.remove(picked); d.pools.get(0).add(picked); }
+
+        for (int i = 1; i < d.seats; i++) {
+            java.util.List<JsonObject> pack = d.packs.get(i);
+            if (pack.isEmpty()) continue;
+            JsonObject aiCard = aiCardsPick(pack, d.pools.get(i));
+            pack.remove(aiCard); d.pools.get(i).add(aiCard);
+        }
+        int dir = (d.round % 2 == 0) ? 1 : -1;
+        java.util.List<java.util.List<JsonObject>> passed = new java.util.ArrayList<>(java.util.Collections.nCopies(d.seats, null));
+        for (int i = 0; i < d.seats; i++) passed.set(((i + dir) % d.seats + d.seats) % d.seats, d.packs.get(i));
+        d.packs = passed;
+        d.pick++;
+        if (d.packs.get(0).isEmpty()) {
+            d.round++;
+            if (d.round >= DRAFT_PACKS) { finishCardsDraft(ctx, d); return; }
+            d.packs = openCardsRoundPacks(d.pool, d.seats);
+            d.pick = 0;
+        }
+        sendCardsDraftPack(ctx, d);
+    }
+
+    private JsonObject aiCardsPick(java.util.List<JsonObject> pack, java.util.List<JsonObject> pool) {
+        int[] col = new int[5];
+        for (JsonObject p : pool) addColorsMeta(col, p);
+        JsonObject best = pack.get(0); double bestScore = -1;
+        for (JsonObject c : pack) {
+            double score = rarityWeightMeta(c) + Math.random() * 1.5 + colorAffinityMeta(col, c);
+            if (score > bestScore) { bestScore = score; best = c; }
+        }
+        return best;
+    }
+    private static void addColorsMeta(int[] col, JsonObject c) {
+        String mc = c.has("mc") ? c.get("mc").getAsString() : "";
+        for (int i = 0; i < mc.length(); i++) { char ch = mc.charAt(i);
+            if (ch == 'W') col[0]++; else if (ch == 'U') col[1]++; else if (ch == 'B') col[2]++; else if (ch == 'R') col[3]++; else if (ch == 'G') col[4]++; }
+    }
+    private static double colorAffinityMeta(int[] col, JsonObject c) {
+        String mc = c.has("mc") ? c.get("mc").getAsString() : "";
+        double a = 0; boolean any = false;
+        if (mc.indexOf('W') >= 0) { a += col[0]; any = true; } if (mc.indexOf('U') >= 0) { a += col[1]; any = true; }
+        if (mc.indexOf('B') >= 0) { a += col[2]; any = true; } if (mc.indexOf('R') >= 0) { a += col[3]; any = true; }
+        if (mc.indexOf('G') >= 0) { a += col[4]; any = true; }
+        return any ? a * 0.15 : 0.5; // colourless fits anywhere
+    }
+    private static double rarityWeightMeta(JsonObject c) {
+        String r = c.has("r") ? c.get("r").getAsString().toLowerCase() : "common";
+        if (r.startsWith("m")) return 4; if (r.startsWith("r")) return 3; if (r.startsWith("u")) return 1.5; return 0.5;
+    }
+
+    /** Cards-only draft complete: hand the drafted pool to the builder for review (noPlay — can't play it). */
+    private void finishCardsDraft(WsContext ctx, CardsDraftState d) {
+        cardsDraftByWs.remove(ctx.getSessionId());
+        com.google.gson.JsonObject payload = new com.google.gson.JsonObject();
+        payload.addProperty("setCode", d.setCode);
+        payload.addProperty("players", d.seats);
+        payload.addProperty("noPlay", true); // cards aren't implemented in the engine — build/review only
+        payload.add("pool", groupMeta(d.pools.get(0)));
+        payload.add("packs", new com.google.gson.JsonArray());
+        ctx.send(JsonCodec.encodeCallback("SEALED_POOL", null, payload));
+        logger.info("web gateway: cards-only draft complete, " + d.pools.get(0).size() + " cards -> builder (no play)");
     }
 
     /** Open 6 packs for the human + each AI seat; stash the AI pools, send the human's pool to build a deck. */
@@ -2192,6 +2472,7 @@ public class WebGatewayServer {
         clients.remove(ctx);
         sealedByWs.remove(ctx.getSessionId());
         draftByWs.remove(ctx.getSessionId());
+        cardsDraftByWs.remove(ctx.getSessionId());
         tournamentByWs.remove(ctx.getSessionId()); // bracket state is per live connection (not resumable yet)
 
         // PLAY: keep the game alive for a grace period so a reload can reconnect to it
