@@ -544,6 +544,50 @@
             box-shadow: 0 6px 20px #000b; padding: 4px; min-width: 150px; }
         #matMenu button { display: block; width: 100%; text-align: left; background: transparent; padding: 8px 10px; font-size: 13px; }
         #matMenu button:hover { background: #2b3a52; }
+        /* ---- Playtester (goldfish): pure client-side solitaire for reviewing a deck; no rules engine ---- */
+        #playtest { position: fixed; left: 0; top: 44px; right: var(--sidecol-w); bottom: 0; z-index: 48; background: #0d1117;
+            display: none; flex-direction: column; }
+        #ptBar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 0 0 auto; padding: 5px 8px;
+            background: #141c26; border-bottom: 1px solid #2b3442; font-size: 13px; }
+        #ptBar b { color: #cde; margin-right: 4px; }
+        #ptBar button { background: #243244; font-size: 12px; padding: 5px 10px; }
+        #ptBar button.prim { background: #2e6a40; }
+        #ptBar button:hover { filter: brightness(1.15); }
+        #ptBar .ptSep { width: 1px; align-self: stretch; background: #2b3442; margin: 2px 2px; }
+        #ptMain { display: flex; flex: 1 1 auto; min-height: 0; }
+        #ptField { position: relative; flex: 1 1 auto; overflow: auto; touch-action: none;
+            background: #10161d; background-image: radial-gradient(circle, #1a2431 1px, transparent 1px); background-size: 24px 24px; }
+        #ptField .ptHint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); color: #566; font-size: 13px; pointer-events: none; }
+        #ptRail { flex: 0 0 auto; width: 128px; display: flex; flex-direction: column; gap: 6px; padding: 8px 6px;
+            background: #0b0f15; border-left: 1px solid #2b3442; overflow: auto; }
+        .ptPile { border: 1px solid #334; border-radius: 8px; padding: 6px; background: #141c26; cursor: pointer; }
+        .ptPile .ptPileHd { font-size: 11px; font-weight: 700; color: #9fb4c8; display: flex; justify-content: space-between; }
+        .ptPile .ptPileN { color: #ffd166; }
+        .ptPile .ptPileArt { margin-top: 4px; height: 96px; border-radius: 6px; background: #1a222e;
+            display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+        .ptPile .ptPileArt img { width: 100%; height: 100%; object-fit: cover; }
+        .ptPile .ptPileArt .ptBack { color: #44566e; font-size: 26px; }
+        .ptPile.lib .ptPileArt { background: linear-gradient(135deg, #2a3a58, #1a2740); }
+        .ptCard { position: absolute; width: var(--pt-cw, 96px); height: calc(var(--pt-cw, 96px) * 1.4); border-radius: 7px;
+            border: 1px solid #3a4150; background: #232a33; box-shadow: 0 2px 8px #000a; cursor: grab; user-select: none; touch-action: none;
+            overflow: hidden; display: flex; align-items: flex-end; justify-content: center; font-size: 9px; color: #cbd5e2; text-align: center;
+            transition: transform .12s ease; }
+        .ptCard img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+        .ptCard .ptName { position: relative; z-index: 1; background: #000a; width: 100%; padding: 1px 2px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ptCard.tapped { transform: rotate(90deg); }
+        .ptCard.dragging { box-shadow: 0 12px 28px #000d; z-index: 9999 !important; cursor: grabbing; }
+        #ptHand { flex: 0 0 auto; display: flex; gap: 6px; align-items: flex-end; padding: 8px; overflow-x: auto; overflow-y: hidden;
+            background: #121a14; border-top: 1px solid #4a6a3a; min-height: calc(var(--pt-hcw, 110px) * 1.4 + 18px); }
+        #ptHand .ptHandEmpty { color: #678; font-size: 13px; align-self: center; }
+        .ptHandCard { flex: 0 0 auto; width: var(--pt-hcw, 110px); height: calc(var(--pt-hcw, 110px) * 1.4); border-radius: 7px;
+            border: 1px solid #3a4150; background: #232a33; box-shadow: 0 2px 8px #000a; cursor: pointer; user-select: none; position: relative;
+            overflow: hidden; display: flex; align-items: flex-end; justify-content: center; font-size: 9px; color: #cbd5e2; text-align: center;
+            transition: transform .1s ease; }
+        .ptHandCard:hover { transform: translateY(-6px); }
+        .ptHandCard img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+        .ptHandCard .ptName { position: relative; z-index: 1; background: #000a; width: 100%; padding: 1px 2px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         /* card picker: highlight the valid choices, dim the rest, mark the chosen ones with a check */
         .pickcount { font-size: 15px; font-weight: 800; color: #ffd166; margin: -4px 0 4px; }
         /* quick-target buttons, sitting right by the stack so you can pick a player without scrolling.
@@ -928,6 +972,45 @@
 </div>
 <div id="matMenu" style="display:none"></div>
 
+<!-- Playtester: pure client-side solitaire goldfish. Draw hands, draw cards, play them to the battlefield,
+     tap/untap, move cards between zones. No rules engine — works for ANY deck (incl. unimplemented sets). -->
+<div id="playtest" style="display:none">
+    <div id="ptBar">
+        <b>🧪 Playtest</b>
+        <button id="ptNewHand" class="prim" title="Shuffle and draw a fresh opening hand of 7">New hand (7)</button>
+        <button id="ptMulligan" title="Shuffle hand back and draw 7 again (London: then put cards to the bottom)">Mulligan</button>
+        <span id="ptMullN" class="hint"></span>
+        <span class="ptSep"></span>
+        <button id="ptDraw" title="Draw the top card of your library">Draw</button>
+        <button id="ptUntap" title="Untap all your permanents">Untap all</button>
+        <button id="ptShuffle" title="Shuffle your library">Shuffle</button>
+        <button id="ptReset" title="Put every card back and reshuffle the whole deck">Reset</button>
+        <span class="ptSep"></span>
+        <label class="hint">Card size</label><input type="range" id="ptCardSize" min="60" max="150" step="6" value="96" style="width:90px">
+        <span style="flex:1"></span>
+        <span class="hint">tap a hand card to play it · tap the battlefield to tap/untap · long-press for more</span>
+        <button id="ptClose" class="alt">✕ Close</button>
+    </div>
+    <div id="ptMain">
+        <div id="ptField"><div class="ptHint">Press “New hand (7)” to begin. Tap hand cards to play them here.</div></div>
+        <div id="ptRail">
+            <div class="ptPile lib" id="ptLib" title="Tap to draw the top card">
+                <div class="ptPileHd"><span>Library</span><span class="ptPileN" id="ptLibN">0</span></div>
+                <div class="ptPileArt"><span class="ptBack">🂠</span></div>
+            </div>
+            <div class="ptPile" id="ptGrave" title="Graveyard — long-press a card to send it here; tap pile to view">
+                <div class="ptPileHd"><span>Graveyard</span><span class="ptPileN" id="ptGraveN">0</span></div>
+                <div class="ptPileArt" id="ptGraveArt"><span class="ptBack">⚰</span></div>
+            </div>
+            <div class="ptPile" id="ptExile" title="Exile">
+                <div class="ptPileHd"><span>Exile</span><span class="ptPileN" id="ptExileN">0</span></div>
+                <div class="ptPileArt" id="ptExileArt"><span class="ptBack">✧</span></div>
+            </div>
+        </div>
+    </div>
+    <div id="ptHand"></div>
+</div>
+
 <div id="deckMgr" class="overlay" style="display:none">
     <div class="panel" style="width:min(680px,95vw)">
         <h2>🗂 Deck manager</h2>
@@ -1042,6 +1125,9 @@
         <div style="display:flex; gap:6px;">
             <button id="sbPlay" disabled style="flex:1 1 auto" title="Need at least 40 cards">Play ▸</button>
             <button id="sbQuit" class="alt" title="Leave the sealed event">✕ Quit</button>
+        </div>
+        <div style="display:flex; gap:6px; margin-top:6px;">
+            <button id="sbTest" class="alt" style="flex:1 1 auto" title="Goldfish your deck — draw hands and play cards out, no rules engine (works for any set)">🧪 Playtest deck</button>
         </div>
         <div class="setrow" style="margin-top:6px"><label>Card size</label><input type="range" id="sbCardSize" min="60" max="150" step="6" value="92"></div>
     </div>
@@ -2700,6 +2786,198 @@ document.getElementById('sbPlay').onclick = () => {
     send('sealedDeck', undefined, { cards: sbDeck.map(c => ({ n:c.n, s:c.s, c:c.c, q:c.q })),
         basics: { w:sbBasics.w, u:sbBasics.u, b:sbBasics.b, r:sbBasics.r, g:sbBasics.g } });
 };
+
+// ---- Playtester (goldfish) -------------------------------------------------------------------------
+// A pure client-side solitaire: draw hands, draw cards, play them to the battlefield, tap/untap, move
+// cards between zones. No rules engine at all — so it works for ANY deck, including cards-only draft
+// pools whose sets XMage hasn't implemented. Sits on top of the sealed builder; closing returns to it.
+let pt = null;                         // null = not open. Holds zones + layout state while open.
+const PT_BASICS = [['w','Plains'],['u','Island'],['b','Swamp'],['r','Mountain'],['g','Forest']];
+function ptShuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+// Build the full deck as individual card instances (deck tray expanded by qty + the basic lands).
+function ptBuildDeck() {
+    const out = [];
+    sbDeck.forEach(c => { for (let i = 0; i < c.q; i++) out.push(ptInst({ n: c.n, s: c.s, c: c.c, mc: c.mc })); });
+    PT_BASICS.forEach(([k, name]) => { for (let i = 0; i < sbBasics[k]; i++) out.push(ptInst({ n: name, basicName: name })); });
+    return out;
+}
+function ptInst(src) { return { iid: pt ? pt.nextId++ : 0, n: src.n, s: src.s, c: src.c, mc: src.mc, basicName: src.basicName, tapped: false, x: null, y: null, z: 1 }; }
+function ptZoneOf(inst) { for (const z of ['hand', 'bf', 'gy', 'exile', 'lib']) if (pt[z].includes(inst)) return z; return null; }
+function ptRemove(inst) { const z = ptZoneOf(inst); if (z) pt[z] = pt[z].filter(x => x !== inst); return z; }
+// Move a card to a zone. Library: where='top' (default, next to draw) or 'bottom'.
+function ptMoveTo(inst, zone, where) {
+    ptRemove(inst);
+    if (zone === 'lib') { if (where === 'bottom') pt.lib.unshift(inst); else pt.lib.push(inst); inst.x = inst.y = null; inst.tapped = false; }
+    else if (zone === 'bf') { if (inst.x == null) ptAutoPos(inst); inst.z = ++pt.zTop; pt.bf.push(inst); }
+    else { inst.x = inst.y = null; inst.tapped = false; pt[zone].push(inst); }
+    ptRenderAll();
+}
+function ptDraw(n) {
+    let drew = 0;
+    for (let i = 0; i < (n || 1); i++) { if (!pt.lib.length) break; pt.hand.push(pt.lib.pop()); drew++; }
+    ptRenderAll();
+    return drew;
+}
+function ptResetDeck() { pt.lib = ptBuildDeck(); ptShuffle(pt.lib); pt.hand = []; pt.bf = []; pt.gy = []; pt.exile = []; pt._px = pt._py = null; }
+function ptNewHand() { ptResetDeck(); pt.mull = 0; ptDraw(7); }
+function ptMulligan() { ptResetDeck(); pt.mull++; ptDraw(7); }
+// Next free slot for an auto-placed battlefield card — flows left→right, rows overlap a little to save space.
+function ptAutoPos(inst) {
+    const field = document.getElementById('ptField');
+    const cw = pt.cw, ch = cw * 1.4;
+    const maxX = Math.max(cw + 24, (field.clientWidth || 600) - cw - 16);
+    if (pt._px == null) { pt._px = 12; pt._py = 12; }
+    inst.x = pt._px; inst.y = pt._py; inst.z = ++pt.zTop;
+    pt._px += cw + 10;
+    if (pt._px > maxX) { pt._px = 12; pt._py += Math.round(ch * 0.58) + 10; }
+}
+function ptArt(img, inst) {
+    if (inst.basicName) { img.onerror = () => { img.style.display = 'none'; }; img.src = '/imgname/' + encodeURIComponent(inst.basicName); img.style.display = ''; }
+    else setCardImage(img, sbCardObj(inst));   // draft card: /img/{s}/{c}, then a by-name fallback
+}
+function ptCardObj(inst) { return { name: inst.n, expansionSetCode: inst.s, cardNumber: inst.c, manaCostStr: inst.mc }; }
+function ptApplySize() {
+    document.getElementById('ptField').style.setProperty('--pt-cw', pt.cw + 'px');
+    document.getElementById('ptHand').style.setProperty('--pt-hcw', Math.round(pt.cw * 1.15) + 'px');
+}
+function openPlaytest() {
+    if (sbTotal() < 1) { alert('Add some cards to the deck tray first.'); return; }
+    pt = { lib: [], hand: [], bf: [], gy: [], exile: [], mull: 0, nextId: 1, zTop: 1, cw: 96, _px: null, _py: null };
+    pt.cw = +document.getElementById('ptCardSize').value || 96;
+    ptResetDeck();
+    document.getElementById('playtest').style.display = 'flex';
+    document.body.classList.add('playtesting');
+    ptApplySize();
+    ptRenderAll();
+}
+function closePlaytest() { document.getElementById('playtest').style.display = 'none'; document.body.classList.remove('playtesting'); pt = null; hideMatMenu(); }
+// ---- rendering ----
+function ptRenderAll() { if (!pt) return; ptRenderField(); ptRenderHand(); ptRenderPiles(); }
+function ptRenderField() {
+    const field = document.getElementById('ptField');
+    const hint = pt.bf.length ? '' : '<div class="ptHint">' + (pt.hand.length ? 'Tap a card in your hand to play it here.' : 'Press “New hand (7)” to begin.') + '</div>';
+    field.innerHTML = hint;
+    pt.bf.forEach(inst => {
+        const el = document.createElement('div');
+        el.className = 'ptCard' + (inst.tapped ? ' tapped' : '');
+        el.style.left = (inst.x || 0) + 'px'; el.style.top = (inst.y || 0) + 'px'; el.style.zIndex = inst.z || 1;
+        el.innerHTML = '<span class="ptName">' + msg(inst.n) + '</span>';
+        const img = document.createElement('img'); el.insertBefore(img, el.firstChild); ptArt(img, inst);
+        ptWireField(el, inst);
+        field.appendChild(el);
+    });
+}
+function ptRenderHand() {
+    const hand = document.getElementById('ptHand');
+    hand.innerHTML = pt.hand.length ? '' : '<span class="ptHandEmpty">Hand is empty — draw a card, or start a new hand.</span>';
+    pt.hand.forEach(inst => {
+        const el = document.createElement('div'); el.className = 'ptHandCard';
+        el.innerHTML = '<span class="ptName">' + msg(inst.n) + '</span>';
+        const img = document.createElement('img'); el.insertBefore(img, el.firstChild); ptArt(img, inst);
+        ptWireHand(el, inst);
+        hand.appendChild(el);
+    });
+}
+function ptRenderPiles() {
+    document.getElementById('ptLibN').textContent = pt.lib.length;
+    document.getElementById('ptGraveN').textContent = pt.gy.length;
+    document.getElementById('ptExileN').textContent = pt.exile.length;
+    ptPileTop('ptGraveArt', pt.gy, '⚰');
+    ptPileTop('ptExileArt', pt.exile, '✧');
+    document.getElementById('ptMullN').textContent = pt.mull ? ('mull ×' + pt.mull) : '';
+}
+function ptPileTop(elId, zone, fallback) {
+    const el = document.getElementById(elId); el.innerHTML = '';
+    const top = zone[zone.length - 1];
+    if (top) { const img = document.createElement('img'); el.appendChild(img); ptArt(img, top); }
+    else { const s = document.createElement('span'); s.className = 'ptBack'; s.textContent = fallback; el.appendChild(s); }
+}
+// ---- interactions: tap / drag / long-press ----
+// Battlefield card: tap = tap/untap · drag = move · long-press = menu.
+function ptWireField(el, inst) {
+    let sx, sy, ox, oy, moved = false, lp = null, dragging = false;
+    el.addEventListener('pointerdown', e => {
+        e.preventDefault(); sx = e.clientX; sy = e.clientY; ox = inst.x || 0; oy = inst.y || 0; moved = false; dragging = false;
+        el.setPointerCapture(e.pointerId);
+        lp = setTimeout(() => { lp = null; dragging = false; moved = true; ptMenu(inst, e.clientX, e.clientY); }, 500);
+    });
+    el.addEventListener('pointermove', e => {
+        if (sx == null) return;
+        const dx = e.clientX - sx, dy = e.clientY - sy;
+        if (!dragging && Math.hypot(dx, dy) > 6) { dragging = true; moved = true; if (lp) { clearTimeout(lp); lp = null; } el.classList.add('dragging'); inst.z = ++pt.zTop; el.style.zIndex = inst.z; }
+        if (dragging) { inst.x = Math.max(0, ox + dx); inst.y = Math.max(0, oy + dy); el.style.left = inst.x + 'px'; el.style.top = inst.y + 'px'; }
+    });
+    const up = e => {
+        if (sx == null) return;
+        if (lp) { clearTimeout(lp); lp = null; }
+        el.classList.remove('dragging');
+        if (!moved) { inst.tapped = !inst.tapped; el.classList.toggle('tapped', inst.tapped); }
+        sx = sy = null;
+    };
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener('mouseenter', () => showCardViewer(ptCardObj(inst), true));
+}
+// Hand card: tap = play to battlefield · long-press = menu.
+function ptWireHand(el, inst) {
+    let sx, sy, moved = false, lp = null;
+    el.addEventListener('pointerdown', e => {
+        sx = e.clientX; sy = e.clientY; moved = false;
+        lp = setTimeout(() => { lp = null; moved = true; ptMenu(inst, e.clientX, e.clientY); }, 500);
+    });
+    el.addEventListener('pointermove', e => { if (sx != null && Math.hypot(e.clientX - sx, e.clientY - sy) > 8) { moved = true; if (lp) { clearTimeout(lp); lp = null; } } });
+    const up = () => { if (sx == null) return; if (lp) { clearTimeout(lp); lp = null; if (!moved) ptMoveTo(inst, 'bf'); } sx = null; };
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', () => { if (lp) { clearTimeout(lp); lp = null; } sx = null; });
+    el.addEventListener('mouseenter', () => showCardViewer(ptCardObj(inst), true));
+}
+// Context menu (reuses #matMenu) — zone-aware moves for a single card.
+function ptMenu(inst, x, y) {
+    const zone = ptZoneOf(inst);
+    const items = [];
+    if (zone !== 'bf') items.push(['▶ Play to battlefield', () => ptMoveTo(inst, 'bf')]);
+    if (zone === 'bf') items.push([inst.tapped ? '↺ Untap' : '↻ Tap', () => { inst.tapped = !inst.tapped; ptRenderField(); }]);
+    if (zone !== 'hand') items.push(['✋ To hand', () => ptMoveTo(inst, 'hand')]);
+    if (zone !== 'gy') items.push(['⚰ To graveyard', () => ptMoveTo(inst, 'gy')]);
+    if (zone !== 'exile') items.push(['✧ To exile', () => ptMoveTo(inst, 'exile')]);
+    items.push(['⬆ To top of library', () => ptMoveTo(inst, 'lib', 'top')]);
+    items.push(['⬇ To bottom of library', () => ptMoveTo(inst, 'lib', 'bottom')]);
+    items.push(['🔍 Preview', () => showCardViewer(ptCardObj(inst), true)]);
+    ptShowMenu(items, x, y);
+}
+function hideMatMenu() { const m = document.getElementById('matMenu'); if (m) m.style.display = 'none'; }
+function ptShowMenu(items, x, y) {
+    const m = document.getElementById('matMenu'); m.innerHTML = '';
+    items.forEach(([label, fn]) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => { hideMatMenu(); fn(); }; m.appendChild(b); });
+    m.style.display = 'block';
+    const vw = innerWidth, vh = innerHeight; m.style.left = Math.min(x, vw - 170) + 'px'; m.style.top = Math.min(y, vh - items.length * 36 - 10) + 'px';
+}
+// Dismiss the context menu on any outside tap (capture so it fires before the card handlers re-open it).
+document.addEventListener('pointerdown', e => { const m = document.getElementById('matMenu'); if (m && m.style.display === 'block' && !m.contains(e.target)) hideMatMenu(); }, true);
+// ---- pile controls + toolbar ----
+document.getElementById('sbTest').onclick = openPlaytest;
+document.getElementById('ptClose').onclick = closePlaytest;
+document.getElementById('ptNewHand').onclick = () => { ptNewHand(); ptRenderAll(); };
+document.getElementById('ptMulligan').onclick = () => { ptMulligan(); ptRenderAll(); };
+document.getElementById('ptDraw').onclick = () => ptDraw(1);
+document.getElementById('ptUntap').onclick = () => { pt.bf.forEach(i => i.tapped = false); ptRenderField(); };
+document.getElementById('ptShuffle').onclick = () => { ptShuffle(pt.lib); };
+document.getElementById('ptReset').onclick = () => { ptResetDeck(); ptRenderAll(); };
+document.getElementById('ptCardSize').oninput = e => { if (!pt) return; pt.cw = +e.target.value; ptApplySize(); };
+(function wirePiles() {
+    const lib = document.getElementById('ptLib');
+    lib.addEventListener('click', () => { if (pt) ptDraw(1); });
+    lib.addEventListener('contextmenu', e => { e.preventDefault(); if (!pt) return; ptShowMenu([
+        ['🂠 New hand (7)', ptNewHand], ['🔀 Shuffle library', () => ptShuffle(pt.lib)],
+        ['⬇ Mill top to graveyard', () => { if (pt.lib.length) { pt.gy.push(pt.lib.pop()); ptRenderAll(); } }],
+    ], e.clientX, e.clientY); });
+    // Graveyard / exile: tap returns the top card to hand (most common goldfish action).
+    ['ptGrave', 'ptExile'].forEach(id => {
+        const zone = id === 'ptGrave' ? 'gy' : 'exile';
+        const el = document.getElementById(id);
+        el.addEventListener('click', () => { if (pt && pt[zone].length) ptMoveTo(pt[zone][pt[zone].length - 1], 'hand'); });
+    });
+})();
 
 // Resign vs End game are different: resign concedes (AIs play it out, you can watch);
 // end game stops the whole game immediately.

@@ -344,6 +344,8 @@ public class WebGatewayServer {
         app.get("/cardinfo/{set}/{num}", this::serveCardInfo);
         // token images: tokens have collector number "0", so look them up by name (type:token)
         app.get("/imgtoken/{name}", this::serveTokenImage);
+        // card image by name (any card, no set/number needed) — used for basic lands in cards-only decks
+        app.get("/imgname/{name}", this::serveNameImage);
         // deck-source art by oracle id: proxy the planner's own card image so board art matches it exactly
         app.get("/imgoracle/{oid}", this::serveOracleImage);
         // resolve a deck URL to a label (commander/name) so the client can save it for reuse
@@ -760,6 +762,44 @@ public class WebGatewayServer {
                 // find the token's Scryfall printing, then fetch its image
                 String q = URLEncoder.encode("!\"" + name + "\" type:token", StandardCharsets.UTF_8);
                 String imageUrl = scryfallFirstImage("https://api.scryfall.com/cards/search?q=" + q + "&order=released&dir=desc&unique=prints");
+                if (imageUrl == null) {
+                    ctx.status(404);
+                    return;
+                }
+                bytes = fetchBytes(imageUrl);
+                dir.mkdirs();
+                Files.write(file.toPath(), bytes);
+            }
+            ctx.contentType("image/jpeg");
+            ctx.header("Cache-Control", "public, max-age=2592000");
+            ctx.result(bytes);
+        } catch (Exception e) {
+            ctx.status(404);
+        }
+    }
+
+    /**
+     * Serve a card image looked up by name (any card — not restricted to tokens), cached on disk.
+     * Used by the client-side playtester for basic lands, whose printing isn't tracked in a cards-only deck.
+     * URL: {@code /imgname/{name}}.
+     */
+    private void serveNameImage(io.javalin.http.Context ctx) {
+        String name = ctx.pathParam("name").replaceAll("[^a-zA-Z0-9 ,'\\-]", "").trim();
+        if (name.isEmpty()) {
+            ctx.status(400);
+            return;
+        }
+        try {
+            File dir = new File(IMAGE_CACHE_DIR, "_named");
+            File file = new File(dir, name.replaceAll("[^a-zA-Z0-9]", "_") + ".jpg");
+            byte[] bytes;
+            if (file.isFile() && file.length() > 0) {
+                bytes = Files.readAllBytes(file.toPath());
+            } else {
+                // exact-name search, newest printing first (basics return many printings — take the first)
+                String q = URLEncoder.encode("!\"" + name + "\"", StandardCharsets.UTF_8);
+                String imageUrl = scryfallFirstImage("https://api.scryfall.com/cards/search?q=" + q
+                        + "&order=released&dir=desc&unique=prints");
                 if (imageUrl == null) {
                     ctx.status(404);
                     return;
